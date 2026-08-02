@@ -44,6 +44,15 @@ class Settings(BaseSettings):
     default_pool_name: str = "PickSportPlus"
     default_join_code: str = "make-one-up"
 
+    # Who operates the app, shown in the footer and on the legal pages.
+    operator_name: str = "Spencer Innovations"
+    operator_url: str = "https://spencerinv.com"
+    # Contact address on the legal pages. Falls back to ADMIN_EMAIL when unset.
+    contact_email: str = ""
+    # The effective date printed on the terms and the privacy policy. Bump it by hand when
+    # the wording changes, so the date always means something.
+    legal_effective_date: str = "August 2, 2026"
+
     timezone: str = "America/New_York"
     # Seed defaults for a new pool. The commissioner owns these once the pool exists.
     # 20 total, split 8 NFL and 12 college.
@@ -99,6 +108,10 @@ class Settings(BaseSettings):
     @property
     def is_sqlite(self) -> bool:
         return self.database_url.startswith("sqlite")
+
+    @property
+    def support_email(self) -> str:
+        return self.contact_email or self.admin_email
 
 
 @lru_cache

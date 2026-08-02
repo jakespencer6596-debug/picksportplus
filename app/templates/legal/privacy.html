@@ -1,0 +1,171 @@
+{% extends "base.html" %}
+{% block title %}Privacy policy. {{ APP_NAME }}{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <div>
+    <p class="eyebrow">Legal</p>
+    <h1 class="page-title">Privacy policy</h1>
+  </div>
+  <p class="muted">In effect {{ LEGAL_DATE }}</p>
+</div>
+
+<article class="card prose">
+  <div class="card-body">
+
+    <p>
+      {{ APP_NAME }} is operated by {{ OPERATOR_NAME }}. This page explains what the app
+      stores about you, why, and what you can ask us to do with it. It is written to describe
+      what the software actually does rather than to cover every hypothetical.
+    </p>
+
+    <h2>The short version</h2>
+    <ul>
+      <li>We store your email, display name, a hashed password, and your picks. That is close
+        to all of it.</li>
+      <li>There are no ads, no analytics, no tracking pixels and no third party cookies.</li>
+      <li>We do not sell your data or share it for marketing. There is nobody to sell it to.</li>
+      <li>Other members of your pool can see your display name, your picks after the week
+        locks, and your standings.</li>
+    </ul>
+
+    <h2>What we collect</h2>
+    <table class="table">
+      <thead>
+        <tr><th>What</th><th>Why</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td data-label="What">Email address</td>
+          <td data-label="Why">Signing in, and identifying your account. Stored lowercased.</td>
+        </tr>
+        <tr>
+          <td data-label="What">Display name</td>
+          <td data-label="Why">Shown on the leaderboard and the results grid to your pool.</td>
+        </tr>
+        <tr>
+          <td data-label="What">Password</td>
+          <td data-label="Why">Signing in. Stored only as a bcrypt hash, never as text. We
+            cannot read it and cannot tell you what it is.</td>
+        </tr>
+        <tr>
+          <td data-label="What">Your picks and confidence points</td>
+          <td data-label="Why">Running the pool and scoring the week, with the time you saved
+            them so the lock can be enforced fairly.</td>
+        </tr>
+        <tr>
+          <td data-label="What">Weekly and season results</td>
+          <td data-label="Why">Leaderboards and standings.</td>
+        </tr>
+        <tr>
+          <td data-label="What">Pool membership and role</td>
+          <td data-label="Why">Knowing which league you are in and whether you are its
+            commissioner.</td>
+        </tr>
+        <tr>
+          <td data-label="What">Server logs</td>
+          <td data-label="Why">Our host records ordinary web server logs, which include IP
+            addresses and the pages requested, so faults can be diagnosed.</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <p>
+      We do not ask for your date of birth, your address, your phone number or any payment
+      details. The app takes no payments, so there is nothing financial to store.
+    </p>
+
+    <h2>Cookies</h2>
+    <p>
+      {{ APP_NAME }} sets one cookie, <code>psp_session</code>. It is a signed session cookie
+      that records which account you are signed in as and which pool you are viewing. It is
+      strictly necessary to keep you signed in, it lasts up to 30 days, and it is not used to
+      track you anywhere else. There are no advertising or analytics cookies. Signing out
+      clears it.
+    </p>
+
+    <h2>Who else is involved</h2>
+    <ul>
+      <li>
+        <strong>Our host.</strong> The app and its database run on Render, which processes the
+        data above on our behalf in order to serve the site.
+      </li>
+      <li>
+        <strong>Google Fonts.</strong> Page styling loads two typefaces from Google's font
+        servers, so your browser makes a request to Google and Google therefore receives your
+        IP address and browser details. No account information is sent. If you would rather
+        this did not happen, the fonts can be self hosted, and the app degrades to system
+        fonts without them.
+      </li>
+      <li>
+        <strong>Sports data providers.</strong> The app reads schedules, scores and betting
+        lines from ESPN, The Odds API and CollegeFootballData. Those requests are made by our
+        server, not by your browser, and they contain no information about you.
+      </li>
+    </ul>
+    <p>
+      The interactive parts of the page (the drag to rank control and the save without a page
+      reload) run from JavaScript served by this app, not from an external network, so using
+      the picks page does not call out to anyone else.
+    </p>
+
+    <h2>Who can see your picks</h2>
+    <p>
+      Before a week locks, your picks are visible only to you. After the lock they become
+      visible to everyone in your pool, along with your points and how many you got right.
+      That is a deliberate design decision so a pool can trust its own results. Your email
+      address is visible to your pool commissioner, not to other members.
+    </p>
+
+    <h2>How long we keep it</h2>
+    <p>
+      Account and pick data is kept while your account exists, because a season's standings
+      depend on earlier weeks. If your commissioner removes you from a pool, your picks and
+      results for that pool are deleted with the membership. If your account is deleted, the
+      account and everything attached to it goes.
+    </p>
+
+    <h2>Security</h2>
+    <p>
+      Passwords are hashed with bcrypt. Session cookies are signed, and are marked secure
+      wherever the app is served over HTTPS. No system is perfectly secure, and we cannot
+      promise that a breach will never happen, but we do not store anything financial and we
+      never store a readable password.
+    </p>
+
+    <h2>Your choices</h2>
+    <p>
+      Write to <a href="mailto:{{ SUPPORT_EMAIL }}">{{ SUPPORT_EMAIL }}</a> to ask for a copy
+      of what we hold about you, to correct it, or to have your account and its data deleted.
+      You can change your display name through your commissioner. Depending on where you live
+      you may have further rights over your data, and we will honour a request that the law
+      gives you.
+    </p>
+
+    <h2>Children</h2>
+    <p>
+      The app is not directed to children under 13 and we do not knowingly collect their
+      information. If you believe a child under 13 has an account, write to
+      <a href="mailto:{{ SUPPORT_EMAIL }}">{{ SUPPORT_EMAIL }}</a> and we will delete it.
+    </p>
+
+    <h2>Changes</h2>
+    <p>
+      If this policy changes, the date at the top of this page changes with it. A change that
+      materially affects what we collect will be announced in the app.
+    </p>
+
+    <h2>Contact</h2>
+    <p>
+      {{ OPERATOR_NAME }},
+      <a href="{{ OPERATOR_URL }}" target="_blank" rel="noopener noreferrer">{{ OPERATOR_URL }}</a>.
+      Privacy questions go to
+      <a href="mailto:{{ SUPPORT_EMAIL }}">{{ SUPPORT_EMAIL }}</a>.
+    </p>
+
+    <p class="muted legal-note">
+      Related: read the <a href="/terms">terms of service</a> for the rules of play.
+    </p>
+  </div>
+</article>
+{% endblock %}

@@ -80,13 +80,14 @@ def healthz():
 
 
 # Routers are imported after app creation so they can import from app.main if needed.
-from app.routers import admin, auth, leaderboard, picks, results  # noqa: E402
+from app.routers import admin, auth, leaderboard, legal, picks, results  # noqa: E402
 
 app.include_router(auth.router)
 app.include_router(picks.router)
 app.include_router(leaderboard.router)
 app.include_router(results.router)
 app.include_router(admin.router)
+app.include_router(legal.router)
 
 
 @app.get("/", include_in_schema=False)

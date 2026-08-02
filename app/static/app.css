@@ -746,6 +746,122 @@ details.user-menu[open] > :not(summary) button:hover {
   gap: var(--space-1) var(--space-4);
 }
 
+/* Second footer line: legal links on the left, the maker credit on the right. Set a step
+   smaller than the line above it so it reads as fine print without dropping below the
+   12px floor. --text-muted on --bg-surface-alt measures 7.47:1. */
+.footer-legal {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-1) var(--space-4);
+  margin-top: var(--space-2);
+  padding-top: var(--space-2);
+  border-top: var(--hairline);
+  font-size: var(--fs-xs);
+  color: var(--text-muted);
+}
+
+.footer-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1) var(--space-4);
+}
+
+.footer-legal a {
+  color: var(--text-muted);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.footer-legal a:hover,
+.footer-legal a:focus-visible {
+  color: var(--accent);
+}
+
+.footer-credit {
+  margin: 0;
+}
+
+.footer-credit a {
+  font-weight: 600;
+}
+
+@media (max-width: 479px) {
+  /* On a narrow phone the two halves stack, so left align them rather than leaving the
+     credit stranded against the right edge. */
+  .footer-legal {
+    justify-content: flex-start;
+  }
+}
+
+/* -- Long form prose (terms, privacy) ------------------------------------- */
+
+/* These are the only pages with real running text, so they get a reading measure and
+   generous leading rather than the tight rhythm the rest of the app uses. */
+.prose {
+  max-width: 74ch;
+}
+
+.prose .card-body > * + * {
+  margin-top: var(--space-4);
+}
+
+.prose h2 {
+  margin-top: var(--space-8);
+  padding-top: var(--space-4);
+  border-top: var(--hairline);
+  font-family: var(--font-display);
+  font-size: var(--fs-lg);
+  font-weight: 500;
+  line-height: var(--lh-snug);
+  color: var(--text);
+}
+
+.prose .card-body > h2:first-child {
+  margin-top: 0;
+  padding-top: 0;
+  border-top: 0;
+}
+
+.prose p {
+  margin: 0;
+  line-height: 1.65;
+}
+
+.prose ul {
+  margin: 0;
+  padding-left: var(--space-5);
+  list-style: disc;
+}
+
+.prose li + li {
+  margin-top: var(--space-2);
+}
+
+.prose li {
+  line-height: 1.6;
+}
+
+.prose code {
+  padding: 1px 5px;
+  border: var(--hairline);
+  border-radius: 4px;
+  background: var(--bg-surface-alt);
+  font-size: .92em;
+}
+
+.prose .table {
+  margin-top: var(--space-4);
+}
+
+.legal-note {
+  margin-top: var(--space-8);
+  padding-top: var(--space-4);
+  border-top: var(--hairline);
+  font-size: var(--fs-sm);
+}
+
 /* -- Page head and sections ---------------------------------------------- */
 
 .page-head {

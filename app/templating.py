@@ -150,6 +150,10 @@ templates.env.globals.update(
         "APP_NAME": "PickSportPlus",
         "zone_label": zone_label,
         "now_utc": lambda: dt.datetime.now(dt.UTC),
+        "OPERATOR_NAME": settings.operator_name,
+        "OPERATOR_URL": settings.operator_url,
+        "SUPPORT_EMAIL": settings.support_email,
+        "LEGAL_DATE": settings.legal_effective_date,
     }
 )
 

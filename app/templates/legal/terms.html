@@ -1,0 +1,155 @@
+{% extends "base.html" %}
+{% block title %}Terms of service. {{ APP_NAME }}{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <div>
+    <p class="eyebrow">Legal</p>
+    <h1 class="page-title">Terms of service</h1>
+  </div>
+  <p class="muted">In effect {{ LEGAL_DATE }}</p>
+</div>
+
+<article class="card prose">
+  <div class="card-body">
+
+    <p>
+      {{ APP_NAME }} is a free weekly confidence pick'em pool for NFL and college football,
+      operated by {{ OPERATOR_NAME }}. By creating an account or making picks you agree to
+      these terms. If you do not agree, please do not use the app.
+    </p>
+
+    <h2>The short version</h2>
+    <ul>
+      <li>This is a game played for fun. There is no money involved and nothing to win here.</li>
+      <li>Keep your account details to yourself and pick your own games.</li>
+      <li>Schedules, scores and betting lines come from third parties and can be wrong or late.</li>
+      <li>Your pool commissioner runs your league and settles disputes inside it.</li>
+    </ul>
+
+    <h2>No wagering and no prizes</h2>
+    <p>
+      {{ APP_NAME }} is for entertainment only. It does not accept, hold, transfer or pay out
+      money, and it does not award prizes. Points and standings have no cash value.
+    </p>
+    <p>
+      The app displays betting point spreads, but only as a way of picking the closest and
+      most competitive games each week. Scoring is straight up, meaning whether you picked the
+      team that actually won. Nothing in the app is a bet, a betting service, or a
+      recommendation to place a bet, and no line shown here should be relied on for wagering
+      anywhere else. If you choose to gamble elsewhere, that is entirely your own decision and
+      your own risk. If gambling is causing you harm, help is available in the United States
+      from the National Council on Problem Gambling at 1-800-522-4700.
+    </p>
+
+    <h2>Your account</h2>
+    <ul>
+      <li>Give an email address you control and keep your password private.</li>
+      <li>You are responsible for what happens under your account.</li>
+      <li>One account per person per pool. Do not create accounts for other people.</li>
+      <li>Do not submit picks as someone else or share an account to gain an advantage.</li>
+      <li>You must be old enough to agree to a contract where you live. See the age note below.</li>
+    </ul>
+    <p>
+      Tell us at <a href="mailto:{{ SUPPORT_EMAIL }}">{{ SUPPORT_EMAIL }}</a> if you think
+      someone else has used your account.
+    </p>
+
+    <h2>Pools and commissioners</h2>
+    <p>
+      Each pool has a commissioner who sets it up and runs it. The commissioner controls the
+      league name, the join code, the season, the timezone, the lock time, how many games are
+      on the slate each week, and how many of those come from each league. They can also edit
+      the proposed slate, void a game that is cancelled or moved, and remove members.
+    </p>
+    <p>
+      Removing a member deletes that member's picks and results for the pool. Commissioner
+      decisions about their own pool are final as far as the app is concerned. We do not
+      arbitrate disputes between members of a pool.
+    </p>
+
+    <h2>Picks and scoring</h2>
+    <ul>
+      <li>Picks for a week must be submitted before that week's lock time, which is normally
+        the first kickoff on the slate. The lock is enforced by the clock.</li>
+      <li>After the lock, picks become visible to everyone in your pool. That is deliberate,
+        so the pool can see the week is honest.</li>
+      <li>If you do not submit before the lock, you score zero for that week.</li>
+      <li>A tie, a cancellation, or a game the commissioner voids scores nothing for anyone
+        and is left out of the correct and possible counts.</li>
+      <li>Results are recalculated as scores come in and may change until a week is final.</li>
+    </ul>
+
+    <h2>Data accuracy</h2>
+    <p>
+      Schedules, live status, final scores and point spreads come from third party sources,
+      currently ESPN, The Odds API and CollegeFootballData. That data can be delayed,
+      incomplete or wrong, and a feed can go down. {{ OPERATOR_NAME }} does not control those
+      sources and does not guarantee that anything shown in the app is accurate or current.
+      Where a source is unavailable the app shows the last good data it has.
+    </p>
+
+    <h2>Acceptable use</h2>
+    <p>Please do not:</p>
+    <ul>
+      <li>Break into, overload, scrape or probe the app or its infrastructure.</li>
+      <li>Try to read or change another member's picks before they are revealed.</li>
+      <li>Use the app to harass anyone, or put abusive content in a display name.</li>
+      <li>Use the app for any unlawful purpose, including unlicensed gambling.</li>
+    </ul>
+    <p>We may suspend or remove an account that does any of these.</p>
+
+    <h2>Availability</h2>
+    <p>
+      The app is provided as is and as available, with no warranty of any kind, express or
+      implied, including any implied warranty of merchantability, fitness for a particular
+      purpose or non infringement. It may be unavailable, lose data, or change at any time.
+      Automated jobs that build slates and pull scores can be delayed or fail.
+    </p>
+
+    <h2>Limitation of liability</h2>
+    <p>
+      To the fullest extent the law allows, {{ OPERATOR_NAME }} is not liable for any indirect,
+      incidental, special, consequential or punitive damages, or for any lost picks, lost
+      standings, lost data or lost profits, arising out of your use of {{ APP_NAME }}. Because
+      the app is free, our total liability to you is limited to the amount you paid to use it,
+      which is nothing.
+    </p>
+    <p>
+      Some places do not allow these limits, in which case the parts that are not allowed do
+      not apply to you and everything else still does.
+    </p>
+
+    <h2>Age</h2>
+    <p>
+      {{ APP_NAME }} is not directed to children under 13 and we do not knowingly create
+      accounts for them. If you believe a child under 13 has an account, write to
+      <a href="mailto:{{ SUPPORT_EMAIL }}">{{ SUPPORT_EMAIL }}</a> and we will remove it.
+    </p>
+
+    <h2>Ending your account</h2>
+    <p>
+      You can ask your commissioner to remove you from a pool, or write to
+      <a href="mailto:{{ SUPPORT_EMAIL }}">{{ SUPPORT_EMAIL }}</a> to have your account
+      deleted. We can suspend or end an account that breaks these terms.
+    </p>
+
+    <h2>Changes</h2>
+    <p>
+      We may update these terms. The date at the top of this page changes when we do.
+      Continuing to use the app after a change means you accept the updated terms.
+    </p>
+
+    <h2>Contact</h2>
+    <p>
+      {{ OPERATOR_NAME }},
+      <a href="{{ OPERATOR_URL }}" target="_blank" rel="noopener noreferrer">{{ OPERATOR_URL }}</a>.
+      Questions go to <a href="mailto:{{ SUPPORT_EMAIL }}">{{ SUPPORT_EMAIL }}</a>.
+    </p>
+
+    <p class="muted legal-note">
+      Related: read the <a href="/privacy">privacy policy</a> for what the app stores about you.
+    </p>
+  </div>
+</article>
+{% endblock %}

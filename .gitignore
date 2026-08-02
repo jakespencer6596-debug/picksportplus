@@ -6,8 +6,14 @@ __pycache__/
 .pytest_cache/
 .ruff_cache/
 *.db
+# SQLite writes sidecar files next to the database. The write ahead log holds real row
+# data, including account emails and password hashes, so it must never be committed.
+*.db-wal
+*.db-shm
 *.db-journal
 *.sqlite3
+*.sqlite3-wal
+*.sqlite3-shm
 .env
 .env.*
 !.env.example
