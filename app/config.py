@@ -37,9 +37,16 @@ class Settings(BaseSettings):
     season_year: int = 2026
     open_registration: bool = False
 
-    admin_email: str = "you@example.com"
-    admin_password: str = "change-me"
+    # Blank by default so a public demo does not ship a placeholder account or publish a
+    # placeholder contact address. seed-admin skips cleanly when either of these is unset.
+    admin_email: str = ""
+    admin_password: str = ""
     admin_display_name: str = "Commissioner"
+
+    # Render sets these automatically on every service. Their presence is how the app knows
+    # it is running behind Render's proxy rather than on a laptop.
+    render_external_hostname: str = ""
+    render_external_url: str = ""
 
     default_pool_name: str = "PickSportPlus"
     default_join_code: str = "make-one-up"
@@ -111,7 +118,46 @@ class Settings(BaseSettings):
 
     @property
     def support_email(self) -> str:
-        return self.contact_email or self.admin_email
+        """Empty is a valid answer. The legal pages fall back to plain text when it is."""
+        return (self.contact_email or self.admin_email or "").strip()
+
+    @property
+    def is_render(self) -> bool:
+        return bool(self.render_external_hostname)
+
+    @property
+    def secure_cookies(self) -> bool:
+        """HTTPS only cookies everywhere except a local http dev server."""
+        return self.is_render or not self.is_sqlite
+
+    @property
+    def base_url(self) -> str:
+        """Absolute origin, for links that have to work outside a request context."""
+        if self.render_external_url:
+            return self.render_external_url.rstrip("/")
+        if self.render_external_hostname:
+            return f"https://{self.render_external_hostname}"
+        return "http://localhost:8000"
+
+    @property
+    def allowed_hosts(self) -> list[str]:
+        hosts = ["localhost", "127.0.0.1", "testserver"]
+        if self.render_external_hostname:
+            hosts.append(self.render_external_hostname)
+        if self.render_external_url:
+            host = self.render_external_url.split("://")[-1].split("/")[0]
+            if host:
+                hosts.append(host)
+        return hosts
+
+    @property
+    def has_admin_credentials(self) -> bool:
+        """seed-admin needs both, and neither may be a leftover placeholder."""
+        email = self.admin_email.strip().lower()
+        password = self.admin_password
+        if not email or not password:
+            return False
+        return email != "you@example.com" and password != "change-me"
 
 
 @lru_cache

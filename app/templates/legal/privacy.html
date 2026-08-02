@@ -135,7 +135,7 @@
 
     <h2>Your choices</h2>
     <p>
-      Write to <a href="mailto:{{ SUPPORT_EMAIL }}">{{ SUPPORT_EMAIL }}</a> to ask for a copy
+      Write to {% if SUPPORT_EMAIL %}<a href="mailto:{{ SUPPORT_EMAIL }}">{{ SUPPORT_EMAIL }}</a>{% else %}your pool commissioner{% endif %} to ask for a copy
       of what we hold about you, to correct it, or to have your account and its data deleted.
       You can change your display name through your commissioner. Depending on where you live
       you may have further rights over your data, and we will honour a request that the law
@@ -146,7 +146,7 @@
     <p>
       The app is not directed to children under 13 and we do not knowingly collect their
       information. If you believe a child under 13 has an account, write to
-      <a href="mailto:{{ SUPPORT_EMAIL }}">{{ SUPPORT_EMAIL }}</a> and we will delete it.
+      {% if SUPPORT_EMAIL %}<a href="mailto:{{ SUPPORT_EMAIL }}">{{ SUPPORT_EMAIL }}</a>{% else %}your pool commissioner{% endif %} and we will delete it.
     </p>
 
     <h2>Changes</h2>
@@ -160,7 +160,7 @@
       {{ OPERATOR_NAME }},
       <a href="{{ OPERATOR_URL }}" target="_blank" rel="noopener noreferrer">{{ OPERATOR_URL }}</a>.
       Privacy questions go to
-      <a href="mailto:{{ SUPPORT_EMAIL }}">{{ SUPPORT_EMAIL }}</a>.
+      {% if SUPPORT_EMAIL %}<a href="mailto:{{ SUPPORT_EMAIL }}">{{ SUPPORT_EMAIL }}</a>{% else %}your pool commissioner{% endif %}.
     </p>
 
     <p class="muted legal-note">

@@ -31,15 +31,23 @@ DEMO_YEAR = 2025
 DEMO_WEEK = 5
 DEMO_PASSWORD = "demo-pass-2025"
 
-# (display name, email local part, skill). Skill is the chance of picking the real winner,
-# so 0.72 is a sharp player and 0.52 is barely better than a coin flip.
+# (display name, email local part, skill, role_in_pool). Skill is the chance of picking the
+# real winner, so 0.74 is a sharp player and 0.52 is barely better than a coin flip.
+#
+# The first entry is the demo commissioner. Anyone opening the demo link can sign in as
+# either that account to see the admin side, or as a player to see the ordinary side,
+# without having to set anything up. Both use DEMO_PASSWORD.
 DEMO_PLAYERS = [
-    ("Dana Whitfield", "dana", 0.74),
-    ("Marcus Reyes", "marcus", 0.68),
-    ("Priya Raman", "priya", 0.64),
-    ("Tom Bexley", "tom", 0.58),
-    ("Casey Nolan", "casey", 0.52),
+    ("Riley Chen", "commissioner", 0.70, "commissioner"),
+    ("Dana Whitfield", "player", 0.74, "member"),
+    ("Marcus Reyes", "marcus", 0.68, "member"),
+    ("Priya Raman", "priya", 0.64, "member"),
+    ("Tom Bexley", "tom", 0.58, "member"),
+    ("Casey Nolan", "casey", 0.52, "member"),
 ]
+
+DEMO_COMMISSIONER_EMAIL = "commissioner@picksportplus.demo"
+DEMO_PLAYER_EMAIL = "player@picksportplus.demo"
 
 
 def _load(name: str):
@@ -117,16 +125,30 @@ def seed_demo_pool(db: Session, reset: bool = False) -> list[str]:
     report = score_week_for_pool(db, pool, week)
     out.append(report.summary())
 
-    out.append("")
-    out.append("Sign in as any demo player to look around:")
-    for name, local, _skill in DEMO_PLAYERS:
-        out.append(f"  {local}@picksportplus.demo  password {DEMO_PASSWORD}  ({name})")
+    out.extend(demo_logins())
     return out
+
+
+def demo_logins() -> list[str]:
+    """The two accounts worth handing to anyone opening the demo."""
+    return [
+        "",
+        "Demo logins:",
+        f"  commissioner  {DEMO_COMMISSIONER_EMAIL}  password {DEMO_PASSWORD}",
+        f"  player        {DEMO_PLAYER_EMAIL}  password {DEMO_PASSWORD}",
+        "",
+        "The other demo players use the same password:",
+        *[
+            f"  {local}@picksportplus.demo  ({name})"
+            for name, local, _skill, _role in DEMO_PLAYERS
+            if local not in ("commissioner", "player")
+        ],
+    ]
 
 
 def _ensure_players(db: Session, pool: Pool, out: list[str]) -> list[User]:
     users: list[User] = []
-    for name, local, _skill in DEMO_PLAYERS:
+    for name, local, _skill, role_in_pool in DEMO_PLAYERS:
         email = f"{local}@picksportplus.demo"
         user = db.scalar(select(User).where(User.email == email))
         if user is None:
@@ -134,6 +156,8 @@ def _ensure_players(db: Session, pool: Pool, out: list[str]) -> list[User]:
                 email=email,
                 password_hash=hash_password(DEMO_PASSWORD),
                 display_name=name,
+                # A pool level commissioner, not a global admin. They run this pool and
+                # nothing else, which is what a visitor should be shown.
                 role="player",
             )
             db.add(user)
@@ -142,10 +166,13 @@ def _ensure_players(db: Session, pool: Pool, out: list[str]) -> list[User]:
             select(PoolMember).where(PoolMember.pool_id == pool.id, PoolMember.user_id == user.id)
         )
         if member is None:
-            db.add(PoolMember(pool_id=pool.id, user_id=user.id, role_in_pool="member"))
+            db.add(PoolMember(pool_id=pool.id, user_id=user.id, role_in_pool=role_in_pool))
+        else:
+            member.role_in_pool = role_in_pool
         users.append(user)
     db.flush()
-    out.append(f"Added {len(users)} demo players.")
+    commissioners = sum(1 for p in DEMO_PLAYERS if p[3] == "commissioner")
+    out.append(f"Added {len(users)} demo members ({commissioners} commissioner).")
     return users
 
 
@@ -226,7 +253,7 @@ def _generate_picks(db: Session, pool: Pool, week: Week, users: list[User], out:
     )
     n = len(slate)
 
-    for user, (_name, local, skill) in zip(users, DEMO_PLAYERS, strict=False):
+    for user, (_name, local, skill, _role) in zip(users, DEMO_PLAYERS, strict=False):
         rng = random.Random(f"{local}-{DEMO_YEAR}-{DEMO_WEEK}")
 
         # Pick a side per game, weighted towards the team that actually won.
@@ -274,6 +301,6 @@ def clear_demo(db: Session) -> None:
         return
     db.delete(pool)
     db.flush()
-    emails = [f"{local}@picksportplus.demo" for _n, local, _s in DEMO_PLAYERS]
+    emails = [f"{local}@picksportplus.demo" for _n, local, _s, _r in DEMO_PLAYERS]
     db.execute(delete(User).where(User.email.in_(emails)))
     db.flush()

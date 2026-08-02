@@ -10,6 +10,8 @@ from fastapi.responses import RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.middleware.sessions import SessionMiddleware
+from starlette.middleware.trustedhost import TrustedHostMiddleware
+from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
 
 from app.config import settings
 from app.templating import STATIC_DIR, render, templates
@@ -27,9 +29,18 @@ app.add_middleware(
     secret_key=settings.secret_key,
     session_cookie="psp_session",
     same_site="lax",
-    https_only=not settings.is_sqlite,  # local dev runs on http, Render runs on https
+    # Secure behind Render's TLS, relaxed for a local http dev server. Starlette always
+    # sets HttpOnly on this cookie, so it is never readable from JavaScript.
+    https_only=settings.secure_cookies,
     max_age=60 * 60 * 24 * 30,
 )
+
+# Only answer to hosts we expect. Render publishes the real hostname in the environment.
+app.add_middleware(TrustedHostMiddleware, allowed_hosts=settings.allowed_hosts)
+
+# Render terminates TLS at its edge and forwards X-Forwarded-Proto. Without this the app
+# would believe every request is plain http and would refuse to set a Secure cookie.
+app.add_middleware(ProxyHeadersMiddleware, trusted_hosts="*")
 
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
@@ -74,8 +85,11 @@ async def fastapi_http_exception_handler(request: Request, exc: FastAPIHTTPExcep
     return await http_exception_handler(request, exc)
 
 
+@app.get("/health", include_in_schema=False)
 @app.get("/healthz", include_in_schema=False)
-def healthz():
+def health():
+    """Render's health check. Deliberately touches nothing, so a feed or database hiccup
+    cannot make the platform think the service is down."""
     return {"status": "ok"}
 
 

@@ -78,13 +78,26 @@ def init_db(
 
 @app.command("seed-admin")
 def seed_admin() -> None:
-    """Create the commissioner account and the default pool from .env."""
+    """Create the commissioner account and the default pool from .env.
+
+    Safe to run on every boot. It exits 0 and does nothing when ADMIN_EMAIL or
+    ADMIN_PASSWORD are unset, which is the normal case for a public demo where the
+    start command chains this between the migration and the server.
+    """
     from app.auth import hash_password, normalize_email, normalize_join_code
+
+    if not settings.has_admin_credentials:
+        _echo(
+            "ADMIN_EMAIL and ADMIN_PASSWORD are not both set, so seed-admin did nothing. "
+            "Set them if you want your own commissioner account."
+        )
+        return
 
     email = normalize_email(settings.admin_email)
     code = normalize_join_code(settings.default_join_code)
-    if not code:
-        raise typer.Exit(code=_fail("DEFAULT_JOIN_CODE is empty. Set it in .env."))
+    if not code or code == "MAKE-ONE-UP":
+        _echo("DEFAULT_JOIN_CODE is not set, so seed-admin did nothing.")
+        return
 
     with session_scope() as db:
         user = db.scalar(select(User).where(User.email == email))
