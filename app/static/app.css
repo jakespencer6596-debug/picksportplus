@@ -44,6 +44,21 @@
      ink        on rank-2        11.40:1   pass
      ink        on rank-3         8.33:1   pass
 
+   SECOND PASS AUDIT (the component styles added for the finished templates)
+     green-str  on surface-2    12.08:1   pass  (your own name on a grid head)
+     green      on surface-2    10.25:1   pass  (join code, week chips)
+     maroon     on surface-2    10.19:1   pass
+     brick      on surface-2     6.28:1   pass  (a voided row in an admin table)
+     brick      on green-tint    5.76:1   pass
+     ink-soft   on brick-tint    6.81:1   pass  (a losing side's score)
+     surface    on brick         6.76:1   pass  (locked lock bar link)
+     ink        on gold-soft    11.46:1   pass  (live badge, commissioner badge)
+   Non text pairings, which need 3:1, on the results legend keys:
+     green edge on green-tint    9.40:1   pass  (correct)
+     brick edge on brick-tint    5.72:1   pass  (wrong)
+     ink-soft edge on surface    8.04:1   pass  (not final)
+     ink-soft edge on surface-2  7.47:1   pass  (void)
+
    FAILURES FOUND AND FIXED
    1. --focus at the specified #C0942F measured 2.38:1 on --paper and 2.75:1
       on --surface. A focus indicator must reach 3:1, so --focus is darkened to
@@ -84,12 +99,14 @@
      05  Buttons
      06  Surfaces: card, panel, divider
      07  Forms, auth pages
-     08  Game row, confidence controls, summary bar, saved state
-     09  Banners: lock bar, flash, toast, empty state
+     08  Game row, confidence controls, picks bar, saved state
+     09  Banners: lock bar, flash, toast, notice, empty state
      10  Tables, leaderboard, badges and stats
-     11  SortableJS drag states
-     12  Utilities
-     13  Print
+     11  Results: week switcher, pick legend, the picks grid
+     12  Admin: sub nav, budgets, join code, slate tables
+     13  SortableJS drag states
+     14  Utilities
+     15  Print
 
    TEMPLATE HOOKS THIS FILE OWNS
    Names that app/templates and app/static/app.js already emit, so they are
@@ -97,8 +114,15 @@
      .skip-link  .footer .footer-inner  .flash-stack  .user-name .inline-form
      .btn-label  .icon  .brand-sport  .auth-wrap .auth-card .auth-intro
      .auth-alt  .input-code  .error-list  .error-state  .page-auth
-     .save-state with .is-dirty / .is-saving / .is-saved
+     .save-state with .is-dirty / .is-saving / .is-saved / .is-error
      [data-pick-meter] filled from a --pct custom property
+     .picks-bar .picks-progress .picks-summary .picks-meter .picks-meter-fill
+     .picks-actions .picks-status  (picks.html, the save bar)
+     .picks-grid with .pick-game .pick-player .pick-cell and the
+     .is-correct / .is-wrong / .is-pending / .is-void / .is-missing states
+     .subnav .subnav-link  (the four admin screens carry it inline)
+     badge-{{ week.status }} resolves to .badge-draft / -open / -locked /
+     -scored, and badge-{{ game.league }} to the existing .badge-nfl / -ncaaf
    ========================================================================== */
 
 
@@ -792,6 +816,31 @@ details.user-menu[open] > :not(summary) button:hover {
   background: var(--decor);
 }
 
+/* A section title with a small action beside it. The title stays the flexible
+   child so its hairline and its gold rule still run the width of the row. */
+.section-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: var(--space-3);
+  margin-bottom: var(--space-4);
+}
+
+.section-head .section-title {
+  flex: 1 1 12ch;
+  margin-bottom: 0;
+}
+
+/* -- Page hooks ----------------------------------------------------------
+   base.html writes the page name onto <body>. Only the picks page needs one:
+   it stacks a sticky lock bar under the sticky top bar, so its "Back to save"
+   anchor has to clear both, not just the top bar.
+   ------------------------------------------------------------------------ */
+
+.page-picks :target {
+  scroll-margin-top: calc(var(--topbar-h) + var(--space-12));
+}
+
 
 /* ==========================================================================
    05  BUTTONS
@@ -832,11 +881,32 @@ details.user-menu[open] > :not(summary) button:hover {
   stroke-width: 1.75;
 }
 
+/* A disabled button drops its own colour rather than fading out. app.js
+   disables the primary Save action until every winner is chosen, and a washed
+   out green still reads as "press me". A flat neutral fill does not, and the
+   label stays at 7.47:1 instead of dropping to about 3:1 behind an opacity. */
 .btn[disabled],
 .btn[aria-disabled="true"],
 .btn.is-disabled {
-  opacity: .55;
+  background: var(--bg-surface-alt);
+  border-color: var(--line);
+  color: var(--text-muted);    /* 7.47:1 on surface-2 */
+  box-shadow: none;
   cursor: not-allowed;
+  transform: none;
+}
+
+/* And it never reacts to the pointer. Without this the variant hover rules
+   below still repaint a disabled button. */
+.btn[disabled]:hover,
+.btn[disabled]:active,
+.btn[aria-disabled="true"]:hover,
+.btn[aria-disabled="true"]:active,
+.btn.is-disabled:hover,
+.btn.is-disabled:active {
+  background: var(--bg-surface-alt);
+  border-color: var(--line);
+  color: var(--text-muted);
   transform: none;
 }
 
@@ -882,6 +952,25 @@ details.user-menu[open] > :not(summary) button:hover {
 .topbar .btn-ghost { color: var(--nav-ink); }
 .topbar .btn-ghost:hover {
   background: rgba(255, 253, 247, .08);
+  color: var(--text-invert);
+}
+
+/* The signed-out bar carries a secondary button. Two reasons this needs its own rule.
+   First, ".topbar a" sets cream text and outranks ".btn-secondary", so the default
+   green-on-cream button rendered as cream on cream: a blank slab with an invisible
+   label. Second, a filled cream button is too heavy against the green bar. An outline
+   in gold-soft matches the bar and the ghost button beside it.
+   Cream on green measures 11.03:1, the gold-soft border 7.49:1. */
+.topbar .btn-secondary {
+  background: transparent;
+  border-color: var(--gold-soft);
+  color: var(--text-invert);
+}
+
+.topbar .btn-secondary:hover,
+.topbar .btn-secondary:active {
+  background: rgba(255, 253, 247, .10);
+  border-color: var(--text-invert);
   color: var(--text-invert);
 }
 
@@ -1108,6 +1197,70 @@ textarea[disabled] {
 
 .form-row .field { margin-bottom: 0; }
 
+/* A group of related controls, for example the two league checkboxes. The
+   legend uses .field-label, so it only needs the gap in the hairline. */
+.field-group {
+  margin: 0 0 var(--space-4);
+  padding: var(--space-4);
+  background: var(--bg-surface-alt);
+  border: var(--hairline);
+  border-radius: var(--radius-sm);
+}
+
+.field-group > legend {
+  padding-inline: var(--space-2);
+  margin-bottom: 0;
+}
+
+.field-group .form-hint { margin-top: var(--space-3); }
+
+/* The row a form ends on. The button first, then any note about what saving
+   actually does. */
+.form-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-3) var(--space-4);
+}
+
+.form-actions .btn { flex: none; }
+
+.form-actions p {
+  margin: 0;
+  font-size: var(--fs-sm);
+}
+
+/* A whole page of cards that submit together. */
+.settings-form { margin-bottom: var(--space-10); }
+
+/* A tiny form living inside a table cell, an input plus its button. */
+.action-form {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  margin: 0;
+}
+
+/* Dense controls to match .btn-sm. Like .btn-sm they hold the 44px tap floor
+   on phone widths and only relax to 36px at 768px, where the pointer is
+   normally a mouse. */
+.input-sm,
+.select-sm {
+  width: auto;
+  min-height: var(--tap);
+  padding: var(--space-1) var(--space-3);
+  font-size: var(--fs-sm);
+}
+
+.input-sm { max-width: 8ch; }
+
+.select-sm {
+  max-width: 24ch;
+  padding-right: var(--space-6);
+  background-position: right var(--space-2) center;
+}
+
 /* A list of validation messages inside .form-error. The global list reset
    strips markers, so put them back here where they carry meaning. */
 .error-list {
@@ -1229,6 +1382,17 @@ textarea[disabled] {
   display: none;
 }
 
+/* A voided game, or an NFL tie. It stays perfectly legible, it just stops
+   looking like a game that pays. */
+.game-row.is-void {
+  border-style: dashed;
+  background: var(--bg-surface-alt);
+}
+
+.game-row.is-void .team-abbr,
+.game-row.is-void .team-name,
+.game-row.is-void .game-score { color: var(--text-muted); }   /* 7.47:1 */
+
 /* -- Drag handle --------------------------------------------------------- */
 
 .game-grip {
@@ -1269,11 +1433,31 @@ textarea[disabled] {
   min-width: 0;
 }
 
+/* picks.html prints a small "at" between the two sides, so the grid grows a
+   third track. .game-teams goes to 1fr 1fr at 640px, so this variant has to
+   be restated there as 1fr auto 1fr or the wide layout loses a column. */
+.game-teams-at { grid-template-columns: 1fr; }
+
+.game-at {
+  align-self: center;
+  justify-self: center;
+  font-family: var(--font-display);
+  font-size: var(--fs-xs);
+  font-weight: 500;
+  letter-spacing: var(--track-abbr);
+  line-height: 1;
+  color: var(--text-muted);   /* 8.04:1 on surface */
+}
+
 .team-btn {
   display: flex;
   align-items: center;
   gap: var(--space-2);
   width: 100%;
+  /* A grid item defaults to min-width:auto, which is min-content, so a long team name
+     ("Notre Dame Fighting Irish") pushed the button 25px past its track at 360px and
+     scrolled the whole page sideways. Zero lets it shrink and .team-name ellipsis. */
+  min-width: 0;
   min-height: 52px;
   padding: var(--space-2) var(--space-3);
   background: var(--bg-surface);
@@ -1285,10 +1469,16 @@ textarea[disabled] {
               border-color var(--dur) var(--ease);
 }
 
-.team-btn:hover {
+/* Hover is a promise of interaction, so it is scoped to a live button. The
+   locked picks page renders the same control disabled and the results page
+   renders it as a plain div, and neither should light up under the pointer.
+   Excluding .is-picked keeps a chosen side on its green tint while hovered. */
+button.team-btn:not([disabled]):not(.is-picked):hover {
   border-color: var(--accent);
   background: var(--bg-surface-alt);
 }
+
+.team-btn[disabled] { cursor: default; }
 
 .team-abbr {
   flex: none;
@@ -1359,6 +1549,54 @@ textarea[disabled] {
    a gap to sit in. */
 .team-score + .team-check { margin-left: var(--space-2); }
 
+/* The results scoreboard renders the same row as plain divs rather than
+   buttons, so it carries .game-score. The admin slate table reuses the name
+   for a quiet "GB 24, CHI 20" line under the status badge, which is why the
+   base rule is the small meta form and the team row restates it. */
+.game-score {
+  display: block;
+  font-family: var(--font-display);
+  font-size: var(--fs-xs);
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: .01em;
+  color: var(--text-muted);   /* 8.04:1 on surface */
+}
+
+.team-btn .game-score {
+  flex: none;
+  display: inline-block;
+  margin-left: auto;
+  min-width: 2ch;
+  font-size: var(--fs-md);
+  font-weight: 600;
+  line-height: 1;
+  text-align: right;
+  color: var(--text);
+}
+
+.team-btn.is-winner .game-score { color: var(--accent-strong); }  /* 11.08:1 */
+.team-btn.is-loser .game-score { color: var(--text-muted); }      /* 6.81:1 */
+
+/* The winner tick on the results scoreboard. It sits before the score, so it
+   takes the auto margin and the score follows on a fixed gap. Two auto
+   margins in one flex row would otherwise share the free space between them. */
+.win-check {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  margin-left: auto;
+  color: var(--positive);     /* 9.40:1 on the green tint fill */
+}
+
+.win-check svg {
+  width: 16px;
+  height: 16px;
+  stroke-width: 2.25;
+}
+
+.win-check + .game-score { margin-left: var(--space-2); }
+
 .team-btn.is-winner .team-score { color: var(--accent-strong); }
 
 .team-btn.is-loser .team-score { color: var(--text-muted); }
@@ -1428,6 +1666,13 @@ textarea[disabled] {
 
 .game-line { font-weight: 500; }
 
+/* A short aside in the meta strip, for example "No points on this game." */
+.game-note {
+  flex: none;
+  font-size: var(--fs-xs);
+  color: var(--text-muted);   /* 7.47:1 on the void row fill */
+}
+
 .game-kick::before {
   content: "";
   display: inline-block;
@@ -1496,9 +1741,21 @@ textarea[disabled] {
   background: var(--accent-tint);
 }
 
+/* The row is already at the top or the bottom of the ranking. Flat neutral
+   fill plus a faded arrow, and no hover at all. WCAG 1.4.3 exempts an
+   inactive control from the text contrast floor, which is what lets the
+   arrow itself fade. */
 .rank-btn[disabled] {
-  opacity: .4;
+  background: var(--bg-surface-alt);
+  border-color: var(--line);
+  opacity: .5;
   cursor: not-allowed;
+}
+
+.rank-btn[disabled]:hover {
+  color: var(--text-muted);
+  background: var(--bg-surface-alt);
+  border-color: var(--line);
 }
 
 .rank-btn svg {
@@ -1573,6 +1830,69 @@ textarea[disabled] {
   transition: width var(--dur) var(--ease);
 }
 
+/* -- The picks page save bar ---------------------------------------------
+   picks.html builds this out of .spread plus the hooks below. It is
+   deliberately not sticky. The lock bar above it is itself sticky and wraps
+   to two or three lines at 360px, so any fixed top offset would either
+   overlap it or leave a gap; the template ships a "Back to save" anchor to
+   #save instead, which costs nothing and works with JS switched off.
+   ------------------------------------------------------------------------ */
+
+.picks-bar {
+  padding: var(--space-3) var(--space-4);
+  background: var(--bg-surface);
+  border: var(--hairline);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-sm);
+}
+
+.picks-progress {
+  flex: 1 1 220px;
+  min-width: 0;
+}
+
+.picks-progress > * + * { margin-top: var(--space-2); }
+
+.picks-summary {
+  margin: 0;
+  font-family: var(--font-display);
+  font-size: var(--fs-md);
+  font-weight: 600;
+  letter-spacing: .01em;
+  font-variant-numeric: tabular-nums;
+  line-height: var(--lh-tight);
+  color: var(--text);
+}
+
+/* The track comes from the [data-pick-meter] rule above, which this same
+   element carries. app.js writes --pct onto it, and the template also sets
+   --pct inline so the first paint is correct before any script runs. */
+.picks-meter {
+  width: 100%;
+  max-width: 280px;
+}
+
+/* This variant nests a real element for the fill, so the shared ::after
+   would draw a second identical bar on top of it. */
+.picks-meter::after { content: none; }
+
+.picks-meter-fill {
+  display: block;
+  height: 100%;
+  width: var(--pct, 0%);
+  background: var(--accent);
+  transition: width var(--dur) var(--ease);
+}
+
+.picks-actions {
+  flex: none;
+  justify-content: flex-end;
+}
+
+/* The HTMX swap target. It is empty on first paint, and an empty box inside
+   a .stack would otherwise spend a 16px gap on nothing. */
+.picks-status:empty { display: none; }
+
 /* -- Saved indicator ----------------------------------------------------- */
 
 .save-state {
@@ -1605,6 +1925,14 @@ textarea[disabled] {
   background: var(--accent-tint);
   border-color: var(--accent-line);
   color: var(--accent-strong);  /* 11.08:1 */
+}
+
+/* The save came back 4xx. app.js only knows the success path, so picks.html
+   sets this from hx-on::after-request. */
+.save-state.is-error {
+  background: var(--negative-tint);
+  border-color: var(--negative-line);
+  color: var(--negative);       /* 5.72:1 on brick-tint */
 }
 
 /* -- HTMX request states -------------------------------------------------
@@ -1663,6 +1991,25 @@ textarea[disabled] {
   font-weight: 600;
   letter-spacing: .01em;
 }
+
+/* The bar is full bleed, so an inner element pulls its text back onto the
+   same line as the 1080px content column. It carries .row, so it is already
+   a wrapping flex row. This mirrors .topbar-inner. */
+.lockbar-inner {
+  width: 100%;
+  max-width: var(--measure);
+  margin-inline: auto;
+  min-width: 0;
+}
+
+/* The base link colour is --accent, which is unreadable on both lock bar
+   fills. Ink on gold-soft is 11.46:1, cream on brick is 6.76:1. */
+.lockbar-link {
+  color: var(--ink);
+  text-decoration: underline;
+}
+
+.lockbar-strong .lockbar-link { color: var(--text-invert); }
 
 /* Imminent lock, or the week is already locked. */
 .lockbar-strong {
@@ -1729,6 +2076,42 @@ textarea[disabled] {
 }
 
 .flash-info svg { color: var(--text-muted); }
+
+/* -- Quiet notice --------------------------------------------------------
+   A .panel with an icon and a small heading, for the places a flash would be
+   too loud. Results uses it for "picks stay private until the week locks".
+   ------------------------------------------------------------------------ */
+
+.notice {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-3);
+}
+
+/* .panel stacks its children. This one is a row, so the stacking is undone
+   here and re-applied inside the body. */
+.notice > * + * { margin-top: 0; }
+
+.notice > svg {
+  width: 20px;
+  height: 20px;
+  margin-top: 2px;
+  stroke-width: 2;
+  color: var(--text-muted);
+}
+
+.notice-body { min-width: 0; }
+
+.notice-body > * + * { margin-top: var(--space-2); }
+
+.notice-title {
+  margin: 0;
+  font-family: var(--font-display);
+  font-size: var(--fs-md);
+  font-weight: 600;
+  line-height: var(--lh-snug);
+  color: var(--text);
+}
 
 /* -- Toasts --------------------------------------------------------------
    Same voice as a flash, but transient and floating. On phone widths it
@@ -1957,6 +2340,79 @@ textarea[disabled] {
   background: var(--bg-surface);
 }
 
+/* The signed in player's own row. Every row is a card below 768px, so the
+   marker is the card edge. The desktop form is in the 768px block, where
+   rows are real table rows again. */
+.lb-row.is-you {
+  border-color: var(--accent);
+  box-shadow: inset 3px 0 0 var(--accent), var(--shadow-sm);
+}
+
+/* The leader ribbon still outranks it. */
+.lb-row.lb-leader.is-you {
+  border-color: var(--decor);
+  box-shadow: inset 3px 0 0 var(--decor), var(--shadow-sm);
+}
+
+/* The player cell: a name plus whatever pills it has earned. */
+.lb-name {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.lb-player { font-weight: 500; }
+
+/* A note under a leaderboard heading, for example "this week is still being
+   scored". */
+.lb-note {
+  margin: 0 0 var(--space-4);
+  font-size: var(--fs-sm);
+}
+
+/* A player with no entry that week. Quiet. It is not an error, they simply
+   did not play. */
+.no-entry {
+  font-size: var(--fs-xs);
+  color: var(--text-muted);    /* 8.04:1 on surface */
+}
+
+/* -- Cells that hold controls or notes ----------------------------------- */
+
+/* Several small forms in one cell. Below 768px the cell is already a flex row
+   with its column name drawn from data-label, so the label takes a line of
+   its own and the controls wrap underneath it. Above 768px the cell goes back
+   to being a real table cell and the forms inside do the flexing. See the
+   note in the 768px block. */
+.table td.cell-actions {
+  flex-wrap: wrap;
+  justify-content: flex-start;
+  gap: var(--space-2);
+  text-align: left;
+}
+
+.table td.cell-actions::before { flex: 1 0 100%; }
+
+.cell-note {
+  flex: 1 0 100%;
+  font-size: var(--fs-xs);
+}
+
+/* A value, a kickoff time or a line should not break in the middle of
+   itself just because a column is tight. The table scrolls inside
+   .table-wrap instead. */
+.table .num,
+.table .game-line,
+.table .line-gap { white-space: nowrap; }
+
+/* A voided game in an admin table. */
+.table tr.is-void { border-style: dashed; }
+
+.table tr.is-void td,
+.table tr.is-void th { color: var(--text-muted); }   /* 7.47:1 */
+
 /* -- Rank badge ---------------------------------------------------------- */
 
 .rank-badge {
@@ -2022,6 +2478,17 @@ textarea[disabled] {
 
 /* -- Stats --------------------------------------------------------------- */
 
+/* Two names for the same idea, because the standings page reads as a row of
+   season facts and the admin overview as a grid of pool facts. auto-fit
+   means neither has to know how many .stat blocks it holds. */
+.stat-row,
+.stat-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: var(--space-3);
+  margin-bottom: var(--space-6);
+}
+
 .stat {
   display: flex;
   flex-direction: column;
@@ -2049,6 +2516,14 @@ textarea[disabled] {
   font-variant-numeric: tabular-nums;
   line-height: 1;
   color: var(--text);
+}
+
+/* A person's name in a stat slot. It has to be able to wrap, and 28px of
+   condensed display face is too big for "Marguerite Okonkwo". */
+.stat-value-name {
+  font-size: var(--fs-lg);
+  line-height: var(--lh-snug);
+  overflow-wrap: break-word;
 }
 
 /* -- Badges and pills ---------------------------------------------------- */
@@ -2096,6 +2571,58 @@ textarea[disabled] {
   color: var(--accent-strong);  /* 11.08:1 */
 }
 
+/* A game in progress. Gold is the "right now" voice everywhere in this app,
+   the same as the lock bar, and a gold surface carries ink per Section 3b. */
+.badge-live {
+  background: var(--decor-soft);
+  border-color: var(--decor);
+  color: var(--ink);            /* 11.46:1 */
+}
+
+/* -- Week status. badge-{{ week.status }} resolves to one of these four ---
+   The palette tells the story of a week: neutral while it is a draft, green
+   once picks are open, brick once it locks (the same brick .lockbar-strong
+   turns), then solid green when it is scored and done.
+   ------------------------------------------------------------------------ */
+
+.badge-draft {
+  background: var(--bg-surface-alt);
+  border-color: var(--line);
+  color: var(--text-muted);     /* 7.47:1 */
+}
+
+.badge-open {
+  background: var(--accent-tint);
+  border-color: var(--accent-line);
+  color: var(--accent-strong);  /* 11.08:1 */
+}
+
+.badge-locked {
+  background: var(--negative-tint);
+  border-color: var(--negative-line);
+  color: var(--negative);       /* 5.72:1 */
+}
+
+.badge-scored {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--text-invert);    /* 11.03:1 */
+}
+
+/* -- Pool roles ---------------------------------------------------------- */
+
+.badge-commissioner {
+  background: var(--decor-soft);
+  border-color: var(--decor);
+  color: var(--ink);            /* 11.46:1 */
+}
+
+.badge-member {
+  background: var(--bg-surface-alt);
+  border-color: var(--line);
+  color: var(--text-muted);     /* 7.47:1 */
+}
+
 .pill {
   display: inline-flex;
   align-items: center;
@@ -2112,9 +2639,574 @@ textarea[disabled] {
   white-space: nowrap;
 }
 
+/* "You". Marks the signed in player's own row or column, on the leaderboard
+   and in the results grid. Small, green, and never the loudest thing there. */
+.pill-you {
+  padding: 1px var(--space-2);
+  background: var(--accent-tint);
+  border-color: var(--accent-line);
+  font-family: var(--font-display);
+  font-weight: 600;
+  letter-spacing: var(--track-eyebrow);
+  text-transform: uppercase;
+  color: var(--accent-strong);  /* 11.08:1 */
+}
+
 
 /* ==========================================================================
-   11  SORTABLEJS DRAG STATES
+   11  RESULTS: WEEK SWITCHER, PICK LEGEND, THE PICKS GRID
+
+   The picks grid is the widest thing in the app: one column per player, one
+   row per game. It is a .table, so it inherits the stacked card reflow below
+   768px, and above 768px it becomes a real grid that scrolls sideways inside
+   .table-wrap and never on the page body.
+
+     <div class="table-wrap">
+       <table class="table picks-grid">
+         <thead><tr>
+           <th class="pick-game is-sticky">Game</th>
+           <th class="pick-player">..</th>
+         </tr></thead>
+         <tbody><tr>
+           <th class="pick-game is-sticky">..</th>
+           <td class="pick-cell is-correct" data-label="Dana Whitfield">..</td>
+         </tr></tbody>
+       </table>
+     </div>
+
+   Below 768px .pick-game stops being a cell and becomes the card heading, so
+   it is the one cell in the app that does not draw a data-label.
+   ========================================================================== */
+
+/* -- Week switcher -------------------------------------------------------
+   A single scrolling strip of weeks. Results nests a <ul class="week-switch
+   -list"> inside the nav, the admin slate editor puts its links straight in,
+   so the strip is the nav and the list is transparent to it.
+   ------------------------------------------------------------------------ */
+
+.week-switch {
+  display: flex;
+  gap: var(--space-2);
+  margin-bottom: var(--space-6);
+  padding-bottom: var(--space-2);
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+}
+
+.week-switch-list {
+  display: flex;
+  gap: var(--space-2);
+  margin: 0;
+  padding: 0;
+}
+
+.week-switch > *,
+.week-switch-list > li { flex: none; }
+
+.week-chip {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: var(--tap);
+  padding: var(--space-1) var(--space-4);
+  background: var(--bg-surface);
+  border: var(--hairline);
+  border-radius: var(--radius-pill);
+  font-family: var(--font-display);
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  letter-spacing: .02em;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  color: var(--text);
+  transition: background-color var(--dur) var(--ease),
+              border-color var(--dur) var(--ease),
+              color var(--dur) var(--ease);
+}
+
+.week-chip:hover {
+  background: var(--accent-tint);
+  border-color: var(--accent);
+  color: var(--accent-strong);   /* 11.08:1 */
+  text-decoration: none;
+}
+
+.week-chip.is-active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--text-invert);     /* 11.03:1 */
+}
+
+/* -- Pick legend ---------------------------------------------------------
+   The keys repeat the cell fills exactly, so the legend stays honest. Each
+   key border clears the 3:1 floor for meaningful non text content.
+   ------------------------------------------------------------------------ */
+
+.pick-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2) var(--space-4);
+  margin: 0 0 var(--space-4);
+  padding: 0;
+  font-size: var(--fs-xs);
+  color: var(--text-muted);
+}
+
+.pick-legend li {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.pick-key {
+  flex: none;
+  width: 14px;
+  height: 14px;
+  border: 1px solid var(--text-muted);
+  border-radius: 3px;
+  background: var(--bg-surface);
+}
+
+.pick-key.is-correct {
+  background: var(--accent-tint);
+  border-color: var(--positive);     /* 9.40:1 on its own fill */
+}
+
+.pick-key.is-wrong {
+  background: var(--negative-tint);
+  border-color: var(--negative);     /* 5.72:1 */
+}
+
+.pick-key.is-pending {
+  background: var(--bg-surface);
+  border-color: var(--text-muted);   /* 8.04:1 */
+}
+
+.pick-key.is-void {
+  background: var(--bg-surface-alt);
+  border-style: dashed;
+  border-color: var(--text-muted);   /* 7.47:1 */
+}
+
+/* -- Per player summary --------------------------------------------------
+   The grid head carries every player's total, and the head is visually
+   hidden below 768px, so this list carries the same totals on a phone. It is
+   .mobile-only, which owns its display property.
+   ------------------------------------------------------------------------ */
+
+.pick-summary {
+  margin: 0 0 var(--space-4);
+  padding: 0;
+}
+
+.pick-summary-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2) var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  background: var(--bg-surface);
+  border: var(--hairline);
+  border-radius: var(--radius-sm);
+  font-size: var(--fs-sm);
+  font-variant-numeric: tabular-nums;
+}
+
+.pick-summary-row + .pick-summary-row { margin-top: var(--space-2); }
+
+.pick-summary-row.is-you {
+  border-color: var(--accent);
+  box-shadow: inset 3px 0 0 var(--accent);
+}
+
+/* -- The grid itself ----------------------------------------------------- */
+
+/* Below 768px the first cell of every row is the card heading, not a cell,
+   so it drops the flex row and the data-label the reflow normally draws. */
+.picks-grid .pick-game {
+  display: block;
+  padding: 0 0 var(--space-2);
+  margin-bottom: var(--space-1);
+  border-bottom: 1px solid var(--line);
+  text-align: left;
+}
+
+.picks-grid .pick-game::before {
+  content: none;
+  display: none;
+}
+
+.pick-game-name {
+  display: block;
+  font-family: var(--font-display);
+  font-size: var(--fs-md);
+  font-weight: 600;
+  letter-spacing: .01em;
+  line-height: var(--lh-snug);
+  color: var(--text);
+}
+
+.pick-game-note {
+  display: block;
+  font-size: var(--fs-xs);
+  font-variant-numeric: tabular-nums;
+  color: var(--text-muted);    /* 8.04:1 on surface */
+}
+
+/* The player column head. .table th is nowrap, and this one is two lines. */
+.pick-player { white-space: normal; }
+
+.pick-player .ribbon { margin-bottom: var(--space-1); }
+
+.pick-player-name {
+  display: block;
+  font-family: var(--font-body);
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  letter-spacing: normal;
+  text-transform: none;
+  color: var(--text);
+}
+
+.pick-player.is-you .pick-player-name { color: var(--accent-strong); }  /* 12.08:1 */
+
+.pick-player-stats {
+  display: block;
+  font-family: var(--font-body);
+  font-size: var(--fs-xs);
+  font-weight: 400;
+  letter-spacing: normal;
+  text-transform: none;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-muted);    /* 7.47:1 on the head fill */
+}
+
+/* One player's pick on one game. The state fill is the whole cell at every
+   width, so the tint reads the same on a phone card and in the desktop grid.
+   The small inline padding keeps it off the card edge while stacked. */
+.picks-grid .pick-cell { padding-inline: var(--space-2); }
+
+.picks-grid .pick-cell.is-correct {
+  background: var(--accent-tint);
+  color: var(--accent-strong);   /* 11.08:1 */
+}
+
+.picks-grid .pick-cell.is-wrong {
+  background: var(--negative-tint);
+  color: var(--negative);        /* 5.72:1 */
+}
+
+.picks-grid .pick-cell.is-pending { color: var(--text-muted); }  /* 8.04:1 */
+
+.picks-grid .pick-cell.is-void,
+.picks-grid .pick-cell.is-missing {
+  background: var(--bg-surface-alt);
+  color: var(--text-muted);      /* 7.47:1 */
+}
+
+/* Every cell wraps its content in exactly one element, which is what keeps
+   the stacked card layout a clean two child flex row. */
+.pick-mark {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.pick-side {
+  font-family: var(--font-display);
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  letter-spacing: var(--track-abbr);
+  text-transform: uppercase;
+  line-height: 1;
+}
+
+/* Points staked. Colour is inherited from the cell state, which is already
+   audited against that state's fill. */
+.pick-points {
+  font-family: var(--font-display);
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+}
+
+.pick-none {
+  font-family: var(--font-display);
+  font-weight: 600;
+  color: var(--text-muted);
+}
+
+
+/* ==========================================================================
+   12  ADMIN: SUB NAV, BUDGETS, JOIN CODE, SLATE TABLES
+   The four commissioner screens. They reuse .card, .panel, .table and the
+   form controls; everything below is what those screens add.
+   ========================================================================== */
+
+/* -- Sub navigation ------------------------------------------------------
+   Repeated inline in all four admin templates. Classic tabs: the active link
+   lays its 2px gold rule over the nav hairline. The hairline is an inset
+   shadow rather than a border, because the strip scrolls sideways and a link
+   overlapping a real border by -1px would trip a 1px vertical scrollbar.
+   ------------------------------------------------------------------------ */
+
+.subnav {
+  display: flex;
+  gap: var(--space-1);
+  margin-bottom: var(--space-6);
+  box-shadow: inset 0 -1px 0 var(--line);
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+}
+
+.subnav-link {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  min-height: var(--tap);
+  padding: var(--space-2) var(--space-3);
+  border-bottom: 2px solid transparent;
+  border-radius: var(--radius-sm) var(--radius-sm) 0 0;
+  font-family: var(--font-display);
+  font-size: var(--fs-sm);
+  font-weight: 500;
+  letter-spacing: .02em;
+  white-space: nowrap;
+  color: var(--text-muted);      /* 6.95:1 on paper */
+  transition: color var(--dur) var(--ease), background-color var(--dur) var(--ease);
+}
+
+.subnav-link:hover {
+  background: var(--bg-surface-alt);
+  color: var(--text);
+  text-decoration: none;
+}
+
+.subnav-link.is-active {
+  border-bottom-color: var(--decor);
+  font-weight: 600;
+  color: var(--accent);          /* 9.54:1 on paper */
+}
+
+/* -- Week switcher, admin form -------------------------------------------
+   Same strip as the results page (Section 11), but each link stacks the week
+   number over its status.
+   ------------------------------------------------------------------------ */
+
+.week-switch-link {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  min-width: 64px;
+  min-height: var(--tap);
+  padding: var(--space-2) var(--space-3);
+  background: var(--bg-surface);
+  border: var(--hairline);
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  transition: background-color var(--dur) var(--ease),
+              border-color var(--dur) var(--ease);
+}
+
+.week-switch-link:hover {
+  border-color: var(--accent);
+  background: var(--accent-tint);
+  text-decoration: none;
+}
+
+.week-switch-num {
+  font-family: var(--font-display);
+  font-size: var(--fs-md);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+}
+
+.week-switch-status {
+  font-family: var(--font-display);
+  font-size: var(--fs-xs);
+  font-weight: 500;
+  letter-spacing: var(--track-eyebrow);
+  text-transform: uppercase;
+  line-height: 1;
+  color: var(--text-muted);      /* 8.04:1 on surface */
+}
+
+.week-switch-link.is-active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--text-invert);     /* 11.03:1 */
+}
+
+.week-switch-link.is-active .week-switch-status {
+  color: var(--decor-soft);      /* 7.49:1 on green */
+}
+
+/* -- Week summary panel --------------------------------------------------- */
+
+.week-summary { margin-bottom: var(--space-4); }
+
+.target-line {
+  font-size: var(--fs-sm);
+  font-variant-numeric: tabular-nums;
+}
+
+/* -- Provider budgets ----------------------------------------------------- */
+
+.budget-intro {
+  margin-bottom: var(--space-4);
+  font-size: var(--fs-sm);
+  color: var(--text-muted);      /* 6.95:1 on paper */
+}
+
+.budget-grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: var(--space-4);
+}
+
+.budget-card { min-width: 0; }
+
+/* Budget spent. The card says so in a flash of its own, this is the edge. */
+.budget-card.is-exhausted { border-color: var(--negative-line); }
+
+.budget-card.is-exhausted .meter-fill { background: var(--negative); }
+
+.budget-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2) var(--space-3);
+}
+
+.budget-name {
+  margin: 0;
+  font-size: var(--fs-md);
+}
+
+.budget-figure {
+  margin: 0;
+  font-family: var(--font-display);
+  font-size: var(--fs-sm);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: .01em;
+}
+
+.budget-facts {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: var(--space-1) var(--space-3);
+  margin: 0;
+  font-size: var(--fs-sm);
+}
+
+.budget-facts dt { color: var(--text-muted); }   /* 7.47:1 on the panel */
+
+.budget-facts dd {
+  margin: 0;
+  font-weight: 500;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+/* -- Usage meter ---------------------------------------------------------
+   Width comes from an inline style, clamped in the template. This is not the
+   picks meter: that one is driven by a --pct custom property from app.js.
+   ------------------------------------------------------------------------ */
+
+.meter {
+  height: 8px;
+  background: var(--bg-surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-pill);
+  overflow: hidden;
+}
+
+.meter-fill {
+  display: block;
+  height: 100%;
+  background: var(--accent);
+}
+
+/* -- Join code ------------------------------------------------------------ */
+
+.join-code {
+  margin: 0;
+  font-family: var(--font-display);
+  font-size: var(--fs-2xl);
+  font-weight: 600;
+  letter-spacing: .16em;
+  line-height: var(--lh-tight);
+  text-transform: uppercase;
+  overflow-wrap: break-word;
+  color: var(--accent);          /* 11.03:1 on surface */
+}
+
+.join-code-actions {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: var(--space-5);
+}
+
+/* Both are stacks of a control and the sentence explaining it, so .inline-form
+   on the rotate form is overridden here. */
+.join-code-actions > form {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-3);
+  margin: 0;
+}
+
+.join-code-set .field {
+  width: 100%;
+  max-width: 34ch;
+  margin-bottom: 0;
+}
+
+/* -- Slate tables --------------------------------------------------------- */
+
+.matchup {
+  display: inline-flex;
+  align-items: baseline;
+  gap: var(--space-2);
+}
+
+.matchup-at {
+  font-size: var(--fs-xs);
+  color: var(--text-muted);      /* 8.04:1 on surface */
+}
+
+.matchup-full {
+  display: block;
+  font-size: var(--fs-xs);
+}
+
+.line-gap {
+  display: block;
+  font-size: var(--fs-xs);
+  font-variant-numeric: tabular-nums;
+  color: var(--text-muted);
+}
+
+/* -- Members -------------------------------------------------------------- */
+
+.member-name { font-weight: 600; }
+
+.member-email {
+  font-size: var(--fs-sm);
+  overflow-wrap: anywhere;
+}
+
+
+/* ==========================================================================
+   13  SORTABLEJS DRAG STATES
    Class names are the SortableJS defaults. Styled in theme so a drag looks
    like the rest of the app rather than a browser default.
    ========================================================================== */
@@ -2154,7 +3246,7 @@ textarea[disabled] {
 
 
 /* ==========================================================================
-   12  UTILITIES
+   14  UTILITIES
    ========================================================================== */
 
 /* Tabular figures. Apply to any score, point total or standings number. */
@@ -2205,6 +3297,11 @@ textarea[disabled] {
 
   .game-teams {
     grid-template-columns: 1fr 1fr;
+  }
+
+  /* Away, the "at", then home. This has to follow .game-teams. */
+  .game-teams-at {
+    grid-template-columns: 1fr auto 1fr;
   }
 
   .team-name { font-size: var(--fs-base); }
@@ -2355,6 +3452,115 @@ textarea[disabled] {
 
   .lb-leader td { font-weight: 600; }
 
+  /* Rows are rows again, not cards, so your own row takes the same inset
+     rule .lb-leader uses. The weekly winner still outranks it. */
+  .table tbody tr.is-you,
+  .table tbody tr.lb-leader.is-you {
+    border: 0;
+    box-shadow: none;
+  }
+
+  .table tbody tr.is-you td:first-child,
+  .table tbody tr.is-you th:first-child {
+    box-shadow: inset 3px 0 0 var(--accent);
+  }
+
+  .table tbody tr.lb-leader.is-you td:first-child {
+    box-shadow: inset 3px 0 0 var(--decor);
+  }
+
+  /* An actions cell stays a real table cell. A td set to display: flex is
+     pulled out of the table layout and paints outside its own row, so the
+     forms inside are what flex and wrap. */
+  .table td.cell-actions {
+    display: table-cell;
+    min-width: 240px;
+  }
+
+  .cell-actions > form {
+    display: inline-flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-2);
+    margin: 0 var(--space-2) var(--space-2) 0;
+    vertical-align: middle;
+  }
+
+  .cell-note {
+    display: inline-block;
+    flex: none;
+    vertical-align: middle;
+  }
+
+  /* A mouse can hit 36px comfortably, the same allowance .btn-sm takes. */
+  .input-sm,
+  .select-sm,
+  .subnav-link,
+  .week-chip,
+  .week-switch-link { min-height: var(--tap-sm); }
+
+  .stat-row,
+  .stat-grid { gap: var(--space-4); }
+
+  .budget-grid { grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); }
+
+  .join-code-actions { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+
+  /* -- The results picks grid --------------------------------------------
+     One column per player, so it is allowed to outgrow the page. .table-wrap
+     already carries overflow-x: auto, which is what keeps the sideways
+     scroll inside the panel and off the body.
+     --------------------------------------------------------------------- */
+
+  .picks-grid {
+    width: auto;
+    min-width: 100%;
+  }
+
+  /* Colour coded cells read better without a stripe underneath them, and it
+     keeps the sticky first column to one opaque fill. */
+  .picks-grid tbody tr:nth-child(even) { background: none; }
+
+  .picks-grid .pick-game {
+    display: table-cell;
+    min-width: 180px;
+    margin: 0;
+    padding: var(--space-3) var(--space-4);
+    border-bottom: var(--hairline);
+    vertical-align: middle;
+  }
+
+  .picks-grid .pick-game-name { font-size: var(--fs-sm); }
+
+  /* The frozen first column. The right hand hairline is a box shadow, not a
+     border: with border-collapse the table paints collapsed borders and they
+     do not travel with a sticky cell. */
+  .picks-grid .is-sticky {
+    position: sticky;
+    left: 0;
+    z-index: 2;
+    background: var(--bg-surface);
+    box-shadow: 1px 0 0 var(--line);
+  }
+
+  /* The head corner has to sit above the body cells it scrolls over. */
+  .picks-grid thead .is-sticky {
+    z-index: 3;
+    background: var(--bg-surface-alt);
+  }
+
+  .picks-grid .pick-player {
+    min-width: 120px;
+    text-align: center;
+    vertical-align: bottom;
+  }
+
+  .picks-grid .pick-cell {
+    padding-inline: var(--space-3);
+    text-align: center;
+    white-space: nowrap;
+  }
+
   /* Denser meta strip once there is room for it. */
   .game-meta { gap: var(--space-2) var(--space-4); }
 
@@ -2407,7 +3613,7 @@ textarea[disabled] {
 
 
 /* ==========================================================================
-   13  PRINT
+   15  PRINT
    A standings page should print cleanly on a club noticeboard.
    ========================================================================== */
 
@@ -2427,6 +3633,11 @@ textarea[disabled] {
   .toast-stack,
   .summary-bar,
   .save-state,
+  .picks-bar,
+  .picks-status,
+  .subnav,
+  .week-switch,
+  .cell-actions,
   .btn { display: none !important; }
 
   .card,
@@ -2441,4 +3652,10 @@ textarea[disabled] {
   .table tr { display: table-row; }
   .table th, .table td { display: table-cell; }
   .table td::before { content: none; }
+
+  /* On paper the whole grid is visible at once, so nothing has to freeze and
+     the phone only summary would be a duplicate of the column heads. */
+  .picks-grid .is-sticky { position: static; box-shadow: none; }
+  .picks-grid .pick-game { display: table-cell; }
+  .pick-summary { display: none !important; }
 }
