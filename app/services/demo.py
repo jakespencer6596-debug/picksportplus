@@ -139,9 +139,7 @@ def _ensure_players(db: Session, pool: Pool, out: list[str]) -> list[User]:
             db.add(user)
             db.flush()
         member = db.scalar(
-            select(PoolMember).where(
-                PoolMember.pool_id == pool.id, PoolMember.user_id == user.id
-            )
+            select(PoolMember).where(PoolMember.pool_id == pool.id, PoolMember.user_id == user.id)
         )
         if member is None:
             db.add(PoolMember(pool_id=pool.id, user_id=user.id, role_in_pool="member"))
@@ -210,14 +208,14 @@ def _load_real_games(db: Session, week: Week, out: list[str]) -> list[Game]:
     out.append(
         f"Loaded {len(rows)} real games from the {DEMO_YEAR} week {DEMO_WEEK} recordings, "
         f"{with_spread} with a real closing line "
-        + "(" + ", ".join(f"{k} {v}" for k, v in sorted(sources.items())) + ")."
+        + "("
+        + ", ".join(f"{k} {v}" for k, v in sorted(sources.items()))
+        + ")."
     )
     return rows
 
 
-def _generate_picks(
-    db: Session, pool: Pool, week: Week, users: list[User], out: list[str]
-) -> None:
+def _generate_picks(db: Session, pool: Pool, week: Week, users: list[User], out: list[str]) -> None:
     """Deterministic picks. Each player has a skill level and stakes more on closer calls."""
     slate = list(
         db.scalars(
@@ -228,7 +226,7 @@ def _generate_picks(
     )
     n = len(slate)
 
-    for user, (_name, local, skill) in zip(users, DEMO_PLAYERS):
+    for user, (_name, local, skill) in zip(users, DEMO_PLAYERS, strict=False):
         rng = random.Random(f"{local}-{DEMO_YEAR}-{DEMO_WEEK}")
 
         # Pick a side per game, weighted towards the team that actually won.

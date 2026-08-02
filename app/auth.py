@@ -133,9 +133,7 @@ def get_active_pool(
     pid = request.session.get(SESSION_POOL_KEY)
     if pid:
         member = db.scalar(
-            select(PoolMember).where(
-                PoolMember.pool_id == pid, PoolMember.user_id == user.id
-            )
+            select(PoolMember).where(PoolMember.pool_id == pid, PoolMember.user_id == user.id)
         )
         if member is not None:
             pool = db.get(Pool, pid)

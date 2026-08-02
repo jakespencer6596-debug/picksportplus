@@ -142,8 +142,7 @@ def weekly_leaderboard(
 
     members = _members(db, pool)
     entries = {
-        e.user_id: e
-        for e in db.scalars(select(WeekEntry).where(WeekEntry.week_id == week.id))
+        e.user_id: e for e in db.scalars(select(WeekEntry).where(WeekEntry.week_id == week.id))
     }
 
     rows: list[WeeklyRow] = []

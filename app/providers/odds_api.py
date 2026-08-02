@@ -138,15 +138,15 @@ def _parse_dt(raw: Any) -> dt.datetime | None:
     except ValueError:
         return None
     if parsed.tzinfo is None:
-        parsed = parsed.replace(tzinfo=dt.timezone.utc)
-    return parsed.astimezone(dt.timezone.utc)
+        parsed = parsed.replace(tzinfo=dt.UTC)
+    return parsed.astimezone(dt.UTC)
 
 
 def _as_float(raw: Any) -> float | None:
     """Numeric coercion that keeps a pick em at 0.0 and rejects booleans."""
     if raw is None or isinstance(raw, bool):
         return None
-    if isinstance(raw, (int, float)):
+    if isinstance(raw, int | float):
         return float(raw)
     if isinstance(raw, str):
         try:

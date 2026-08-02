@@ -28,7 +28,7 @@ from app.providers.teams import (
     same_team,
 )
 
-UTC = dt.timezone.utc
+UTC = dt.UTC
 EASTERN = dt.timezone(dt.timedelta(hours=-5))
 
 KEY_RE = re.compile(r"^[a-z0-9]+:[a-z0-9]+(?:-[a-z0-9]+)*$")
@@ -413,7 +413,7 @@ TRAP_GROUPS = [
 @pytest.mark.parametrize("group", TRAP_GROUPS, ids=lambda group: "-vs-".join(group))
 def test_trap_groups_resolve_to_different_keys(group):
     keys = [canonical_key(name, "ncaaf") for name in group]
-    assert len(set(keys)) == len(group), dict(zip(group, keys))
+    assert len(set(keys)) == len(group), dict(zip(group, keys, strict=False))
     for left in range(len(group)):
         for right in range(left + 1, len(group)):
             assert same_team(keys[left], keys[right]) is False
@@ -480,7 +480,7 @@ SAME_TEAM_GROUPS = [
 @pytest.mark.parametrize("group", SAME_TEAM_GROUPS, ids=lambda group: group[0])
 def test_provider_spellings_agree(group):
     keys = [canonical_key(name, "ncaaf") for name in group]
-    assert len(set(keys)) == 1, dict(zip(group, keys))
+    assert len(set(keys)) == 1, dict(zip(group, keys, strict=False))
     for other in keys[1:]:
         assert same_team(keys[0], other) is True
 

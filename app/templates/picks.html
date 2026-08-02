@@ -1,0 +1,320 @@
+{% extends "base.html" %}
+{% import "components/icons.html" as ic %}
+
+{#
+  This Week. The core screen (Spec Section 8).
+
+  Five states, all handled below:
+    1. no week and no next week   season has not started
+    2. no week, next week drafted the slate opens soon
+    3. week open, not locked      the full ranking UI
+    4. locked                     read only, saved picks and results
+    5. week with an empty slate   the slate is still being built
+
+  The slate size is never hard coded. Every count comes from n.
+#}
+
+{# ------------------------------------------------------------------ macros #}
+
+{% macro league_badge(game) -%}
+<span class="badge badge-{{ game.league }}">{{ "NFL" if game.league == "nfl" else "College" }}</span>
+{%- endmacro %}
+
+{#
+  One side of a matchup. Away is always rendered first, then "at", then home.
+  locked renders the same control disabled, so app.js leaves it alone.
+#}
+{% macro team_button(game, side, picked, locked) -%}
+{%- set abbr = game.away_abbr if side == "away" else game.home_abbr -%}
+{%- set name = game.away_team if side == "away" else game.home_team -%}
+{%- set rec = game.away_record if side == "away" else game.home_record -%}
+{%- set score = game.away_score if side == "away" else game.home_score -%}
+{%- set won = game.is_final and game.winner == side -%}
+{%- set lost = game.is_final and game.winner in ("home", "away") and game.winner != side -%}
+<button type="button"
+        class="team-btn{{ ' is-picked' if picked }}{{ ' is-winner' if won }}{{ ' is-loser' if lost }}"
+        data-side="{{ side }}"
+        aria-pressed="{{ 'true' if picked else 'false' }}"
+        {%- if locked %} disabled{% endif %}>
+  <span class="team-abbr">{{ abbr }}</span>
+  <span class="team-name">{{ name }}</span>
+  {%- if rec %}
+  <span class="team-record num">{{ rec | record }}</span>
+  {%- endif %}
+  {%- if locked and score is not none %}
+  <span class="team-score num">{{ score }}</span>
+  {%- endif %}
+  <span class="team-check">{{ ic.icon("check", 18) }}</span>
+</button>
+{%- endmacro %}
+
+{% macro matchup(game, pick, locked) -%}
+<div class="game-teams game-teams-at">
+  {{ team_button(game, "away", pick and pick.picked_team == "away", locked) }}
+  <span class="game-at" aria-hidden="true">at</span>
+  {{ team_button(game, "home", pick and pick.picked_team == "home", locked) }}
+</div>
+{%- endmacro %}
+
+{# --------------------------------------------------------------- page head #}
+
+{% block title %}{% if week %}{{ week.label }}{% else %}This week{% endif %}. {{ APP_NAME }}{% endblock %}
+{% block body_class %}page-picks{% endblock %}
+
+{# ------------------------------------------------------------------ lockbar #}
+
+{% block subbar %}
+{% if week and games %}
+  {% if locked %}
+  <div class="lockbar lockbar-strong">
+    <div class="lockbar-inner row">
+      {{ ic.icon("lock", 16) }}
+      <span>Picks are locked for {{ week.label }}.</span>
+      <a class="lockbar-link" href="/results">See every player's picks</a>
+    </div>
+  </div>
+  {% else %}
+  {% set first_kick = games | map(attribute="start_time") | min %}
+  <div class="lockbar">
+    <div class="lockbar-inner row">
+      {{ ic.icon("clock", 16) }}
+      {% if week.lock_at %}
+        <span>Picks lock in
+          <strong data-countdown-to="{{ (week.lock_at | localtime(tz)).isoformat() }}">{{ week.lock_at | countdown }}</strong>.
+        </span>
+      {% else %}
+        <span>Picks lock at the first kickoff.</span>
+      {% endif %}
+      <span>First kickoff {{ first_kick | kickoff(tz) }}</span>
+    </div>
+  </div>
+  {% endif %}
+{% endif %}
+{% endblock %}
+
+{# ------------------------------------------------------------------ content #}
+
+{% block content %}
+{% set nfl_count = games | selectattr("league", "equalto", "nfl") | list | length %}
+{% set ncaaf_count = n - nfl_count %}
+
+<div class="page-head">
+  <div>
+    <p class="eyebrow">{{ pool.name }}</p>
+    <h1 class="page-title">
+      {%- if week %}{{ week.label }}{% elif next_week %}{{ next_week.label }}{% else %}This week{% endif -%}
+    </h1>
+  </div>
+
+  {% if week and games %}
+  <div class="row">
+    <span class="pill">{{ n }} {{ n | pluralize("game") }}</span>
+    {% if nfl_count and ncaaf_count %}
+      <span class="pill">{{ nfl_count }} NFL, {{ ncaaf_count }} college</span>
+    {% elif nfl_count %}
+      <span class="pill">All NFL</span>
+    {% else %}
+      <span class="pill">All college</span>
+    {% endif %}
+    {% if locked %}<span class="pill">Locked</span>{% endif %}
+  </div>
+  {% endif %}
+</div>
+
+
+{% if not week %}
+{# ----------------------------------------------- 1 and 2: nothing open yet #}
+<section class="section">
+  <div class="empty-state">
+    {{ ic.icon("calendar", 28) }}
+    {% if next_week %}
+      <h2 class="empty-state-title">{{ next_week.label }} is next up.</h2>
+      <p>
+        The {{ next_week.label }} slate opens soon. Check back to make your picks.
+        You will get the closest games of the week, NFL and college in one list.
+      </p>
+    {% else %}
+      <h2 class="empty-state-title">The season has not started yet.</h2>
+      <p>
+        The slate opens automatically once the week is set, so there is nothing to do
+        right now. Check back and the games will be waiting.
+      </p>
+    {% endif %}
+    <a class="btn btn-secondary" href="/standings">View standings</a>
+  </div>
+</section>
+
+
+{% elif not games %}
+{# ------------------------------------------- 5: the week has an empty slate #}
+<section class="section">
+  <div class="empty-state">
+    {{ ic.icon("list", 28) }}
+    <h2 class="empty-state-title">The {{ week.label }} slate is being built.</h2>
+    <p>
+      We are picking the closest games of the week. They go up as soon as the lines
+      settle, and you will have until the first kickoff to rank them.
+    </p>
+  </div>
+</section>
+
+
+{% elif locked %}
+{# --------------------------------------------------------- 4: read only week #}
+<section class="section">
+  {% if not submitted_count %}
+    <div class="flash flash-error" role="status">
+      {{ ic.icon("alert", 18) }}
+      <span>
+        You did not submit picks for {{ week.label }}, so you score 0 points for the week.
+        The slate below is what everyone else played.
+      </span>
+    </div>
+  {% endif %}
+
+  <h2 class="section-title">
+    {%- if has_full_entry %}Your picks, most confident first{% else %}The {{ week.label }} slate{% endif -%}
+  </h2>
+
+  <ol class="stack"
+      aria-label="{{ 'Your picks, most confident first' if has_full_entry else week.label ~ ' slate' }}">
+    {% for game in games %}
+      {% set pick = picks_by_game.get(game.id) %}
+      <li class="game-row is-complete"
+          data-game-id="{{ game.id }}"
+          {%- if pick %} data-confidence="{{ pick.confidence }}"{% endif %}>
+        {{ matchup(game, pick, true) }}
+        <div class="game-meta">
+          {{ league_badge(game) }}
+          {% if game.is_void %}
+            <span class="badge badge-void">Void</span>
+          {% elif game.is_final and game.winner == "tie" %}
+            <span class="badge badge-void">Tie</span>
+          {% elif game.is_final %}
+            <span class="badge badge-final">Final</span>
+          {% endif %}
+          <span class="game-line">{{ game.line_text }}</span>
+          <span class="game-kick">{{ game.start_time | kickoff(tz) }}</span>
+          {% if pick %}
+            <span class="conf-chip num"
+                  aria-label="{{ pick.confidence }} {{ pick.confidence | pluralize('point') }} staked">{{ pick.confidence }}</span>
+          {% endif %}
+        </div>
+      </li>
+    {% endfor %}
+  </ol>
+
+  <p class="muted">
+    {% if has_full_entry %}
+      You staked {{ n }} points on the game at the top and 1 on the game at the bottom.
+      Correct picks earn the points staked on them.
+    {% else %}
+      Points are staked from {{ n }} at the top of a ranking down to 1 at the bottom.
+    {% endif %}
+  </p>
+</section>
+
+
+{% else %}
+{# ------------------------------------------------ 3: the week is open to pick #}
+<section class="section">
+  <div class="panel">
+    <p class="eyebrow">How this week works</p>
+    <p>
+      Tap a team to take the winner, then rank all {{ n }} games. Drag a row by its grip,
+      or use the up and down buttons. The game at the top of the list stakes {{ n }} points
+      and the game at the bottom stakes 1. A correct pick earns the points you staked on it.
+    </p>
+    <p class="form-hint">
+      Keyboard: focus a game, then hold alt and press the up or down arrow to move it.
+    </p>
+  </div>
+
+  <form method="post" action="/picks" class="stack">
+    <div class="spread picks-bar" id="save">
+      <div class="picks-progress">
+        <p class="picks-summary" data-pick-summary>
+          {{ submitted_count }} of {{ n }} {{ n | pluralize("winner") }} chosen
+        </p>
+        <div class="picks-meter"
+             data-pick-meter
+             role="progressbar"
+             aria-label="Winners chosen"
+             aria-valuemin="0"
+             aria-valuenow="{{ submitted_count }}"
+             aria-valuemax="{{ n }}"
+             style="--pct: {{ submitted_count * 100 // n }}%">
+          <span class="picks-meter-fill"></span>
+        </div>
+      </div>
+
+      <div class="row picks-actions">
+        <span class="save-state{{ ' is-saved' if has_full_entry }}" data-save-state>
+          {{- "Saved" if has_full_entry else "Not saved yet" -}}
+        </span>
+        <button class="btn btn-primary"
+                type="submit"
+                data-save-btn
+                hx-post="/picks"
+                hx-target="[data-save-target]"
+                hx-swap="innerHTML"
+                hx-include="closest form"
+                hx-on::before-swap="if (event.detail.xhr.status >= 400) { event.detail.shouldSwap = true; event.detail.isError = false; }"
+                hx-on::after-request="if (event.detail.xhr.status >= 400) { var s = document.querySelector('[data-save-state]'); if (s) { s.textContent = 'Not saved'; s.className = 'save-state is-error'; } }">
+          {{ ic.icon("check", 18) }}<span>Save picks</span>
+        </button>
+      </div>
+    </div>
+
+    <div class="picks-status" data-save-target aria-live="polite"></div>
+
+    <ol class="game-list" data-sortable aria-label="{{ week.label }} slate, most confident first">
+      {% for game in games %}
+        {% set pick = picks_by_game.get(game.id) %}
+        {% set points = n - loop.index0 %}
+        <li class="game-row"
+            data-game-id="{{ game.id }}"
+            data-confidence="{{ points }}"
+            tabindex="0"
+            aria-label="{{ game.away_team }} at {{ game.home_team }}">
+          <span class="game-grip" role="img" aria-label="Drag to rank" title="Drag to rank">
+            {{ ic.icon("grip", 20) }}
+          </span>
+
+          {{ matchup(game, pick, false) }}
+
+          <div class="game-meta">
+            {{ league_badge(game) }}
+            <span class="game-line">{{ game.line_text }}</span>
+            <span class="game-kick">{{ game.start_time | kickoff(tz) }}</span>
+            <span class="conf-chip num"
+                  aria-label="{{ points }} {{ points | pluralize('point') }}">{{ points }}</span>
+          </div>
+
+          <div class="rank-controls">
+            <button type="button" class="rank-btn" data-dir="up"
+                    aria-label="Move {{ game.matchup }} up, stake more points"
+                    {%- if loop.first %} disabled{% endif %}>{{ ic.icon("up", 18) }}</button>
+            <button type="button" class="rank-btn" data-dir="down"
+                    aria-label="Move {{ game.matchup }} down, stake fewer points"
+                    {%- if loop.last %} disabled{% endif %}>{{ ic.icon("down", 18) }}</button>
+          </div>
+
+          <input type="hidden" data-pick name="winner-{{ game.id }}"
+                 value="{{ pick.picked_team if pick else '' }}">
+          <input type="hidden" data-conf name="confidence-{{ game.id }}" value="{{ points }}">
+        </li>
+      {% endfor %}
+    </ol>
+
+    <div class="spread">
+      <p class="muted">
+        Editable until the lock. After that the week goes read only and every player's
+        picks are public on the Results page.
+      </p>
+      <a class="btn btn-secondary" href="#save">Back to save</a>
+    </div>
+  </form>
+</section>
+{% endif %}
+{% endblock %}

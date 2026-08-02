@@ -88,15 +88,15 @@ def _parse_dt(raw: Any) -> dt.datetime | None:
     except ValueError:
         return None
     if parsed.tzinfo is None:
-        parsed = parsed.replace(tzinfo=dt.timezone.utc)
-    return parsed.astimezone(dt.timezone.utc)
+        parsed = parsed.replace(tzinfo=dt.UTC)
+    return parsed.astimezone(dt.UTC)
 
 
 def _number(raw: Any) -> float | None:
     """A float from a number or a numeric string. Booleans are not numbers here."""
     if raw is None or isinstance(raw, bool):
         return None
-    if isinstance(raw, (int, float)):
+    if isinstance(raw, int | float):
         return float(raw)
     if isinstance(raw, str):
         try:

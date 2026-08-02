@@ -79,6 +79,13 @@ class Settings(BaseSettings):
             raise ValueError(f"League targets must be between 0 and {Settings.MAX_SLATE}")
         return v
 
+    @field_validator("spread_cache_minutes")
+    @classmethod
+    def _floor_spread_cache(cls, v: int) -> int:
+        # A zero here would disable caching on the metered providers, so every build would
+        # respend credits. Nobody ever wants that, and it reads like "no limit" by mistake.
+        return max(1, v)
+
     @field_validator("database_url")
     @classmethod
     def _normalise_db_url(cls, v: str) -> str:

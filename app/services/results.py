@@ -60,7 +60,7 @@ class ScoreReport:
 def _aware(value: dt.datetime | None) -> dt.datetime | None:
     if value is None:
         return None
-    return value if value.tzinfo else value.replace(tzinfo=dt.timezone.utc)
+    return value if value.tzinfo else value.replace(tzinfo=dt.UTC)
 
 
 # Fetching finals ------------------------------------------------------------
@@ -137,19 +137,13 @@ def score_week_for_pool(db: Session, pool: Pool, week: Week) -> ScoreReport:
     """Recompute every week_entry for the week. Safe to run repeatedly."""
     report = ScoreReport(week_number=week.week_number)
 
-    slate = list(
-        db.scalars(
-            select(Game).where(Game.week_id == week.id, Game.in_slate.is_(True))
-        )
+    slate = list(db.scalars(select(Game).where(Game.week_id == week.id, Game.in_slate.is_(True))))
+    outcomes = [GameOutcome(game_id=g.id, status=g.status, winner=g.winner) for g in slate]
+    report.scored_games = sum(
+        1 for o in outcomes if o.status == "final" and o.winner in ("home", "away")
     )
-    outcomes = [
-        GameOutcome(game_id=g.id, status=g.status, winner=g.winner) for g in slate
-    ]
-    report.scored_games = sum(1 for o in outcomes if o.status == "final" and o.winner in ("home", "away"))
 
-    members = list(
-        db.scalars(select(PoolMember).where(PoolMember.pool_id == pool.id))
-    )
+    members = list(db.scalars(select(PoolMember).where(PoolMember.pool_id == pool.id)))
     picks_by_user: dict[int, list[Pick]] = {}
     for pick in db.scalars(select(Pick).where(Pick.week_id == week.id)):
         picks_by_user.setdefault(pick.user_id, []).append(pick)
@@ -172,9 +166,7 @@ def score_week_for_pool(db: Session, pool: Pool, week: Week) -> ScoreReport:
 
         entry = existing.get(member.user_id)
         if entry is None:
-            entry = WeekEntry(
-                user_id=member.user_id, pool_id=pool.id, week_id=week.id
-            )
+            entry = WeekEntry(user_id=member.user_id, pool_id=pool.id, week_id=week.id)
             db.add(entry)
         entry.points = result.points
         entry.correct = result.correct
@@ -200,9 +192,7 @@ def score_week_for_pool(db: Session, pool: Pool, week: Week) -> ScoreReport:
 
     if winners:
         names = db.scalars(
-            select(WeekEntry).where(
-                WeekEntry.week_id == week.id, WeekEntry.user_id.in_(winners)
-            )
+            select(WeekEntry).where(WeekEntry.week_id == week.id, WeekEntry.user_id.in_(winners))
         )
         report.winners = sorted(e.user.display_name for e in names)
 

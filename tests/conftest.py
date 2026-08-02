@@ -18,6 +18,7 @@ from collections.abc import Callable
 from typing import Any
 
 import pytest
+from passlib.context import CryptContext
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
 from sqlalchemy.pool import StaticPool
@@ -40,6 +41,22 @@ def force_offline_mode():
         yield
     finally:
         settings.offline_mode = previous
+
+
+@pytest.fixture(autouse=True, scope="session")
+def fast_password_hashing():
+    """bcrypt at production cost makes the integration suite crawl.
+
+    The hashing path itself is still exercised, just with the work factor turned down.
+    """
+    from app import auth
+
+    previous = auth.pwd_context
+    auth.pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto", bcrypt__rounds=4)
+    try:
+        yield
+    finally:
+        auth.pwd_context = previous
 
 
 @pytest.fixture(scope="session")

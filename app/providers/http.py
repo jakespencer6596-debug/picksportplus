@@ -53,7 +53,7 @@ class BudgetExceeded(ProviderError):
 
 
 def month_key(now: dt.datetime | None = None) -> str:
-    now = now or dt.datetime.now(dt.timezone.utc)
+    now = now or dt.datetime.now(dt.UTC)
     return f"{now.year:04d}-{now.month:02d}"
 
 
@@ -174,7 +174,7 @@ def cache_get(db: Session, key: str) -> tuple[Any, dt.datetime] | None:
         return None
     fetched = row.fetched_at
     if fetched.tzinfo is None:
-        fetched = fetched.replace(tzinfo=dt.timezone.utc)
+        fetched = fetched.replace(tzinfo=dt.UTC)
     return row.payload, fetched
 
 
@@ -189,7 +189,7 @@ def cache_put(db: Session, key: str, payload: Any) -> None:
 
 
 def _is_fresh(fetched_at: dt.datetime, ttl_minutes: int) -> bool:
-    age = dt.datetime.now(dt.timezone.utc) - fetched_at
+    age = dt.datetime.now(dt.UTC) - fetched_at
     return age.total_seconds() < ttl_minutes * 60
 
 

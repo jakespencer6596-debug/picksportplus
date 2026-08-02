@@ -58,7 +58,9 @@ class IngestReport:
             f"{self.with_spread} with a spread, {self.selected} on the slate"
         ]
         if self.per_league:
-            mix = ", ".join(f"{LEAGUE_LABELS.get(k, k)} {v}" for k, v in sorted(self.per_league.items()))
+            mix = ", ".join(
+                f"{LEAGUE_LABELS.get(k, k)} {v}" for k, v in sorted(self.per_league.items())
+            )
             parts.append(f"league mix: {mix}")
         if self.sources:
             breakdown = ", ".join(f"{k} {v}" for k, v in sorted(self.sources.items()))
@@ -245,9 +247,7 @@ def upsert_games(
     spreads: dict[str, tuple[float, str]],
 ) -> list[Game]:
     """Idempotent. Matches on (week_id, espn_event_id) and updates in place."""
-    existing = {
-        g.espn_event_id: g for g in db.scalars(select(Game).where(Game.week_id == week.id))
-    }
+    existing = {g.espn_event_id: g for g in db.scalars(select(Game).where(Game.week_id == week.id))}
     rows: list[Game] = []
 
     for game in games:
@@ -298,7 +298,7 @@ def apply_slate(db: Session, pool: Pool, week: Week, *, now: dt.datetime | None 
     Returns the SlateResult so the caller can surface the shortfall notes.
     """
     rows = list(db.scalars(select(Game).where(Game.week_id == week.id)))
-    now = now or dt.datetime.now(dt.timezone.utc)
+    now = now or dt.datetime.now(dt.UTC)
 
     # Once a week is in the past, every game has kicked off, so filtering on start time
     # would empty the slate. Rebuilding a historical week is a legitimate operation.
@@ -358,9 +358,7 @@ def recompute_lock(db: Session, week: Week) -> None:
 def reseat_ranks(db: Session, week: Week) -> None:
     """Renumber slate_rank 1..N by closeness after a commissioner edit."""
     db.flush()  # autoflush is off, so pending in_slate changes must be written first
-    rows = list(
-        db.scalars(select(Game).where(Game.week_id == week.id, Game.in_slate.is_(True)))
-    )
+    rows = list(db.scalars(select(Game).where(Game.week_id == week.id, Game.in_slate.is_(True))))
     rows.sort(
         key=lambda g: (
             abs(g.spread_home) if g.spread_home is not None else float("inf"),
@@ -393,9 +391,7 @@ def add_to_slate(db: Session, week: Week, game_id: int) -> Game:
             "You can still void a game."
         )
     if game.spread_home is None:
-        raise ValueError(
-            "That game has no resolved spread. Set a line by hand before adding it."
-        )
+        raise ValueError("That game has no resolved spread. Set a line by hand before adding it.")
     game.in_slate = True
     reseat_ranks(db, week)
     recompute_lock(db, week)
@@ -416,7 +412,9 @@ def remove_from_slate(db: Session, week: Week, game_id: int) -> Game:
     return game
 
 
-def swap_slate_game(db: Session, week: Week, out_game_id: int, in_game_id: int) -> tuple[Game, Game]:
+def swap_slate_game(
+    db: Session, week: Week, out_game_id: int, in_game_id: int
+) -> tuple[Game, Game]:
     """Take one game off the slate and put another on, keeping the count the same."""
     if not can_resize_slate(db, week):
         raise SlateLocked(
@@ -487,8 +485,8 @@ def _game_in_week(db: Session, week: Week, game_id: int) -> Game:
 
 def _aware(value: dt.datetime) -> dt.datetime:
     if value.tzinfo is None:
-        return value.replace(tzinfo=dt.timezone.utc)
-    return value.astimezone(dt.timezone.utc)
+        return value.replace(tzinfo=dt.UTC)
+    return value.astimezone(dt.UTC)
 
 
 # The build ------------------------------------------------------------------
@@ -595,7 +593,7 @@ def sync_week(
     Only builds when the week is close enough to matter, so an idle hourly cron in July
     does no work and spends nothing.
     """
-    now = now or dt.datetime.now(dt.timezone.utc)
+    now = now or dt.datetime.now(dt.UTC)
     week_number = detect_week(db, pool, now=now)
     if week_number is None:
         log.info("no current week detected for %s", pool.name)

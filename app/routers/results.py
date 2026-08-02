@@ -44,9 +44,7 @@ def _week_or_404(db: Session, pool: Pool, week_number: int | None) -> Week | Non
             raise HTTPException(status.HTTP_404_NOT_FOUND, f"Week {week_number} does not exist.")
         return week
     return db.scalar(
-        query.where(Week.status.in_(("open", "locked", "scored"))).order_by(
-            Week.week_number.desc()
-        )
+        query.where(Week.status.in_(("open", "locked", "scored"))).order_by(Week.week_number.desc())
     )
 
 

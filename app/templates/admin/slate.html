@@ -1,0 +1,433 @@
+{% extends "base.html" %}
+{% import "components/icons.html" as ic %}
+{% block title %}Slate editor. {{ APP_NAME }}{% endblock %}
+
+{% block content %}
+{% macro game_cells(game) %}
+  {% set source_labels = {
+    "espn": "ESPN",
+    "espn_core": "ESPN core",
+    "odds_api": "The Odds API",
+    "cfbd": "CollegeFootballData",
+    "manual": "Set by hand"
+  } %}
+  {% set status_labels = {
+    "scheduled": "Scheduled",
+    "in_progress": "Live",
+    "final": "Final",
+    "void": "Void"
+  } %}
+  {% set status_classes = {
+    "in_progress": " badge-live",
+    "final": " badge-final",
+    "void": " badge-void"
+  } %}
+  <td data-label="Matchup">
+    <span class="matchup">
+      <span class="team-abbr">{{ game.away_abbr }}</span>
+      <span class="matchup-at">at</span>
+      <span class="team-abbr">{{ game.home_abbr }}</span>
+    </span>
+    <span class="matchup-full muted">{{ game.away_team }} at {{ game.home_team }}</span>
+  </td>
+  <td data-label="League">
+    <span class="badge badge-{{ game.league }}">{{ league_labels.get(game.league, game.league) }}</span>
+  </td>
+  <td data-label="Line">
+    <span class="game-line">{{ game.line_text }}</span>
+    {% if game.closeness is not none %}
+      <span class="line-gap num">{{ "%.1f" | format(game.closeness) }} point gap</span>
+    {% endif %}
+  </td>
+  <td data-label="Spread source">
+    {{ source_labels.get(game.spread_source, "No source yet") }}
+  </td>
+  <td data-label="Kickoff">
+    <span class="num">{{ game.start_time | kickoff(tz) }}</span>
+    <span class="muted">{{ game.start_time | shortdate(tz) }}</span>
+  </td>
+  <td data-label="Status">
+    <span class="badge{{ status_classes.get(game.status, '') }}">
+      {{ status_labels.get(game.status, game.status) }}
+    </span>
+    {% if game.home_score is not none and game.away_score is not none %}
+      <span class="game-score num">
+        {{ game.away_abbr }} {{ game.away_score }}, {{ game.home_abbr }} {{ game.home_score }}
+      </span>
+    {% endif %}
+  </td>
+{% endmacro %}
+
+{% macro spread_form(week_id, game) %}
+  <form method="post" action="/admin/slate/game" class="action-form">
+    <input type="hidden" name="week_id" value="{{ week_id }}">
+    <input type="hidden" name="game_id" value="{{ game.id }}">
+    <input type="hidden" name="action" value="spread">
+    <label class="visually-hidden" for="spread-{{ game.id }}">
+      Home line for {{ game.away_abbr }} at {{ game.home_abbr }}
+    </label>
+    <input class="input input-sm num" type="text" inputmode="decimal" id="spread-{{ game.id }}"
+           name="spread" value="{% if game.spread_home is not none %}{{ '%g' | format(game.spread_home) }}{% endif %}"
+           placeholder="-2.5" autocomplete="off" spellcheck="false">
+    <button class="btn btn-secondary btn-sm" type="submit">
+      Set line<span class="visually-hidden"> for {{ game.away_abbr }} at {{ game.home_abbr }}</span>
+    </button>
+  </form>
+{% endmacro %}
+
+<div class="page-head">
+  <div>
+    <p class="eyebrow">Commissioner</p>
+    <h1 class="page-title">Slate editor</h1>
+  </div>
+  {% if week %}
+    <p class="muted">
+      {{ week.label }}, {{ week.season_year }} season
+      <span class="badge badge-{{ week.status }}">{{ week.status }}</span>
+    </p>
+  {% endif %}
+</div>
+
+<nav class="subnav" aria-label="Commissioner tools">
+  <a class="subnav-link" href="/admin">Overview</a>
+  <a class="subnav-link is-active" href="/admin/slate" aria-current="page">Slate</a>
+  <a class="subnav-link" href="/admin/members">Members</a>
+  <a class="subnav-link" href="/admin/settings">Settings</a>
+</nav>
+
+{% if warnings %}
+  <section class="section" aria-labelledby="warnings-title">
+    <h2 class="section-title" id="warnings-title">Feed warnings</h2>
+    {% for warning in warnings %}
+      <div class="flash flash-error">
+        {{ ic.icon("alert", 18) }}<span>{{ warning }}</span>
+      </div>
+    {% endfor %}
+  </section>
+{% endif %}
+
+<section class="section" aria-labelledby="build-title">
+  <h2 class="section-title" id="build-title">Weeks</h2>
+
+  {% if weeks %}
+    <nav class="week-switch" aria-label="Weeks in this season">
+      {% for row in weeks %}
+        <a class="week-switch-link{% if week and row.id == week.id %} is-active{% endif %}"
+           href="/admin/slate?week={{ row.week_number }}"
+           {% if week and row.id == week.id %}aria-current="page"{% endif %}>
+          <span class="week-switch-num num">{{ row.week_number }}</span>
+          <span class="week-switch-status">{{ row.status }}</span>
+        </a>
+      {% endfor %}
+    </nav>
+  {% else %}
+    <p class="muted">Nothing is built for the {{ pool.season_year }} season yet.</p>
+  {% endif %}
+
+  <div class="card">
+    <div class="card-head">
+      <h3>Build a slate</h3>
+    </div>
+    <div class="card-body">
+      <form method="post" action="/admin/slate/build" class="stack">
+        <div class="field">
+          <label class="field-label" for="week_number">Week number</label>
+          <input class="input num" type="number" id="week_number" name="week_number"
+                 value="{% if week %}{{ week.week_number }}{% else %}{{ pool.current_week }}{% endif %}"
+                 min="1" max="25" step="1" required>
+          <p class="form-hint">
+            Building a week that already exists refreshes its candidate pool and reselects the
+            closest games. A line you set by hand is never overwritten by a feed.
+          </p>
+        </div>
+
+        <div class="field">
+          <label class="checkbox" for="publish">
+            <input type="checkbox" id="publish" name="publish" value="1">
+            <span>Open it for picks straight away</span>
+          </label>
+          <p class="form-hint">
+            Leave this off to follow the auto publish setting, currently
+            {{ "on" if pool.auto_publish else "off" }}.
+          </p>
+        </div>
+
+        <div class="field">
+          <label class="checkbox" for="no_metered">
+            <input type="checkbox" id="no_metered" name="no_metered" value="1">
+            <span>ESPN only, spend no API credits</span>
+          </label>
+          <p class="form-hint">
+            The Odds API and CollegeFootballData are not called at all. Any game ESPN has no line
+            for stays without one until you set it by hand.
+          </p>
+        </div>
+
+        <div class="form-actions">
+          <button class="btn btn-primary" type="submit">Build the slate</button>
+        </div>
+      </form>
+    </div>
+  </div>
+</section>
+
+{% if week %}
+  {% set nfl_on = on_slate | selectattr("league", "equalto", "nfl") | list | length %}
+  {% set ncaaf_on = on_slate | selectattr("league", "equalto", "ncaaf") | list | length %}
+  {% set swappable = candidates | rejectattr("spread_home", "none") | list %}
+  {% set swap_options = swappable[:40] %}
+
+  <section class="section" aria-labelledby="week-title">
+    <h2 class="section-title" id="week-title">{{ week.label }}</h2>
+
+    <div class="panel week-summary">
+      <div class="row">
+        <span class="badge badge-{{ week.status }}">{{ week.status }}</span>
+        <span class="pill num">{{ on_slate | length }} of {{ pool.num_games_per_week }} games</span>
+        <span class="pill num">
+          {{ pick_count }} {{ pick_count | pluralize("player", "players") }} submitted
+        </span>
+      </div>
+
+      <p class="target-line">
+        Target:
+        {%- for key, value in targets.items() %}
+          {{ league_labels.get(key, key) }} {{ value }}{% if not loop.last %},{% endif %}
+        {%- endfor %}.
+        On the slate: {{ league_labels.get("nfl", "NFL") }} {{ nfl_on }},
+        {{ league_labels.get("ncaaf", "College") }} {{ ncaaf_on }}.
+      </p>
+
+      <p class="muted">
+        Lock:
+        {% if week.lock_at %}{{ week.lock_at | kickoff_long(tz) }}{% else %}not set yet{% endif %}.
+        {% if week.lock_at_override %}
+          Set by hand.
+        {% else %}
+          Automatic, the first kickoff on the slate.
+        {% endif %}
+      </p>
+
+      <div class="row">
+        {% if week.status == "draft" %}
+          <form method="post" action="/admin/slate/publish" class="inline-form">
+            <input type="hidden" name="week_id" value="{{ week.id }}">
+            <button class="btn btn-primary" type="submit">Publish this week</button>
+          </form>
+        {% endif %}
+        <form method="post" action="/admin/run/results" class="inline-form">
+          <input type="hidden" name="week_id" value="{{ week.id }}">
+          <button class="btn btn-secondary" type="submit">
+            {{ ic.icon("refresh", 18) }}<span>Refresh and score now</span>
+          </button>
+        </form>
+      </div>
+
+      <p class="form-hint">
+        Publishing opens the week for picks. Refresh and score pulls finals from ESPN and rescores
+        the week. Both are free to run and safe to run again.
+      </p>
+    </div>
+
+    <div class="card">
+      <div class="card-head">
+        <h3>Lock time</h3>
+      </div>
+      <div class="card-body">
+        <form method="post" action="/admin/slate/lock" class="stack">
+          <input type="hidden" name="week_id" value="{{ week.id }}">
+          <div class="field">
+            <label class="field-label" for="lock_at_local">Picks lock at</label>
+            <input class="input" type="datetime-local" id="lock_at_local" name="lock_at_local"
+                   value="{% if week.lock_at %}{{ (week.lock_at | localtime(tz)).strftime('%Y-%m-%dT%H:%M') }}{% endif %}">
+            <p class="form-hint">
+              Read in {{ pool.timezone.replace("_", " ") }} ({{ zone_label(pool.timezone) }}), the
+              pool timezone, not the timezone of the device you are on.
+            </p>
+          </div>
+          <div class="row">
+            <button class="btn btn-primary" type="submit">Set the lock time</button>
+            <button class="btn btn-secondary" type="submit" name="clear" value="1">
+              Back to the first kickoff
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    {% if not editable %}
+      <div class="flash flash-info" id="slate-locked-note">
+        {{ ic.icon("lock", 18) }}
+        <span>
+          {{ pick_count }} {{ pick_count | pluralize("player has", "players have") }} submitted
+          picks for {{ week.label }}, so the game count is fixed and adding, removing and swapping
+          are switched off. That keeps everyone scored against the same slate. Voiding a game and
+          setting a line by hand are still available.
+        </span>
+      </div>
+    {% endif %}
+  </section>
+
+  <section class="section" aria-labelledby="on-slate-title">
+    <h2 class="section-title" id="on-slate-title">On the slate</h2>
+    <p class="form-hint">
+      Ranked by closeness, closest first. Lines are home relative, so -2.5 means the home team is
+      favoured by 2.5 points. Clear the line box and save to drop a line you set by hand.
+    </p>
+
+    {% if on_slate %}
+      <div class="table-wrap">
+        <table class="table">
+          <thead>
+            <tr>
+              <th scope="col" class="num">Rank</th>
+              <th scope="col">Matchup</th>
+              <th scope="col">League</th>
+              <th scope="col">Line</th>
+              <th scope="col">Spread source</th>
+              <th scope="col">Kickoff</th>
+              <th scope="col">Status</th>
+              <th scope="col">Actions</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for game in on_slate %}
+              <tr class="{% if game.is_void %}is-void{% endif %}">
+                <td data-label="Rank" class="num">{{ game.slate_rank or "" }}</td>
+                {{ game_cells(game) }}
+                <td data-label="Actions" class="cell-actions">
+                  {% if editable %}
+                    <form method="post" action="/admin/slate/game" class="inline-form">
+                      <input type="hidden" name="week_id" value="{{ week.id }}">
+                      <input type="hidden" name="game_id" value="{{ game.id }}">
+                      <input type="hidden" name="action" value="remove">
+                      <button class="btn btn-secondary btn-sm" type="submit">
+                        Remove<span class="visually-hidden">
+                          {{ game.away_abbr }} at {{ game.home_abbr }} from the slate</span>
+                      </button>
+                    </form>
+
+                    {% if swap_options %}
+                      <form method="post" action="/admin/slate/game" class="action-form">
+                        <input type="hidden" name="week_id" value="{{ week.id }}">
+                        <input type="hidden" name="game_id" value="{{ game.id }}">
+                        <input type="hidden" name="action" value="swap">
+                        <label class="visually-hidden" for="swap-{{ game.id }}">
+                          Swap {{ game.away_abbr }} at {{ game.home_abbr }} for
+                        </label>
+                        <select class="select select-sm" id="swap-{{ game.id }}" name="swap_with" required>
+                          <option value="">Swap it for</option>
+                          {% for option in swap_options %}
+                            <option value="{{ option.id }}">
+                              {{ option.away_abbr }} at {{ option.home_abbr }}, {{ option.line_text }}
+                            </option>
+                          {% endfor %}
+                        </select>
+                        <button class="btn btn-secondary btn-sm" type="submit">Swap</button>
+                      </form>
+                    {% endif %}
+                  {% endif %}
+
+                  <form method="post" action="/admin/slate/game" class="inline-form">
+                    <input type="hidden" name="week_id" value="{{ week.id }}">
+                    <input type="hidden" name="game_id" value="{{ game.id }}">
+                    <input type="hidden" name="action" value="{% if game.is_void %}unvoid{% else %}void{% endif %}">
+                    <button class="btn btn-secondary btn-sm" type="submit">
+                      {% if game.is_void %}Restore{% else %}Void{% endif %}
+                      <span class="visually-hidden">
+                        {{ game.away_abbr }} at {{ game.home_abbr }}</span>
+                    </button>
+                  </form>
+
+                  {{ spread_form(week.id, game) }}
+                </td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    {% else %}
+      <div class="empty-state">
+        {{ ic.icon("list", 28) }}
+        <h3 class="empty-state-title">Nothing on the slate</h3>
+        <p>
+          {{ week.label }} has no games selected. Build it again, or add games from the pool below.
+        </p>
+      </div>
+    {% endif %}
+  </section>
+
+  <section class="section" aria-labelledby="candidates-title">
+    <h2 class="section-title" id="candidates-title">Everything else this week</h2>
+    <p class="form-hint">
+      Every other NFL and college game in {{ week.label }} with its line, closest first, so you can
+      see exactly what is available. A game with no line cannot go on the slate until you set one.
+    </p>
+
+    {% if candidates %}
+      <div class="table-wrap">
+        <table class="table">
+          <thead>
+            <tr>
+              <th scope="col">Matchup</th>
+              <th scope="col">League</th>
+              <th scope="col">Line</th>
+              <th scope="col">Spread source</th>
+              <th scope="col">Kickoff</th>
+              <th scope="col">Status</th>
+              <th scope="col">Actions</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for game in candidates %}
+              <tr>
+                {{ game_cells(game) }}
+                <td data-label="Actions" class="cell-actions">
+                  {% if editable %}
+                    {% if game.spread_home is not none %}
+                      <form method="post" action="/admin/slate/game" class="inline-form">
+                        <input type="hidden" name="week_id" value="{{ week.id }}">
+                        <input type="hidden" name="game_id" value="{{ game.id }}">
+                        <input type="hidden" name="action" value="add">
+                        <button class="btn btn-primary btn-sm" type="submit">
+                          Add<span class="visually-hidden">
+                            {{ game.away_abbr }} at {{ game.home_abbr }} to the slate</span>
+                        </button>
+                      </form>
+                    {% else %}
+                      <span class="cell-note muted">Set a line to add this one.</span>
+                    {% endif %}
+                  {% else %}
+                    <span class="cell-note muted">Picks are in, the slate is fixed.</span>
+                  {% endif %}
+
+                  {{ spread_form(week.id, game) }}
+                </td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    {% else %}
+      <div class="empty-state">
+        {{ ic.icon("flag", 28) }}
+        <h3 class="empty-state-title">No other games</h3>
+        <p>
+          Every game {{ week.label }} pulled in is already on the slate. Build the week again to
+          refresh the pool from ESPN.
+        </p>
+      </div>
+    {% endif %}
+  </section>
+{% else %}
+  <div class="empty-state">
+    {{ ic.icon("calendar", 28) }}
+    <h3 class="empty-state-title">No week to edit yet</h3>
+    <p>
+      Nothing has been built for the {{ pool.season_year }} season. Enter a week number above and
+      build the slate. The tool reads the schedule from ESPN, resolves a line for every game, and
+      takes the closest ones.
+    </p>
+  </div>
+{% endif %}
+{% endblock %}

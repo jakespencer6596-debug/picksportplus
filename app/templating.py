@@ -37,8 +37,8 @@ def as_utc(value: dt.datetime | None) -> dt.datetime | None:
     if value is None:
         return None
     if value.tzinfo is None:
-        return value.replace(tzinfo=dt.timezone.utc)
-    return value.astimezone(dt.timezone.utc)
+        return value.replace(tzinfo=dt.UTC)
+    return value.astimezone(dt.UTC)
 
 
 def to_local(value: dt.datetime | None, tz_name: str | None = None) -> dt.datetime | None:
@@ -87,7 +87,7 @@ def fmt_countdown(value: dt.datetime | None, now: dt.datetime | None = None) -> 
     target = as_utc(value)
     if target is None:
         return ""
-    current = as_utc(now) or dt.datetime.now(dt.timezone.utc)
+    current = as_utc(now) or dt.datetime.now(dt.UTC)
     delta = target - current
     seconds = int(delta.total_seconds())
     if seconds <= 0:
@@ -149,7 +149,7 @@ templates.env.globals.update(
     {
         "APP_NAME": "PickSportPlus",
         "zone_label": zone_label,
-        "now_utc": lambda: dt.datetime.now(dt.timezone.utc),
+        "now_utc": lambda: dt.datetime.now(dt.UTC),
     }
 )
 

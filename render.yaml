@@ -1,0 +1,115 @@
+# Render blueprint for PickSportPlus.
+#
+# One web service, one Postgres database, one hourly cron job. Everything the cron does is
+# idempotent, so a missed or repeated run is harmless.
+#
+# Secrets are NOT in this file. ODDS_API_KEY, CFBD_API_KEY, ADMIN_PASSWORD and DEFAULT_JOIN_CODE
+# are marked sync:false and must be filled in from the Render dashboard.
+
+databases:
+  - name: picksportplus-db
+    databaseName: picksportplus
+    user: picksportplus
+    plan: basic-256mb # the free tier expires after 30 days, see the README cost note
+
+services:
+  - type: web
+    name: picksportplus
+    runtime: python
+    plan: starter # free also works, it just sleeps after about 15 minutes idle
+    region: ohio
+    buildCommand: pip install -r requirements.txt
+    preDeployCommand: python -m app.cli init-db
+    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /healthz
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.13.5"
+      - key: DATABASE_URL
+        fromDatabase:
+          name: picksportplus-db
+          property: connectionString
+      - key: SECRET_KEY
+        generateValue: true
+      - key: SEASON_YEAR
+        value: "2026"
+      - key: TIMEZONE
+        value: America/New_York
+      - key: OPEN_REGISTRATION
+        value: "false"
+      - key: NUM_GAMES_PER_WEEK
+        value: "20"
+      - key: NFL_GAMES_PER_WEEK
+        value: "8"
+      - key: NCAAF_GAMES_PER_WEEK
+        value: "12"
+      - key: PUBLISH_LEAD_DAYS
+        value: "6"
+      # Metered provider budgets. Set below the true free limits (500 and 1000).
+      - key: ODDS_API_MONTHLY_BUDGET
+        value: "400"
+      - key: CFBD_MONTHLY_BUDGET
+        value: "800"
+      - key: MAX_SPREAD_REFRESHES_PER_WEEK
+        value: "4"
+      - key: MAX_CFBD_CALLS_PER_WEEK
+        value: "1"
+      - key: SPREAD_CACHE_MINUTES
+        value: "360"
+      - key: DEFAULT_POOL_NAME
+        value: PickSportPlus
+      # Fill these in from the dashboard. They are never committed.
+      - key: ODDS_API_KEY
+        sync: false
+      - key: CFBD_API_KEY
+        sync: false
+      - key: ADMIN_EMAIL
+        sync: false
+      - key: ADMIN_PASSWORD
+        sync: false
+      - key: ADMIN_DISPLAY_NAME
+        sync: false
+      - key: DEFAULT_JOIN_CODE
+        sync: false
+
+  - type: cron
+    name: picksportplus-cron
+    runtime: python
+    plan: starter
+    region: ohio
+    schedule: "17 * * * *" # hourly, off the hour so it does not pile onto everyone else's :00
+    buildCommand: pip install -r requirements.txt
+    startCommand: python -m app.cli run-cron
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.13.5"
+      - key: DATABASE_URL
+        fromDatabase:
+          name: picksportplus-db
+          property: connectionString
+      - key: SECRET_KEY
+        sync: false
+      - key: SEASON_YEAR
+        value: "2026"
+      - key: TIMEZONE
+        value: America/New_York
+      - key: NUM_GAMES_PER_WEEK
+        value: "20"
+      - key: NFL_GAMES_PER_WEEK
+        value: "8"
+      - key: NCAAF_GAMES_PER_WEEK
+        value: "12"
+      - key: ODDS_API_MONTHLY_BUDGET
+        value: "400"
+      - key: CFBD_MONTHLY_BUDGET
+        value: "800"
+      - key: MAX_SPREAD_REFRESHES_PER_WEEK
+        value: "4"
+      - key: MAX_CFBD_CALLS_PER_WEEK
+        value: "1"
+      - key: SPREAD_CACHE_MINUTES
+        value: "360"
+      - key: ODDS_API_KEY
+        sync: false
+      - key: CFBD_API_KEY
+        sync: false

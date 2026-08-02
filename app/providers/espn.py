@@ -144,8 +144,8 @@ def _parse_dt(raw: str | None) -> dt.datetime | None:
     except ValueError:
         return None
     if parsed.tzinfo is None:
-        parsed = parsed.replace(tzinfo=dt.timezone.utc)
-    return parsed.astimezone(dt.timezone.utc)
+        parsed = parsed.replace(tzinfo=dt.UTC)
+    return parsed.astimezone(dt.UTC)
 
 
 def _int_or_none(raw: Any) -> int | None:
@@ -193,7 +193,7 @@ def parse_spread_item(item: dict, home_abbr: str, away_abbr: str) -> float | Non
 
     raw_spread = item.get("spread")
     magnitude: float | None = None
-    if isinstance(raw_spread, (int, float)):
+    if isinstance(raw_spread, int | float):
         magnitude = abs(float(raw_spread))
 
     home_odds = item.get("homeTeamOdds") or {}
@@ -377,7 +377,7 @@ def current_week_from_payload(
 
     Reads ESPN's own calendar rather than doing date arithmetic, per the spec.
     """
-    now = now or dt.datetime.now(dt.timezone.utc)
+    now = now or dt.datetime.now(dt.UTC)
     weeks = [c for c in parse_calendar(payload) if c.season_type == season_type]
     if not weeks:
         return None

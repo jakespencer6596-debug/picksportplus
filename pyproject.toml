@@ -1,0 +1,35 @@
+[tool.black]
+line-length = 100
+target-version = ["py311"]
+extend-exclude = '''
+(
+    /(\.venv|alembic/versions)/
+)
+'''
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+exclude = [".venv", "alembic/versions"]
+
+[tool.ruff.lint]
+select = [
+    "E",   # pycodestyle errors
+    "F",   # pyflakes
+    "I",   # isort
+    "UP",  # pyupgrade
+    "B",   # bugbear
+    "C4",  # comprehensions
+    "W",   # pycodestyle warnings
+]
+ignore = [
+    "E501",  # line length is handled by black
+    "B008",  # FastAPI dependencies are function calls in defaults by design
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["B011"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+filterwarnings = ["ignore::DeprecationWarning"]

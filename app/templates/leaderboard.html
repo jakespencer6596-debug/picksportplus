@@ -1,0 +1,168 @@
+{% extends "base.html" %}
+{% import "components/icons.html" as ic %}
+
+{% block title %}Standings. {{ APP_NAME }}{% endblock %}
+
+{% block content %}
+{# The router does not pass viewer_id into season_standings yet, so is_you can be
+   False for everyone. Fall back to the signed in user id so the row is still marked. #}
+{% set me = current_user.id if current_user else None %}
+{% set weeks_scored = (season | map(attribute="weeks_played") | max) if season else 0 %}
+{% set has_scores = season and weeks_scored > 0 %}
+
+<div class="page-head">
+  <div>
+    <p class="eyebrow">{{ pool.name if pool else "Season" }}</p>
+    <h1 class="page-title">Standings</h1>
+  </div>
+  {% if pool %}
+    <p class="muted num">{{ pool.season_year }} season</p>
+  {% endif %}
+</div>
+
+{% if has_scores %}
+  {% set leader = season[0] %}
+  <div class="stat-row">
+    <div class="stat">
+      <span class="stat-label">Leader</span>
+      <span class="stat-value stat-value-name">{{ leader.display_name }}</span>
+    </div>
+    <div class="stat">
+      <span class="stat-label">Points</span>
+      <span class="stat-value num">{{ leader.points }}</span>
+    </div>
+    <div class="stat">
+      <span class="stat-label">Players</span>
+      <span class="stat-value num">{{ season | length }}</span>
+    </div>
+    <div class="stat">
+      <span class="stat-label">Weeks played</span>
+      <span class="stat-value num">{{ weeks_scored }}</span>
+    </div>
+  </div>
+{% endif %}
+
+<section class="section" aria-labelledby="season-heading">
+  <h2 class="section-title" id="season-heading">Season standings</h2>
+
+  {% if has_scores %}
+    <div class="table-wrap">
+      <table class="table">
+        <caption class="visually-hidden">
+          Season standings{% if pool %}, {{ pool.season_year }} season{% endif %}. Ranked by total points.
+        </caption>
+        <thead>
+          <tr>
+            <th scope="col">Rank</th>
+            <th scope="col">Player</th>
+            <th scope="col" class="num">Points</th>
+            <th scope="col" class="num">Correct</th>
+            <th scope="col" class="num">Weekly wins</th>
+            <th scope="col" class="num">Accuracy</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for row in season %}
+            {% set you = row.is_you or (me is not none and row.user_id == me) %}
+            {% set played = row.weeks_played > 0 %}
+            <tr class="lb-row{{ ' lb-leader' if row.rank == 1 }}{{ ' is-you' if you }}">
+              <td data-label="Rank">
+                <span class="rank-badge num{% if row.rank <= 3 %} is-{{ row.rank }}{% endif %}">{{ row.rank }}</span>
+              </td>
+              <td data-label="Player">
+                <span class="lb-name">
+                  <span class="lb-player">{{ row.display_name }}</span>
+                  {% if you %}<span class="pill pill-you">You</span>{% endif %}
+                </span>
+              </td>
+              <td class="num" data-label="Points">
+                {% if played %}{{ row.points }}{% else %}<span class="no-entry">No entry</span>{% endif %}
+              </td>
+              <td class="num" data-label="Correct">
+                {% if played %}{{ row.correct }} of {{ row.possible }}{% else %}<span class="no-entry">.</span>{% endif %}
+              </td>
+              <td class="num" data-label="Weekly wins">
+                {% if played %}{{ row.weekly_wins }}{% else %}<span class="no-entry">.</span>{% endif %}
+              </td>
+              <td class="num" data-label="Accuracy">
+                {% if row.possible %}{{ row.accuracy }}{% else %}<span class="no-entry">{{ row.accuracy }}</span>{% endif %}
+              </td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  {% else %}
+    <div class="empty-state">
+      {{ ic.icon("trophy", 28) }}
+      <p class="empty-state-title">No standings yet</p>
+      <p>
+        Points land here as soon as the first week is scored. Make your picks, sit through
+        Saturday and Sunday, and the table fills itself.
+      </p>
+      <a class="btn btn-primary" href="/picks">Make your picks</a>
+    </div>
+  {% endif %}
+</section>
+
+<section class="section" aria-labelledby="weekly-heading">
+  {% if week and weekly %}
+    <div class="section-head">
+      <h2 class="section-title" id="weekly-heading">{{ week.label }} leaderboard</h2>
+      <a class="btn btn-secondary btn-sm" href="/results?week={{ week.week_number }}">
+        {{ ic.icon("list", 16) }}<span>See every pick</span>
+      </a>
+    </div>
+
+    {% if week.status != "scored" %}
+      <p class="muted lb-note">This week is still being scored. Points move as games go final.</p>
+    {% endif %}
+
+    <div class="table-wrap">
+      <table class="table">
+        <caption class="visually-hidden">{{ week.label }} leaderboard. Ranked by points for the week.</caption>
+        <thead>
+          <tr>
+            <th scope="col">Rank</th>
+            <th scope="col">Player</th>
+            <th scope="col" class="num">Points</th>
+            <th scope="col" class="num">Correct</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for row in weekly %}
+            {% set you = row.is_you or (me is not none and row.user_id == me) %}
+            <tr class="lb-row{{ ' lb-leader' if row.is_winner }}{{ ' is-you' if you }}">
+              <td data-label="Rank">
+                <span class="rank-badge num{% if row.rank <= 3 %} is-{{ row.rank }}{% endif %}">{{ row.rank }}</span>
+              </td>
+              <td data-label="Player">
+                <span class="lb-name">
+                  <span class="lb-player">{{ row.display_name }}</span>
+                  {% if you %}<span class="pill pill-you">You</span>{% endif %}
+                  {% if row.is_winner %}
+                    <span class="ribbon">{{ ic.icon("flag", 13) }}Winner</span>
+                  {% endif %}
+                </span>
+              </td>
+              <td class="num" data-label="Points">
+                {% if row.submitted %}{{ row.points }}{% else %}<span class="no-entry">No entry</span>{% endif %}
+              </td>
+              <td class="num" data-label="Correct">
+                {% if row.submitted %}{{ row.correct }} of {{ row.possible }}{% else %}<span class="no-entry">.</span>{% endif %}
+              </td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  {% else %}
+    <h2 class="section-title" id="weekly-heading">Weekly leaderboard</h2>
+    <div class="empty-state">
+      {{ ic.icon("calendar", 28) }}
+      <p class="empty-state-title">No week to show</p>
+      <p>The weekly leaderboard opens once a week locks and the first scores come in.</p>
+    </div>
+  {% endif %}
+</section>
+{% endblock %}

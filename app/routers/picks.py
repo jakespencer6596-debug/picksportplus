@@ -51,8 +51,8 @@ def week_is_locked(week: Week, now: dt.datetime | None = None) -> bool:
         return False
     lock_at = week.lock_at
     if lock_at.tzinfo is None:
-        lock_at = lock_at.replace(tzinfo=dt.timezone.utc)
-    return (now or dt.datetime.now(dt.timezone.utc)) >= lock_at
+        lock_at = lock_at.replace(tzinfo=dt.UTC)
+    return (now or dt.datetime.now(dt.UTC)) >= lock_at
 
 
 def slate_games(db: Session, week: Week) -> list[Game]:
@@ -166,9 +166,7 @@ def _save_picks(request: Request, db: Session, user: User, pool: Pool, raw: dict
         try:
             confidence = int(raw_conf)
         except ValueError:
-            malformed.append(
-                f"{game.away_abbr} at {game.home_abbr} is missing a confidence value."
-            )
+            malformed.append(f"{game.away_abbr} at {game.home_abbr} is missing a confidence value.")
             continue
         submitted.append(PickInput(game_id=game.id, picked_team=side, confidence=confidence))
 
@@ -185,11 +183,9 @@ def _save_picks(request: Request, db: Session, user: User, pool: Pool, raw: dict
 
     existing = {
         p.game_id: p
-        for p in db.scalars(
-            select(Pick).where(Pick.user_id == user.id, Pick.week_id == week.id)
-        )
+        for p in db.scalars(select(Pick).where(Pick.user_id == user.id, Pick.week_id == week.id))
     }
-    now = dt.datetime.now(dt.timezone.utc)
+    now = dt.datetime.now(dt.UTC)
     for item in submitted:
         row = existing.get(item.game_id)
         if row is None:

@@ -13,7 +13,7 @@ import ast
 import dataclasses
 import inspect
 import random
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta, timezone
 
 import pytest
 
@@ -30,7 +30,7 @@ from app.slate import (
 )
 
 # A fixed Sunday so every test reads the same way. Kickoffs are offsets from it.
-BASE = datetime(2026, 9, 13, 17, 0, tzinfo=timezone.utc)
+BASE = datetime(2026, 9, 13, 17, 0, tzinfo=UTC)
 NOW = BASE - timedelta(hours=5)
 
 DEFAULT_TARGETS = {"nfl": 8, "ncaaf": 12}
@@ -85,9 +85,7 @@ def rich_pool() -> list[Candidate]:
 
 
 def test_default_shape_takes_eight_nfl_and_twelve_college():
-    result = select_slate_by_targets(
-        rich_pool(), DEFAULT_TARGETS, total=DEFAULT_TOTAL, now=NOW
-    )
+    result = select_slate_by_targets(rich_pool(), DEFAULT_TARGETS, total=DEFAULT_TOTAL, now=NOW)
 
     assert keys(result) == [
         "cfb01",
@@ -119,18 +117,14 @@ def test_default_shape_takes_eight_nfl_and_twelve_college():
 
 
 def test_default_shape_ranks_by_closeness_not_by_league():
-    result = select_slate_by_targets(
-        rich_pool(), DEFAULT_TARGETS, total=DEFAULT_TOTAL, now=NOW
-    )
+    result = select_slate_by_targets(rich_pool(), DEFAULT_TARGETS, total=DEFAULT_TOTAL, now=NOW)
 
     assert [item.closeness for item in result.selected[:4]] == [0.5, 1.0, 1.5, 2.0]
     assert result.selected[-1].closeness == 11.5
 
 
 def test_the_farthest_games_in_each_league_are_left_off():
-    result = select_slate_by_targets(
-        rich_pool(), DEFAULT_TARGETS, total=DEFAULT_TOTAL, now=NOW
-    )
+    result = select_slate_by_targets(rich_pool(), DEFAULT_TARGETS, total=DEFAULT_TOTAL, now=NOW)
     chosen = set(keys(result))
 
     # NFL 9 through 12 (spreads 9.0 to 12.0) and college 13 through 16
@@ -148,9 +142,7 @@ def test_within_each_league_the_closest_games_are_taken():
         game("cfb_close", spread=-0.5, league="ncaaf", hours=5),
         game("cfb_mid", spread=6.0, league="ncaaf", hours=6),
     ]
-    result = select_slate_by_targets(
-        candidates, {"nfl": 2, "ncaaf": 2}, total=4, now=NOW
-    )
+    result = select_slate_by_targets(candidates, {"nfl": 2, "ncaaf": 2}, total=4, now=NOW)
 
     assert keys(result) == ["cfb_close", "nfl_close", "nfl_mid", "cfb_mid"]
     assert result.per_league == {"nfl": 2, "ncaaf": 2}
@@ -161,12 +153,8 @@ def test_within_each_league_the_closest_games_are_taken():
 def test_a_far_nfl_game_beats_a_closer_college_game_until_the_target_is_met():
     # This is the whole point of per league targets. A pure global top 20 would
     # be 20 college games and no NFL at all.
-    candidates = pool("cfb", "ncaaf", steps(20, 0.5, 0.5)) + pool(
-        "nfl", "nfl", steps(8, 14.0)
-    )
-    result = select_slate_by_targets(
-        candidates, DEFAULT_TARGETS, total=DEFAULT_TOTAL, now=NOW
-    )
+    candidates = pool("cfb", "ncaaf", steps(20, 0.5, 0.5)) + pool("nfl", "nfl", steps(8, 14.0))
+    result = select_slate_by_targets(candidates, DEFAULT_TARGETS, total=DEFAULT_TOTAL, now=NOW)
     chosen = set(keys(result))
 
     assert result.per_league == {"nfl": 8, "ncaaf": 12}
@@ -191,9 +179,7 @@ def test_a_short_nfl_week_is_filled_with_college_games():
         ]
         + pool("cfb", "ncaaf", steps(20, 0.5))
     )
-    result = select_slate_by_targets(
-        candidates, DEFAULT_TARGETS, total=DEFAULT_TOTAL, now=NOW
-    )
+    result = select_slate_by_targets(candidates, DEFAULT_TARGETS, total=DEFAULT_TOTAL, now=NOW)
 
     assert len(result.selected) == 20
     assert result.per_league == {"nfl": 5, "ncaaf": 15}
@@ -208,13 +194,49 @@ def test_a_short_nfl_week_is_filled_with_college_games():
     assert "cfb16" not in keys(result)
 
 
+def test_a_short_nfl_week_fills_in_exact_closeness_order():
+    # Identity, not just counts. A fill that walked the pool from the far end
+    # would still return 20 games and still report nfl 5 and ncaaf 15.
+    candidates = (
+        pool("nfl", "nfl", steps(5, 3.0))
+        + [
+            game("nfl_no_line_a", spread=None, league="nfl", hours=7),
+            game("nfl_no_line_b", spread=None, league="nfl", hours=8),
+        ]
+        + pool("cfb", "ncaaf", steps(20, 0.5))
+    )
+    result = select_slate_by_targets(candidates, DEFAULT_TARGETS, total=DEFAULT_TOTAL, now=NOW)
+
+    assert keys(result) == [
+        "cfb01",
+        "cfb02",
+        "cfb03",
+        "nfl01",
+        "cfb04",
+        "nfl02",
+        "cfb05",
+        "nfl03",
+        "cfb06",
+        "nfl04",
+        "cfb07",
+        "nfl05",
+        "cfb08",
+        "cfb09",
+        "cfb10",
+        "cfb11",
+        "cfb12",
+        "cfb13",
+        "cfb14",
+        "cfb15",
+    ]
+    # The three fill games are the closest ones left, 12.5, 13.5 and 14.5, not
+    # the farthest, 17.5, 18.5 and 19.5.
+    assert [item.closeness for item in result.selected[-3:]] == [12.5, 13.5, 14.5]
+
+
 def test_a_short_college_week_is_filled_with_nfl_games():
-    candidates = pool("nfl", "nfl", steps(14, 1.0)) + pool(
-        "cfb", "ncaaf", steps(9, 0.5)
-    )
-    result = select_slate_by_targets(
-        candidates, DEFAULT_TARGETS, total=DEFAULT_TOTAL, now=NOW
-    )
+    candidates = pool("nfl", "nfl", steps(14, 1.0)) + pool("cfb", "ncaaf", steps(9, 0.5))
+    result = select_slate_by_targets(candidates, DEFAULT_TARGETS, total=DEFAULT_TOTAL, now=NOW)
 
     assert len(result.selected) == 20
     assert result.per_league == {"nfl": 11, "ncaaf": 9}
@@ -225,9 +247,7 @@ def test_a_short_college_week_is_filled_with_nfl_games():
 
 def test_both_leagues_short_returns_fewer_than_the_total_and_says_so():
     candidates = pool("nfl", "nfl", steps(3, 1.0)) + pool("cfb", "ncaaf", steps(4, 0.5))
-    result = select_slate_by_targets(
-        candidates, DEFAULT_TARGETS, total=DEFAULT_TOTAL, now=NOW
-    )
+    result = select_slate_by_targets(candidates, DEFAULT_TARGETS, total=DEFAULT_TOTAL, now=NOW)
 
     assert len(result.selected) == 7
     assert result.per_league == {"nfl": 3, "ncaaf": 4}
@@ -236,8 +256,7 @@ def test_both_leagues_short_returns_fewer_than_the_total_and_says_so():
     assert result.notes == [
         "Only 3 NFL games had a resolvable spread, 5 short of the target of 8.",
         "Only 4 college games had a resolvable spread, 8 short of the target of 12.",
-        "The slate came up 13 games short of 20 because only 7 games had a "
-        "resolvable spread.",
+        "The slate came up 13 games short of 20 because only 7 games had a " "resolvable spread.",
     ]
 
 
@@ -247,15 +266,50 @@ def test_a_single_missing_game_reads_in_the_singular():
         game("nfl02", spread=2.0, league="nfl", hours=2),
         game("cfb01", spread=0.5, league="ncaaf", hours=3),
     ]
-    result = select_slate_by_targets(
-        candidates, {"nfl": 2, "ncaaf": 2}, total=4, now=NOW
-    )
+    result = select_slate_by_targets(candidates, {"nfl": 2, "ncaaf": 2}, total=4, now=NOW)
 
     assert result.shortfalls == {"ncaaf": 1}
     assert result.notes == [
         "Only 1 college game had a resolvable spread, 1 short of the target of 2.",
-        "The slate came up 1 game short of 4 because only 3 games had a "
-        "resolvable spread.",
+        "The slate came up 1 game short of 4 because only 3 games had a " "resolvable spread.",
+    ]
+
+
+def test_a_league_short_because_its_games_kicked_off_does_not_blame_the_spread():
+    # Every NFL spread here is resolved. Three of the four games have simply
+    # started, which is the normal state of a Sunday afternoon rebuild. Saying
+    # the spread was missing would send the commissioner chasing a line that is
+    # sitting right there.
+    candidates = (
+        [game(f"nfl_done{index}", spread=float(index), hours=-20 - index) for index in (1, 2, 3)]
+        + [game("nfl_next", spread=6.0, hours=4)]
+        + pool("cfb", "ncaaf", steps(3, 0.5))
+    )
+    result = select_slate_by_targets(candidates, {"nfl": 3, "ncaaf": 3}, total=6, now=NOW)
+
+    assert keys(result) == ["cfb01", "cfb02", "cfb03", "nfl_next"]
+    assert result.shortfalls == {"nfl": 2}
+    assert result.notes == [
+        "Only 1 NFL game had a spread and had not kicked off, 2 short of the " "target of 3.",
+        "The slate came up 2 games short of 6 because only 4 games had a spread "
+        "and had not kicked off.",
+    ]
+
+
+def test_keeping_started_games_keeps_the_spread_wording():
+    # Nothing was taken by the clock here, so the note names the only cause left.
+    candidates = [
+        game("started", spread=0.0, hours=-8),
+        game("no_line", spread=None, hours=4),
+    ]
+    result = select_slate_by_targets(
+        candidates, {"nfl": 2}, total=2, now=NOW, exclude_started=False
+    )
+
+    assert keys(result) == ["started"]
+    assert result.notes == [
+        "Only 1 NFL game had a resolvable spread, 1 short of the target of 2.",
+        "The slate came up 1 game short of 2 because only 1 game had a " "resolvable spread.",
     ]
 
 
@@ -263,12 +317,8 @@ def test_a_single_missing_game_reads_in_the_singular():
 
 
 def test_targets_above_the_total_drop_the_farthest_games():
-    candidates = pool("nfl", "nfl", steps(12, 1.0)) + pool(
-        "cfb", "ncaaf", steps(12, 0.5)
-    )
-    result = select_slate_by_targets(
-        candidates, {"nfl": 12, "ncaaf": 12}, total=20, now=NOW
-    )
+    candidates = pool("nfl", "nfl", steps(12, 1.0)) + pool("cfb", "ncaaf", steps(12, 0.5))
+    result = select_slate_by_targets(candidates, {"nfl": 12, "ncaaf": 12}, total=20, now=NOW)
     chosen = set(keys(result))
 
     assert len(result.selected) == 20
@@ -283,13 +333,70 @@ def test_targets_above_the_total_drop_the_farthest_games():
     ]
 
 
+def test_the_trim_keeps_the_closest_games_and_drops_the_farthest():
+    # Identity of the survivors, spelled out. An inverted trim would keep the
+    # 20 worst games of the 24 and still report 20 games and nfl 10, ncaaf 10.
+    candidates = pool("nfl", "nfl", steps(12, 1.0)) + pool("cfb", "ncaaf", steps(12, 0.5))
+    result = select_slate_by_targets(candidates, {"nfl": 12, "ncaaf": 12}, total=20, now=NOW)
+
+    assert keys(result) == [
+        "cfb01",
+        "nfl01",
+        "cfb02",
+        "nfl02",
+        "cfb03",
+        "nfl03",
+        "cfb04",
+        "nfl04",
+        "cfb05",
+        "nfl05",
+        "cfb06",
+        "nfl06",
+        "cfb07",
+        "nfl07",
+        "cfb08",
+        "nfl08",
+        "cfb09",
+        "nfl09",
+        "cfb10",
+        "nfl10",
+    ]
+    # Every survivor is closer than every game the trim dropped.
+    assert result.selected[-1].closeness == 10.0
+    assert max(item.closeness for item in result.selected) < 10.5
+
+
+def test_a_shortfall_is_measured_on_the_first_pass_not_on_the_trimmed_slate():
+    # The NFL supply is 10 against a target of 12, so the shortfall is 2. The
+    # trim then cuts the 22 first pass games down to 15 and leaves 7 NFL games
+    # on the slate. Reading the shortfall off the final slate would say 5, and
+    # would blame missing spreads for a cut the commissioner's own total made.
+    candidates = pool("nfl", "nfl", steps(10, 1.0)) + pool("cfb", "ncaaf", steps(12, 0.5))
+    result = select_slate_by_targets(candidates, {"nfl": 12, "ncaaf": 12}, total=15, now=NOW)
+
+    assert len(result.selected) == 15
+    assert result.per_league == {"nfl": 7, "ncaaf": 8}
+    assert result.shortfalls == {"nfl": 2}
+    assert result.notes == [
+        "Only 10 NFL games had a resolvable spread, 2 short of the target of 12.",
+        "The league targets add up to 24, which is more than the total of 15, "
+        "so the 7 farthest games were dropped.",
+    ]
+
+
+def test_a_league_cut_below_its_target_by_the_trim_is_not_a_shortfall():
+    # Both leagues have all 12 games. Neither came up short of anything, the
+    # total simply cannot hold 24, so shortfalls must stay empty.
+    candidates = pool("nfl", "nfl", steps(12, 1.0)) + pool("cfb", "ncaaf", steps(12, 0.5))
+    result = select_slate_by_targets(candidates, {"nfl": 12, "ncaaf": 12}, total=20, now=NOW)
+
+    assert result.per_league == {"nfl": 10, "ncaaf": 10}
+    assert result.shortfalls == {}
+
+
 def test_targets_below_the_total_fill_the_rest_globally_by_closeness():
-    candidates = pool("nfl", "nfl", steps(12, 1.0)) + pool(
-        "cfb", "ncaaf", steps(12, 0.5)
-    )
-    result = select_slate_by_targets(
-        candidates, {"nfl": 5, "ncaaf": 5}, total=20, now=NOW
-    )
+    candidates = pool("nfl", "nfl", steps(12, 1.0)) + pool("cfb", "ncaaf", steps(12, 0.5))
+    result = select_slate_by_targets(candidates, {"nfl": 5, "ncaaf": 5}, total=20, now=NOW)
     chosen = set(keys(result))
 
     assert len(result.selected) == 20
@@ -305,9 +412,7 @@ def test_targets_below_the_total_fill_the_rest_globally_by_closeness():
 
 def test_dropping_exactly_one_game_reads_in_the_singular():
     candidates = pool("nfl", "nfl", steps(2, 1.0)) + pool("cfb", "ncaaf", steps(2, 0.5))
-    result = select_slate_by_targets(
-        candidates, {"nfl": 2, "ncaaf": 2}, total=3, now=NOW
-    )
+    result = select_slate_by_targets(candidates, {"nfl": 2, "ncaaf": 2}, total=3, now=NOW)
 
     assert keys(result) == ["cfb01", "nfl01", "cfb02"]
     assert result.notes == [
@@ -318,9 +423,7 @@ def test_dropping_exactly_one_game_reads_in_the_singular():
 
 def test_targets_that_match_the_total_exactly_produce_no_notes():
     candidates = pool("nfl", "nfl", steps(6, 1.0)) + pool("cfb", "ncaaf", steps(6, 0.5))
-    result = select_slate_by_targets(
-        candidates, {"nfl": 3, "ncaaf": 3}, total=6, now=NOW
-    )
+    result = select_slate_by_targets(candidates, {"nfl": 3, "ncaaf": 3}, total=6, now=NOW)
 
     assert result.per_league == {"nfl": 3, "ncaaf": 3}
     assert result.notes == []
@@ -369,14 +472,27 @@ def test_empty_targets_fall_back_to_a_plain_closest_first_slate():
     assert result.notes == []
 
 
+def test_targets_of_none_behave_like_an_empty_mapping():
+    # The annotation allows None, so pin what it does rather than leaving the
+    # caller to find out. A pool with no leagues enabled hands over nothing.
+    candidates = [
+        game("a", spread=-7.0, league="nfl", hours=1),
+        game("b", spread=1.5, league="ncaaf", hours=2),
+        game("c", spread=-3.0, league="nfl", hours=3),
+        game("d", spread=0.5, league="ncaaf", hours=4),
+        game("e", spread=14.0, league="ncaaf", hours=5),
+    ]
+    empty = select_slate_by_targets(candidates, {}, total=3, now=NOW)
+
+    assert repr(select_slate_by_targets(candidates, None, total=3, now=NOW)) == repr(empty)
+
+
 def test_a_target_of_zero_leaves_a_league_to_the_fill_only():
     candidates = [
         game("nfl1", spread=0.0, league="nfl", hours=1),
         game("cfb1", spread=4.0, league="ncaaf", hours=2),
     ]
-    result = select_slate_by_targets(
-        candidates, {"nfl": 0, "ncaaf": 1}, total=2, now=NOW
-    )
+    result = select_slate_by_targets(candidates, {"nfl": 0, "ncaaf": 1}, total=2, now=NOW)
 
     assert keys(result) == ["nfl1", "cfb1"]
     assert result.shortfalls == {}
@@ -415,9 +531,7 @@ def test_a_pick_em_ranks_first():
         game("pickem", spread=0.0, league="ncaaf", hours=48),
         game("close", spread=-1.0, league="nfl", hours=2),
     ]
-    result = select_slate_by_targets(
-        candidates, {"nfl": 2, "ncaaf": 1}, total=3, now=NOW
-    )
+    result = select_slate_by_targets(candidates, {"nfl": 2, "ncaaf": 1}, total=3, now=NOW)
 
     assert keys(result)[0] == "pickem"
     assert result.selected[0].slate_rank == 1
@@ -434,10 +548,7 @@ def test_a_candidate_without_a_usable_spread_is_excluded(value):
 
     assert keys(result) == ["good"]
     assert result.shortfalls == {"nfl": 1}
-    assert (
-        "Only 1 NFL game had a resolvable spread, 1 short of the target of 2."
-        in result.notes
-    )
+    assert "Only 1 NFL game had a resolvable spread, 1 short of the target of 2." in result.notes
 
 
 def test_a_non_finite_spread_cannot_reorder_the_slate():
@@ -453,9 +564,7 @@ def test_a_non_finite_spread_cannot_reorder_the_slate():
 
     for position in range(len(real) + 1):
         polluted = real[:position] + [nan_game] + real[position:]
-        assert (
-            select_slate_by_targets(polluted, {"nfl": 2}, total=2, now=NOW) == expected
-        )
+        assert select_slate_by_targets(polluted, {"nfl": 2}, total=2, now=NOW) == expected
 
 
 def test_selected_closeness_is_always_a_float():
@@ -498,9 +607,7 @@ def test_a_tie_across_leagues_does_not_disturb_the_targets():
         game("nfl_tie", spread=-3.0, league="nfl", hours=2),
         game("cfb_close", spread=0.5, league="ncaaf", hours=1),
     ]
-    result = select_slate_by_targets(
-        candidates, {"nfl": 1, "ncaaf": 1}, total=2, now=NOW
-    )
+    result = select_slate_by_targets(candidates, {"nfl": 1, "ncaaf": 1}, total=2, now=NOW)
 
     assert keys(result) == ["cfb_close", "nfl_tie"]
 
@@ -514,9 +621,7 @@ def test_exclude_started_true_drops_games_already_kicked_off():
         game("kicking_now", spread=0.0, league="nfl", hours=-5),  # exactly at now
         game("upcoming", spread=-9.0, league="nfl", hours=4),
     ]
-    result = select_slate_by_targets(
-        candidates, {"nfl": 3}, total=3, now=NOW, exclude_started=True
-    )
+    result = select_slate_by_targets(candidates, {"nfl": 3}, total=3, now=NOW, exclude_started=True)
 
     assert keys(result) == ["upcoming"]
 
@@ -535,7 +640,7 @@ def test_exclude_started_false_keeps_games_already_kicked_off():
 
 
 def test_now_defaults_to_the_current_utc_time():
-    real_now = datetime.now(timezone.utc)
+    real_now = datetime.now(UTC)
     candidates = [
         Candidate("past", "nfl", real_now - timedelta(hours=3), 0.0),
         Candidate("future", "nfl", real_now + timedelta(hours=3), 10.0),
@@ -549,9 +654,7 @@ def test_non_utc_aware_kickoffs_compare_correctly():
     eastern = timezone(timedelta(hours=-4))
     candidates = [
         Candidate("utc", "nfl", BASE + timedelta(hours=2), 1.0),
-        Candidate(
-            "eastern", "nfl", (BASE + timedelta(hours=1)).astimezone(eastern), 1.0
-        ),
+        Candidate("eastern", "nfl", (BASE + timedelta(hours=1)).astimezone(eastern), 1.0),
     ]
     result = select_slate_by_targets(candidates, {"nfl": 2}, total=2, now=NOW)
 
@@ -608,8 +711,7 @@ def test_empty_candidates_return_an_empty_result():
     assert result.shortfalls == {}
     assert result.filled_from_other == 0
     assert result.notes == [
-        "The slate came up 20 games short of 20 because only 0 games had a "
-        "resolvable spread."
+        "The slate came up 20 games short of 20 because only 0 games had a " "resolvable spread."
     ]
 
 
@@ -626,12 +728,8 @@ def test_empty_candidates_report_every_target_as_a_shortfall():
 
 
 def test_never_returns_more_than_the_total():
-    candidates = pool("nfl", "nfl", steps(30, 1.0)) + pool(
-        "cfb", "ncaaf", steps(30, 0.5)
-    )
-    result = select_slate_by_targets(
-        candidates, DEFAULT_TARGETS, total=DEFAULT_TOTAL, now=NOW
-    )
+    candidates = pool("nfl", "nfl", steps(30, 1.0)) + pool("cfb", "ncaaf", steps(30, 0.5))
+    result = select_slate_by_targets(candidates, DEFAULT_TARGETS, total=DEFAULT_TOTAL, now=NOW)
 
     assert len(result.selected) == 20
 
@@ -662,9 +760,7 @@ def test_a_negative_target_raises(targets):
         select_slate_by_targets([game("a")], targets, total=20, now=NOW)
 
 
-@pytest.mark.parametrize(
-    "targets", [{"nfl": 1.5}, {"nfl": "8"}, {"nfl": None}, {"nfl": True}]
-)
+@pytest.mark.parametrize("targets", [{"nfl": 1.5}, {"nfl": "8"}, {"nfl": None}, {"nfl": True}])
 def test_a_non_integer_target_raises(targets):
     with pytest.raises(ValueError, match="targets"):
         select_slate_by_targets([game("a")], targets, total=20, now=NOW)
@@ -679,16 +775,12 @@ def test_a_naive_kickoff_raises():
 def test_a_naive_kickoff_raises_even_when_started_games_are_kept():
     naive = Candidate("naive", "nfl", datetime(2026, 9, 13, 17, 0), 0.0)
     with pytest.raises(ValueError, match="timezone aware"):
-        select_slate_by_targets(
-            [naive], {"nfl": 1}, total=1, now=NOW, exclude_started=False
-        )
+        select_slate_by_targets([naive], {"nfl": 1}, total=1, now=NOW, exclude_started=False)
 
 
 def test_a_naive_now_raises():
     with pytest.raises(ValueError, match="timezone aware"):
-        select_slate_by_targets(
-            [game("a")], {"nfl": 1}, total=1, now=datetime(2026, 9, 13, 12, 0)
-        )
+        select_slate_by_targets([game("a")], {"nfl": 1}, total=1, now=datetime(2026, 9, 13, 12, 0))
 
 
 # Determinism
@@ -727,32 +819,123 @@ def test_shuffling_the_input_gives_an_identical_result():
 
 
 def test_shuffling_a_short_league_pool_gives_an_identical_result():
-    candidates = pool("nfl", "nfl", steps(4, 2.0)) + pool(
-        "cfb", "ncaaf", steps(20, 0.5)
-    )
-    expected = select_slate_by_targets(
-        candidates, DEFAULT_TARGETS, total=DEFAULT_TOTAL, now=NOW
-    )
+    candidates = pool("nfl", "nfl", steps(4, 2.0)) + pool("cfb", "ncaaf", steps(20, 0.5))
+    expected = select_slate_by_targets(candidates, DEFAULT_TARGETS, total=DEFAULT_TOTAL, now=NOW)
 
     rng = random.Random(7)
     for _ in range(50):
         shuffled = candidates[:]
         rng.shuffle(shuffled)
-        result = select_slate_by_targets(
-            shuffled, DEFAULT_TARGETS, total=DEFAULT_TOTAL, now=NOW
-        )
+        result = select_slate_by_targets(shuffled, DEFAULT_TARGETS, total=DEFAULT_TOTAL, now=NOW)
 
         assert repr(result) == repr(expected)
 
 
+def tie_heavy_pool() -> list[Candidate]:
+    """Three leagues where almost everything ties on closeness and on kickoff.
+
+    Only the key tiebreak separates most of these games, which is exactly the
+    condition under which an unstable sort would show up.
+    """
+    games = [
+        game(f"nfl{index:02d}", spread=3.0 if index % 2 else -3.0, hours=2) for index in range(1, 7)
+    ]
+    games += [
+        game(f"cfb{index:02d}", spread=3.0 if index % 2 else -3.0, league="ncaaf", hours=2)
+        for index in range(1, 9)
+    ]
+    games += [
+        game(f"xfl{index:02d}", spread=1.0 if index % 2 else -1.0, league="xfl", hours=1)
+        for index in range(1, 5)
+    ]
+    games.append(game("late", spread=3.0, league="ncaaf", hours=9))
+    games.append(game("noline", spread=None, hours=2))
+    return games
+
+
+def test_shuffling_a_tie_heavy_three_league_pool_gives_an_identical_result():
+    targets = {"nfl": 8, "ncaaf": 5}
+    expected = select_slate_by_targets(tie_heavy_pool(), targets, total=12, now=NOW)
+
+    # Pinned by hand: the four xfl games all sit at 1.0 and tie on kickoff, so
+    # only xfl01 is taken, and every 3.0 game ties with every -3.0 game.
+    assert keys(expected) == [
+        "xfl01",
+        "cfb01",
+        "cfb02",
+        "cfb03",
+        "cfb04",
+        "cfb05",
+        "nfl01",
+        "nfl02",
+        "nfl03",
+        "nfl04",
+        "nfl05",
+        "nfl06",
+    ]
+    assert expected.per_league == {"nfl": 6, "ncaaf": 5, "xfl": 1}
+    assert expected.shortfalls == {"nfl": 2}
+    # Targeted leagues in the order the settings named them, then the fill only
+    # league. Neither alphabetical nor closeness order, so this pins the rule
+    # that makes the whole result reproducible and not merely equal.
+    assert list(expected.per_league) == ["nfl", "ncaaf", "xfl"]
+
+    rng = random.Random(31337)
+    for _ in range(100):
+        shuffled = tie_heavy_pool()
+        rng.shuffle(shuffled)
+        result = select_slate_by_targets(shuffled, targets, total=12, now=NOW)
+
+        assert repr(result) == repr(expected)
+
+
+def test_random_pools_keep_the_ordering_invariants():
+    # A wider net than the hand written cases: whatever the pool, the slate is
+    # in global closeness order, never longer than the total, and within one
+    # league it is always a prefix of that league's own closeness order. That
+    # last one is what an inverted trim or an inverted fill would break.
+    rng = random.Random(90210)
+    spreads = [0.0, 0.5, 1.0, 1.0, 2.5, 3.0, 3.0, 7.5, 10.0, 14.0]
+    leagues = ["nfl", "ncaaf", "xfl"]
+
+    for _ in range(200):
+        candidates = [
+            game(
+                f"g{index:02d}",
+                spread=rng.choice(spreads),
+                league=rng.choice(leagues),
+                hours=float(rng.choice([1, 2, 2, 5, 20])),
+            )
+            for index in range(rng.randint(0, 20))
+        ]
+        targets = {league: rng.randint(0, 6) for league in leagues if rng.random() < 0.8}
+        total = rng.randint(1, 16)
+        result = select_slate_by_targets(candidates, targets, total=total, now=NOW)
+
+        chosen = keys(result)
+        by_key = {candidate.key: candidate for candidate in candidates}
+        order = [
+            candidate.key
+            for candidate in sorted(
+                candidates, key=lambda c: (abs(c.spread_home), c.kickoff, c.key)
+            )
+        ]
+
+        assert len(chosen) <= total
+        assert len(set(chosen)) == len(chosen)
+        # In global order, and short only when the pool itself ran out.
+        assert [order.index(key) for key in chosen] == sorted(order.index(key) for key in chosen)
+        assert len(chosen) == min(total, len(candidates))
+        for league in leagues:
+            league_order = [key for key in order if by_key[key].league == league]
+            taken = [key for key in league_order if key in set(chosen)]
+            assert taken == league_order[: len(taken)]
+
+
 def test_repeated_calls_return_equal_values():
     candidates = rich_pool()
-    first = select_slate_by_targets(
-        candidates, DEFAULT_TARGETS, total=DEFAULT_TOTAL, now=NOW
-    )
-    second = select_slate_by_targets(
-        candidates, DEFAULT_TARGETS, total=DEFAULT_TOTAL, now=NOW
-    )
+    first = select_slate_by_targets(candidates, DEFAULT_TARGETS, total=DEFAULT_TOTAL, now=NOW)
+    second = select_slate_by_targets(candidates, DEFAULT_TARGETS, total=DEFAULT_TOTAL, now=NOW)
 
     assert first == second
 
@@ -876,9 +1059,7 @@ def test_slate_result_field_names_and_order():
         "filled_from_other",
         "notes",
     ]
-    empty = SlateResult(
-        selected=[], per_league={}, shortfalls={}, filled_from_other=0, notes=[]
-    )
+    empty = SlateResult(selected=[], per_league={}, shortfalls={}, filled_from_other=0, notes=[])
     with pytest.raises(dataclasses.FrozenInstanceError):
         empty.filled_from_other = 1
 
@@ -910,7 +1091,16 @@ def test_module_stays_pure():
         elif isinstance(node, ast.ImportFrom) and node.module:
             imported.add(node.module.split(".")[0])
 
-    assert imported <= {"__future__", "dataclasses", "datetime", "math", "typing"}
+    # collections.abc is where the typing ABCs moved to. Still pure stdlib, still no
+    # database and no network, which is the only thing this test is guarding.
+    assert imported <= {
+        "__future__",
+        "collections",
+        "dataclasses",
+        "datetime",
+        "math",
+        "typing",
+    }
 
 
 def test_no_em_dashes_or_emoji_in_the_module():

@@ -41,9 +41,7 @@ def _week_or_none(db: Session, pool: Pool, week_number: int | None) -> Week | No
     if week_number is not None:
         return db.scalar(query.where(Week.week_number == week_number))
     return db.scalar(
-        query.where(Week.status.in_(("draft", "open", "locked"))).order_by(
-            Week.week_number.desc()
-        )
+        query.where(Week.status.in_(("draft", "open", "locked"))).order_by(Week.week_number.desc())
     ) or db.scalar(query.order_by(Week.week_number.desc()))
 
 
@@ -253,7 +251,7 @@ def members_page(
     return render(
         request,
         "admin/members.html",
-        {"members": [(m, u) for m, u in rows]},
+        {"members": list(rows)},
         **_base(db, user, pool),
     )
 
@@ -328,9 +326,7 @@ def slate_page(
 
     if row is not None:
         games = list(db.scalars(select(Game).where(Game.week_id == row.id)))
-        on_slate = sorted(
-            [g for g in games if g.in_slate], key=lambda g: (g.slate_rank or 999)
-        )
+        on_slate = sorted([g for g in games if g.in_slate], key=lambda g: (g.slate_rank or 999))
         candidates = sorted(
             [g for g in games if not g.in_slate],
             key=lambda g: (
@@ -489,7 +485,7 @@ def slate_lock(
         return _redirect(f"/admin/slate?week={row.week_number}")
 
     local = naive.replace(tzinfo=get_zone(pool.timezone))
-    row.lock_at = local.astimezone(dt.timezone.utc)
+    row.lock_at = local.astimezone(dt.UTC)
     row.lock_at_override = True
     db.commit()
     flash(request, "Lock time set.")

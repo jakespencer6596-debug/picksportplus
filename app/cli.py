@@ -38,9 +38,7 @@ def _resolve_pool(db, pool_id: int | None = None) -> Pool:
         return pool
     pool = db.scalars(select(Pool).order_by(Pool.id)).first()
     if pool is None:
-        raise typer.Exit(
-            code=_fail("No pool exists yet. Run: python -m app.cli seed-admin")
-        )
+        raise typer.Exit(code=_fail("No pool exists yet. Run: python -m app.cli seed-admin"))
     return pool
 
 
@@ -127,14 +125,10 @@ def seed_admin() -> None:
             _echo(f"Pool {pool.name} already exists with join code {pool.join_code}.")
 
         member = db.scalar(
-            select(PoolMember).where(
-                PoolMember.pool_id == pool.id, PoolMember.user_id == user.id
-            )
+            select(PoolMember).where(PoolMember.pool_id == pool.id, PoolMember.user_id == user.id)
         )
         if member is None:
-            db.add(
-                PoolMember(pool_id=pool.id, user_id=user.id, role_in_pool="commissioner")
-            )
+            db.add(PoolMember(pool_id=pool.id, user_id=user.id, role_in_pool="commissioner"))
             _echo("Added the admin as commissioner of the pool.")
 
     _echo("")
@@ -288,7 +282,7 @@ def run_cron(
     from app.services.ingest import sync_week
     from app.services.results import fetch_results, score_week_for_pool
 
-    started = dt.datetime.now(dt.timezone.utc)
+    started = dt.datetime.now(dt.UTC)
     with session_scope() as db:
         pools = list(db.scalars(select(Pool).order_by(Pool.id)))
         if pool_id:
@@ -325,7 +319,7 @@ def run_cron(
                 score = score_week_for_pool(db, pool, row)
                 _echo(f"  {score.summary()}")
 
-    elapsed = (dt.datetime.now(dt.timezone.utc) - started).total_seconds()
+    elapsed = (dt.datetime.now(dt.UTC) - started).total_seconds()
     _echo(f"Done in {elapsed:.1f}s.")
 
 
@@ -334,8 +328,10 @@ def usage_cmd() -> None:
     """Show where the metered API budgets stand this month."""
     with session_scope() as db:
         for row in usage_report(db):
-            state = "not configured" if not row["configured"] else (
-                "EXHAUSTED" if row["exhausted"] else "ok"
+            state = (
+                "not configured"
+                if not row["configured"]
+                else ("EXHAUSTED" if row["exhausted"] else "ok")
             )
             _echo(
                 f"{row['label']:<22} {row['period']}  "

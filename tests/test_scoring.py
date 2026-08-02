@@ -60,7 +60,7 @@ def picks_all(team: str, n: int = FULL_SLATE) -> list[PickInput]:
     """One pick per game, all on the same side, confidence n down to 1."""
     return [
         PickInput(game_id=i, picked_team=team, confidence=c)
-        for i, c in zip(range(1, n + 1), confidence_stack(n))
+        for i, c in zip(range(1, n + 1), confidence_stack(n), strict=False)
     ]
 
 
@@ -73,12 +73,8 @@ def test_team_sides_is_the_exported_pair():
 
 def test_dataclass_field_order_is_stable_for_positional_callers():
     # Services construct these positionally, so the order is part of the contract.
-    assert GameOutcome(1, "final", "home") == GameOutcome(
-        game_id=1, status="final", winner="home"
-    )
-    assert PickInput(1, "home", 14) == PickInput(
-        game_id=1, picked_team="home", confidence=14
-    )
+    assert GameOutcome(1, "final", "home") == GameOutcome(game_id=1, status="final", winner="home")
+    assert PickInput(1, "home", 14) == PickInput(game_id=1, picked_team="home", confidence=14)
     assert WeekResult(88, 11, 14) == WeekResult(points=88, correct=11, possible=14)
     assert SeasonEntryInput(88, 11, 14, True) == SeasonEntryInput(
         points=88, correct=11, possible=14, is_winner=True
@@ -168,9 +164,7 @@ def test_mixed_week_hand_computed():
 
 
 def test_unsubmitted_player_scores_zero_against_full_possible():
-    assert score_week([], slate_outcomes()) == WeekResult(
-        points=0, correct=0, possible=14
-    )
+    assert score_week([], slate_outcomes()) == WeekResult(points=0, correct=0, possible=14)
 
 
 def test_tie_game_is_excluded_from_correct_and_possible():
@@ -219,16 +213,12 @@ def test_short_slate_mixed_result():
 
 def test_pick_for_a_game_that_left_the_slate_is_ignored():
     picks = picks_all("home", 3) + [PickInput(99, "home", 50)]
-    assert score_week(picks, slate_outcomes(3)) == WeekResult(
-        points=6, correct=3, possible=3
-    )
+    assert score_week(picks, slate_outcomes(3)) == WeekResult(points=6, correct=3, possible=3)
 
 
 def test_possible_counts_slate_games_the_player_skipped():
     picks = [PickInput(1, "home", 3)]
-    assert score_week(picks, slate_outcomes(3)) == WeekResult(
-        points=3, correct=1, possible=3
-    )
+    assert score_week(picks, slate_outcomes(3)) == WeekResult(points=3, correct=1, possible=3)
 
 
 def test_empty_slate_scores_nothing():
@@ -539,8 +529,7 @@ def test_season_totals_no_entries():
 
 def test_season_totals_accepts_any_iterable():
     entries = (
-        SeasonEntryInput(points=10, correct=2, possible=14, is_winner=False)
-        for _ in range(3)
+        SeasonEntryInput(points=10, correct=2, possible=14, is_winner=False) for _ in range(3)
     )
     assert season_totals(entries) == SeasonTotals(
         points=30, correct=6, possible=42, weeks_played=3, weekly_wins=0

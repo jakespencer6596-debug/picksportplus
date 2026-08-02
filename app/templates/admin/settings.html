@@ -1,0 +1,187 @@
+{% extends "base.html" %}
+{% import "components/icons.html" as ic %}
+{% block title %}Pool settings. {{ APP_NAME }}{% endblock %}
+
+{% block content %}
+{% set plays_nfl = "nfl" in (pool.sports or []) %}
+{% set plays_ncaaf = "ncaaf" in (pool.sports or []) %}
+{% set target_total = (pool.target_nfl if plays_nfl else 0) + (pool.target_ncaaf if plays_ncaaf else 0) %}
+
+<div class="page-head">
+  <div>
+    <p class="eyebrow">Commissioner</p>
+    <h1 class="page-title">Pool settings</h1>
+  </div>
+  <p class="muted">{{ pool.name }}, {{ pool.season_year }} season</p>
+</div>
+
+<nav class="subnav" aria-label="Commissioner tools">
+  <a class="subnav-link" href="/admin">Overview</a>
+  <a class="subnav-link" href="/admin/slate">Slate</a>
+  <a class="subnav-link" href="/admin/members">Members</a>
+  <a class="subnav-link is-active" href="/admin/settings" aria-current="page">Settings</a>
+</nav>
+
+<form method="post" action="/admin/settings" class="stack settings-form">
+
+  <section class="card" aria-labelledby="league-title">
+    <div class="card-head">
+      <h2 id="league-title">The league</h2>
+    </div>
+    <div class="card-body">
+      <div class="field">
+        <label class="field-label" for="name">League name</label>
+        <input class="input" type="text" id="name" name="name" value="{{ pool.name }}"
+               maxlength="120" autocomplete="off" required>
+        <p class="form-hint">Shown in the top bar, the footer and on every standings page.</p>
+      </div>
+
+      <div class="form-row">
+        <div class="field">
+          <label class="field-label" for="season_year">Season year</label>
+          <input class="input num" type="number" id="season_year" name="season_year"
+                 value="{{ pool.season_year }}" min="2000" max="2100" step="1" required>
+          <p class="form-hint">The season the weeks belong to. Change it once a year, in the summer.</p>
+        </div>
+
+        <div class="field">
+          <label class="field-label" for="timezone">Timezone</label>
+          <select class="select" id="timezone" name="timezone">
+            {% for zone in timezones %}
+              <option value="{{ zone }}" {% if zone == pool.timezone %}selected{% endif %}>
+                {{ zone.replace("_", " ") }}{% if zone_label(zone) != zone %} ({{ zone_label(zone) }}){% endif %}
+              </option>
+            {% endfor %}
+            {% if pool.timezone not in timezones %}
+              <option value="{{ pool.timezone }}" selected>{{ pool.timezone.replace("_", " ") }}</option>
+            {% endif %}
+          </select>
+          <p class="form-hint">Kickoffs, lock times and countdowns are shown in this zone for everyone.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="card" aria-labelledby="slate-size-title">
+    <div class="card-head">
+      <h2 id="slate-size-title">Slate size</h2>
+    </div>
+    <div class="card-body">
+      <div class="field">
+        <label class="field-label" for="num_games_per_week">Games per week</label>
+        <input class="input num" type="number" id="num_games_per_week" name="num_games_per_week"
+               value="{{ pool.num_games_per_week }}" min="{{ min_slate }}" max="{{ max_slate }}"
+               step="1" required>
+        <p class="form-hint">
+          Between {{ min_slate }} and {{ max_slate }}. This is the total that lands on the slate,
+          and it is also the top confidence value a player can stake.
+        </p>
+      </div>
+
+      <div class="form-row">
+        <div class="field">
+          <label class="field-label" for="target_nfl">NFL target</label>
+          <input class="input num" type="number" id="target_nfl" name="target_nfl"
+                 value="{{ pool.target_nfl }}" min="0" max="{{ max_slate }}" step="1" required>
+        </div>
+
+        <div class="field">
+          <label class="field-label" for="target_ncaaf">College target</label>
+          <input class="input num" type="number" id="target_ncaaf" name="target_ncaaf"
+                 value="{{ pool.target_ncaaf }}" min="0" max="{{ max_slate }}" step="1" required>
+        </div>
+      </div>
+
+      <p class="form-hint">
+        The per league numbers are targets, not quotas. The tool takes the closest NFL games up to
+        the NFL target and the closest college games up to the college target. If a league is
+        short of games with a usable line that week, the gap is filled with the next closest games
+        from the other league, so the total still lands.
+      </p>
+
+      <div class="flash {% if target_total == pool.num_games_per_week %}flash-ok{% else %}flash-info{% endif %}">
+        {{ ic.icon("check" if target_total == pool.num_games_per_week else "info", 18) }}
+        <span>
+          {% if target_total == pool.num_games_per_week %}
+            As saved, NFL {{ pool.target_nfl if plays_nfl else 0 }} plus college
+            {{ pool.target_ncaaf if plays_ncaaf else 0 }} is {{ target_total }}, which matches the
+            total of {{ pool.num_games_per_week }}. The numbers add up.
+          {% else %}
+            As saved, NFL {{ pool.target_nfl if plays_nfl else 0 }} plus college
+            {{ pool.target_ncaaf if plays_ncaaf else 0 }} is {{ target_total }} against a total of
+            {{ pool.num_games_per_week }}. The slate is
+            {% if target_total < pool.num_games_per_week %}topped up{% else %}trimmed{% endif %}
+            by closeness so the week still lands on {{ pool.num_games_per_week }} games. Save to
+            recheck these numbers.
+          {% endif %}
+        </span>
+      </div>
+
+      <fieldset class="field-group">
+        <legend class="field-label">Leagues in play</legend>
+        <label class="checkbox" for="sports_nfl">
+          <input type="checkbox" id="sports_nfl" name="sports_nfl" value="1"
+                 {% if plays_nfl %}checked{% endif %}>
+          <span>NFL</span>
+        </label>
+        <label class="checkbox" for="sports_ncaaf">
+          <input type="checkbox" id="sports_ncaaf" name="sports_ncaaf" value="1"
+                 {% if plays_ncaaf %}checked{% endif %}>
+          <span>College football, FBS</span>
+        </label>
+        <p class="form-hint">
+          Pick at least one. A league that is switched off is ignored when the slate is built, and
+          its target counts for nothing.
+        </p>
+      </fieldset>
+
+      <p class="form-hint">
+        The size and the games can be changed at any time until the first player submits a pick for
+        that week. After that the count is fixed and only voiding a game is available, so scoring
+        stays consistent.
+      </p>
+    </div>
+  </section>
+
+  <section class="card" aria-labelledby="automation-title">
+    <div class="card-head">
+      <h2 id="automation-title">Automation and access</h2>
+    </div>
+    <div class="card-body">
+      <div class="field">
+        <label class="checkbox" for="auto_publish">
+          <input type="checkbox" id="auto_publish" name="auto_publish" value="1"
+                 {% if pool.auto_publish %}checked{% endif %}>
+          <span>Auto publish the weekly slate</span>
+        </label>
+        <p class="form-hint">
+          On means the tool builds and opens the slate by itself every week, with nothing for you to
+          do. Off means it builds a draft and waits for you to publish it from the slate editor.
+        </p>
+      </div>
+
+      <div class="field">
+        <label class="checkbox" for="open_registration">
+          <input type="checkbox" id="open_registration" name="open_registration" value="1"
+                 {% if pool.open_registration %}checked{% endif %}>
+          <span>Open registration</span>
+        </label>
+        <p class="form-hint">
+          On lets anyone register and join. Off means a join code is required, which is how a
+          private pool stays private. The environment default is currently
+          {{ "on" if env_open_registration else "off" }}, and this switch is the setting for this
+          pool.
+        </p>
+      </div>
+    </div>
+  </section>
+
+  <div class="form-actions">
+    <button class="btn btn-primary" type="submit">Save settings</button>
+    <p class="muted">
+      New settings apply the next time a slate is built. A week that is already built keeps its
+      games.
+    </p>
+  </div>
+</form>
+{% endblock %}

@@ -24,7 +24,7 @@ class Base(DeclarativeBase):
 
 
 def utcnow() -> dt.datetime:
-    return dt.datetime.now(dt.timezone.utc)
+    return dt.datetime.now(dt.UTC)
 
 
 # Status and role values are plain strings rather than SQL enums so that adding a
@@ -49,12 +49,10 @@ class User(Base):
         DateTime(timezone=True), default=utcnow, server_default=func.now(), nullable=False
     )
 
-    memberships: Mapped[list["PoolMember"]] = relationship(
+    memberships: Mapped[list[PoolMember]] = relationship(
         back_populates="user", cascade="all, delete-orphan"
     )
-    picks: Mapped[list["Pick"]] = relationship(
-        back_populates="user", cascade="all, delete-orphan"
-    )
+    picks: Mapped[list[Pick]] = relationship(back_populates="user", cascade="all, delete-orphan")
 
     @property
     def is_admin(self) -> bool:
@@ -77,7 +75,9 @@ class Pool(Base):
     target_nfl: Mapped[int] = mapped_column(Integer, default=8, nullable=False)
     target_ncaaf: Mapped[int] = mapped_column(Integer, default=12, nullable=False)
 
-    sports: Mapped[list[str]] = mapped_column(JSON, default=lambda: ["nfl", "ncaaf"], nullable=False)
+    sports: Mapped[list[str]] = mapped_column(
+        JSON, default=lambda: ["nfl", "ncaaf"], nullable=False
+    )
     auto_publish: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     # Per pool override of the OPEN_REGISTRATION env default, owned by the commissioner.
     open_registration: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
@@ -87,12 +87,10 @@ class Pool(Base):
         DateTime(timezone=True), default=utcnow, server_default=func.now(), nullable=False
     )
 
-    members: Mapped[list["PoolMember"]] = relationship(
+    members: Mapped[list[PoolMember]] = relationship(
         back_populates="pool", cascade="all, delete-orphan"
     )
-    weeks: Mapped[list["Week"]] = relationship(
-        back_populates="pool", cascade="all, delete-orphan"
-    )
+    weeks: Mapped[list[Week]] = relationship(back_populates="pool", cascade="all, delete-orphan")
 
     @property
     def league_targets(self) -> dict[str, int]:
@@ -122,8 +120,8 @@ class PoolMember(Base):
         DateTime(timezone=True), default=utcnow, server_default=func.now(), nullable=False
     )
 
-    pool: Mapped["Pool"] = relationship(back_populates="members")
-    user: Mapped["User"] = relationship(back_populates="memberships")
+    pool: Mapped[Pool] = relationship(back_populates="members")
+    user: Mapped[User] = relationship(back_populates="memberships")
 
     @property
     def is_commissioner(self) -> bool:
@@ -157,11 +155,11 @@ class Week(Base):
         DateTime(timezone=True), default=utcnow, server_default=func.now(), nullable=False
     )
 
-    pool: Mapped["Pool"] = relationship(back_populates="weeks")
-    games: Mapped[list["Game"]] = relationship(
+    pool: Mapped[Pool] = relationship(back_populates="weeks")
+    games: Mapped[list[Game]] = relationship(
         back_populates="week", cascade="all, delete-orphan", order_by="Game.slate_rank"
     )
-    entries: Mapped[list["WeekEntry"]] = relationship(
+    entries: Mapped[list[WeekEntry]] = relationship(
         back_populates="week", cascade="all, delete-orphan"
     )
 
@@ -206,10 +204,8 @@ class Game(Base):
         DateTime(timezone=True), default=utcnow, server_default=func.now(), nullable=False
     )
 
-    week: Mapped["Week"] = relationship(back_populates="games")
-    picks: Mapped[list["Pick"]] = relationship(
-        back_populates="game", cascade="all, delete-orphan"
-    )
+    week: Mapped[Week] = relationship(back_populates="games")
+    picks: Mapped[list[Pick]] = relationship(back_populates="game", cascade="all, delete-orphan")
 
     @property
     def is_final(self) -> bool:
@@ -261,8 +257,8 @@ class Pick(Base):
         DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False
     )
 
-    user: Mapped["User"] = relationship(back_populates="picks")
-    game: Mapped["Game"] = relationship(back_populates="picks")
+    user: Mapped[User] = relationship(back_populates="picks")
+    game: Mapped[Game] = relationship(back_populates="picks")
 
 
 class WeekEntry(Base):
@@ -288,8 +284,8 @@ class WeekEntry(Base):
         DateTime(timezone=True), default=utcnow, server_default=func.now(), nullable=False
     )
 
-    user: Mapped["User"] = relationship()
-    week: Mapped["Week"] = relationship(back_populates="entries")
+    user: Mapped[User] = relationship()
+    week: Mapped[Week] = relationship(back_populates="entries")
 
 
 class FeedCache(Base):

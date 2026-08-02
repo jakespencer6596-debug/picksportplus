@@ -24,9 +24,9 @@ Vocabulary used throughout:
 from __future__ import annotations
 
 import math
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
-from datetime import datetime, timezone
-from typing import Iterable, Mapping, Sequence
+from datetime import UTC, datetime
 
 __all__ = [
     "LEAGUES",
@@ -87,7 +87,13 @@ class SlateResult:
     """Final count per league. Only leagues that actually appear are listed."""
 
     shortfalls: dict[str, int]
-    """League to how many short of its target it came up. Zeroes are omitted."""
+    """League to how many games short of its target the supply came up.
+
+    Measured on the first pass, so it stays a supply signal that the fill cannot
+    erase. A league can also finish under its target because the targets added
+    up to more than the total, which is a separate note and not a shortfall.
+    Zeroes are omitted.
+    """
 
     filled_from_other: int
     """Games in the final set beyond their own league's target."""
@@ -118,9 +124,7 @@ def _require_aware(value: object, label: str) -> datetime:
     if not isinstance(value, datetime):
         raise ValueError(f"{label} must be a datetime, got {type(value).__name__}.")
     if value.tzinfo is None or value.utcoffset() is None:
-        raise ValueError(
-            f"{label} must be timezone aware. Naive datetimes are ambiguous, use UTC."
-        )
+        raise ValueError(f"{label} must be timezone aware. Naive datetimes are ambiguous, use UTC.")
     return value
 
 
@@ -171,6 +175,19 @@ def _league_games(count: int, league: str) -> str:
     return f"{count} {_label(league)} {noun}"
 
 
+def _reason(started: int) -> str:
+    """Why the games that were left out could not be used.
+
+    The started game filter runs on every live week, so a league can come up
+    short with every spread resolved, purely because its games have kicked off.
+    Blaming the spread there would send the commissioner hunting for a missing
+    line that is not missing. Worded to follow a count, singular or plural.
+    """
+    if started:
+        return "had a spread and had not kicked off"
+    return "had a resolvable spread"
+
+
 def _join(labels: Sequence[str]) -> str:
     """Join labels as college, or college and NFL, or college, NFL and XFL."""
     if not labels:
@@ -185,6 +202,8 @@ def _build_notes(
     shortfalls: Mapping[str, int],
     first_pass: Mapping[str, int],
     per_league: Mapping[str, int],
+    started: Mapping[str, int],
+    started_total: int,
     filled_from_other: int,
     filled: int,
     dropped: int,
@@ -197,15 +216,14 @@ def _build_notes(
 
     for league, short in shortfalls.items():
         notes.append(
-            f"Only {_league_games(first_pass.get(league, 0), league)} had a "
-            f"resolvable spread, {short} short of the target of {targets[league]}."
+            f"Only {_league_games(first_pass.get(league, 0), league)} "
+            f"{_reason(started.get(league, 0))}, {short} short of the target of "
+            f"{targets[league]}."
         )
 
     if shortfalls and filled_from_other:
         over = [
-            _label(league)
-            for league, count in per_league.items()
-            if count > targets.get(league, 0)
+            _label(league) for league, count in per_league.items() if count > targets.get(league, 0)
         ]
         noun = "game" if filled_from_other == 1 else "games"
         notes.append(f"The gap was filled with the next closest {_join(over)} {noun}.")
@@ -229,7 +247,7 @@ def _build_notes(
     if final_count < total:
         notes.append(
             f"The slate came up {_games(total - final_count)} short of {total} "
-            f"because only {_games(eligible_count)} had a resolvable spread."
+            f"because only {_games(eligible_count)} {_reason(started_total)}."
         )
 
     return notes
@@ -237,7 +255,7 @@ def _build_notes(
 
 def select_slate_by_targets(
     candidates: Iterable[Candidate],
-    targets: Mapping[str, int],
+    targets: Mapping[str, int] | None,
     total: int,
     now: datetime | None = None,
     exclude_started: bool = True,
@@ -248,7 +266,9 @@ def select_slate_by_targets(
     to its target. If that leaves the slate short of total, the remaining
     eligible games fill it in global closeness order, which is what lets a thin
     NFL week still publish a full slate. If the targets add up to more than the
-    total, the farthest games are dropped until exactly total remain.
+    total, the farthest games are dropped until exactly total remain. An empty
+    targets mapping, or None, means no per league targets at all, so the whole
+    slate comes from that global fill.
 
     Returns at most total games. Fewer is valid and expected when supply is
     genuinely short, for example a light week where most games have no
@@ -277,16 +297,23 @@ def select_slate_by_targets(
         _require_aware(candidate.kickoff, f"kickoff for candidate {candidate.key!r}")
 
     if exclude_started:
-        cutoff = now if now is not None else datetime.now(timezone.utc)
+        cutoff = now if now is not None else datetime.now(UTC)
     else:
         cutoff = None
 
-    eligible = [
-        candidate
-        for candidate in candidates
-        if closeness_of(candidate.spread_home) is not None
-        and (cutoff is None or candidate.kickoff > cutoff)
-    ]
+    # Games are dropped for two different reasons and the notes have to tell them
+    # apart, so count the ones the clock took rather than the bookmakers.
+    eligible: list[Candidate] = []
+    started: dict[str, int] = {}
+    started_total = 0
+    for candidate in candidates:
+        if closeness_of(candidate.spread_home) is None:
+            continue
+        if cutoff is not None and candidate.kickoff <= cutoff:
+            started[candidate.league] = started.get(candidate.league, 0) + 1
+            started_total += 1
+            continue
+        eligible.append(candidate)
 
     # One entry per key, keeping the closest, in global order.
     ordered: list[Candidate] = []
@@ -355,8 +382,7 @@ def select_slate_by_targets(
             shortfalls[league] = short
 
     filled_from_other = sum(
-        max(0, count - parsed_targets.get(league, 0))
-        for league, count in per_league.items()
+        max(0, count - parsed_targets.get(league, 0)) for league, count in per_league.items()
     )
 
     notes = _build_notes(
@@ -364,6 +390,8 @@ def select_slate_by_targets(
         shortfalls=shortfalls,
         first_pass=first_pass,
         per_league=per_league,
+        started=started,
+        started_total=started_total,
         filled_from_other=filled_from_other,
         filled=filled,
         dropped=dropped,
@@ -388,12 +416,8 @@ def compute_lock_at(kickoffs: Sequence[datetime]) -> datetime | None:
         return None
     for value in values:
         if not isinstance(value, datetime):
-            raise ValueError(
-                f"kickoffs must all be datetimes, got {type(value).__name__}."
-            )
+            raise ValueError(f"kickoffs must all be datetimes, got {type(value).__name__}.")
     try:
         return min(values)
     except TypeError as exc:  # naive and aware datetimes mixed together
-        raise ValueError(
-            "kickoffs must all be timezone aware or all naive, not a mix."
-        ) from exc
+        raise ValueError("kickoffs must all be timezone aware or all naive, not a mix.") from exc

@@ -49,7 +49,7 @@ UPCOMING_EVENT = "401873271"
 
 RECORD_RE = re.compile(r"^\d+-\d+(-\d+)?$")
 
-UTC = dt.timezone.utc
+UTC = dt.UTC
 
 
 # Helpers --------------------------------------------------------------------
@@ -92,9 +92,7 @@ def _synthetic_event(
                     _competitor(
                         "home", "KC", "Kansas City Chiefs", home_score, **(home_extra or {})
                     ),
-                    _competitor(
-                        "away", "DEN", "Denver Broncos", away_score, **(away_extra or {})
-                    ),
+                    _competitor("away", "DEN", "Denver Broncos", away_score, **(away_extra or {})),
                 ],
             }
         ],
@@ -571,9 +569,7 @@ def test_current_week_can_be_asked_for_the_postseason(load_fixture):
     payload = load_fixture(NFL_UPCOMING)
     now = dt.datetime(2027, 1, 15, 12, 0, tzinfo=UTC)
 
-    week = espn.current_week_from_payload(
-        payload, now=now, season_type=espn.SEASON_TYPE_POSTSEASON
-    )
+    week = espn.current_week_from_payload(payload, now=now, season_type=espn.SEASON_TYPE_POSTSEASON)
 
     assert week is not None
     assert week.season_type == espn.SEASON_TYPE_POSTSEASON
@@ -741,9 +737,7 @@ def test_one_malformed_event_does_not_lose_the_rest_of_the_week(load_fixture):
     games = espn.parse_scoreboard(payload, "nfl")
 
     assert len(games) == good
-    assert {g.event_id for g in games} == {
-        e["id"] for e in load_fixture(NFL_W5)["events"]
-    }
+    assert {g.event_id for g in games} == {e["id"] for e in load_fixture(NFL_W5)["events"]}
 
 
 @pytest.mark.parametrize("payload", [None, [], "nope", 7, {}, {"events": None}])
@@ -1019,9 +1013,7 @@ def test_fetch_core_odds_calls_fetch_json_unmetered_and_caches_for_a_month(
     assert call.get("params") is None
 
 
-def test_detect_current_week_calls_fetch_json_unmetered_with_an_hour_ttl(
-    monkeypatch, load_fixture
-):
+def test_detect_current_week_calls_fetch_json_unmetered_with_an_hour_ttl(monkeypatch, load_fixture):
     calls = _capture_fetch_json(monkeypatch, load_fixture(NFL_UPCOMING))
 
     espn.detect_current_week(None, "nfl", 2026, now=dt.datetime(2026, 9, 20, tzinfo=UTC))
@@ -1035,9 +1027,7 @@ def test_detect_current_week_calls_fetch_json_unmetered_with_an_hour_ttl(
     assert call["ttl_minutes"] == 60
 
 
-def test_detect_current_week_without_a_year_uses_the_current_cache_key(
-    monkeypatch, load_fixture
-):
+def test_detect_current_week_without_a_year_uses_the_current_cache_key(monkeypatch, load_fixture):
     calls = _capture_fetch_json(monkeypatch, load_fixture(NFL_UPCOMING))
 
     espn.detect_current_week(None, "ncaaf")

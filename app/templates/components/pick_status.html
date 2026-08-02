@@ -1,0 +1,26 @@
+{% import "components/icons.html" as ic %}
+{#
+  Swapped into [data-save-target] on the picks page. Keep it small.
+  app.js reads data-saved-at off the success chip and copies it into the save state badge.
+#}
+{% if errors %}
+<div class="form-error" role="alert">
+  <p><strong>Nothing saved. Fix this and save again.</strong></p>
+  <ul class="error-list">
+    {% for e in errors %}<li>{{ e }}</li>{% endfor %}
+  </ul>
+  <p class="form-hint">
+    Every game needs a winner, and each point value from 1 to {{ n }} is used exactly once.
+  </p>
+</div>
+{% elif saved %}
+{% if saved_at %}
+  {% set stamp = "Saved at " ~ (saved_at | localtime(tz)).strftime("%I:%M %p").lstrip("0") %}
+{% else %}
+  {% set stamp = "Saved" %}
+{% endif %}
+<div class="flash flash-ok" role="status" data-saved-at="{{ stamp }}">
+  {{ ic.icon("check", 18) }}
+  <span>Picks are in. All {{ n }} {{ n | pluralize("game") }} ranked. {{ stamp }}.</span>
+</div>
+{% endif %}

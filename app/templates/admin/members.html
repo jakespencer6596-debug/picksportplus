@@ -1,0 +1,150 @@
+{% extends "base.html" %}
+{% import "components/icons.html" as ic %}
+{% block title %}Members. {{ APP_NAME }}{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <div>
+    <p class="eyebrow">Commissioner</p>
+    <h1 class="page-title">Members</h1>
+  </div>
+  <p class="muted">
+    {{ members | length }} {{ members | length | pluralize("member", "members") }} in {{ pool.name }}
+  </p>
+</div>
+
+<nav class="subnav" aria-label="Commissioner tools">
+  <a class="subnav-link" href="/admin">Overview</a>
+  <a class="subnav-link" href="/admin/slate">Slate</a>
+  <a class="subnav-link is-active" href="/admin/members" aria-current="page">Members</a>
+  <a class="subnav-link" href="/admin/settings">Settings</a>
+</nav>
+
+<section class="section" aria-labelledby="join-code-title">
+  <h2 class="section-title" id="join-code-title">Join code</h2>
+
+  <div class="card">
+    <div class="card-body">
+      <p class="eyebrow">The code for {{ pool.name }}</p>
+      <p class="join-code num">{{ pool.join_code }}</p>
+      <p class="form-hint">
+        A new player enters this when they register, and an existing player enters it on the join
+        page. Read it out loud, it has no ambiguous characters in it.
+      </p>
+
+      <div class="join-code-actions">
+        <form method="post" action="/admin/join-code" class="inline-form">
+          <button class="btn btn-secondary" type="submit">
+            {{ ic.icon("refresh", 18) }}<span>Generate a new code</span>
+          </button>
+          <p class="form-hint">
+            A new code retires the old one straight away. Anyone still holding the old one will not
+            get in.
+          </p>
+        </form>
+
+        <form method="post" action="/admin/join-code/set" class="join-code-set">
+          <div class="field">
+            <label class="field-label" for="join_code">Set a code by hand</label>
+            <input class="input input-code" type="text" id="join_code" name="join_code"
+                   value="{{ pool.join_code }}" minlength="4" maxlength="40"
+                   autocomplete="off" spellcheck="false" required>
+            <p class="form-hint">At least 4 characters. Spaces are dropped and it is stored uppercase.</p>
+          </div>
+          <button class="btn btn-primary" type="submit">Save this code</button>
+        </form>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="section" aria-labelledby="roster-title">
+  <h2 class="section-title" id="roster-title">The roster</h2>
+
+  <div class="flash flash-info" id="remove-warning">
+    {{ ic.icon("alert", 18) }}
+    <span>
+      Removing a member deletes every pick they have made and every weekly result they hold, for the
+      whole season, and the standings recalculate without them. There is no undo. If you only want
+      someone to stop playing, leave them on the roster.
+    </span>
+  </div>
+
+  {% if members %}
+    <div class="table-wrap">
+      <table class="table">
+        <thead>
+          <tr>
+            <th scope="col">Player</th>
+            <th scope="col">Email</th>
+            <th scope="col">Role</th>
+            <th scope="col">Joined</th>
+            <th scope="col">Actions</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for member, player in members %}
+            {% set is_me = current_user and player.id == current_user.id %}
+            <tr>
+              <td data-label="Player">
+                <span class="member-name">{{ player.display_name }}</span>
+                {% if is_me %}<span class="pill">You</span>{% endif %}
+                {% if not player.is_active %}<span class="badge badge-void">Suspended</span>{% endif %}
+              </td>
+              <td data-label="Email">
+                <a class="member-email" href="mailto:{{ player.email }}">{{ player.email }}</a>
+              </td>
+              <td data-label="Role">
+                {% if member.is_commissioner %}
+                  <span class="badge badge-commissioner">Commissioner</span>
+                {% else %}
+                  <span class="badge badge-member">Member</span>
+                {% endif %}
+                {% if player.role == "admin" %}<span class="pill">Site admin</span>{% endif %}
+              </td>
+              <td data-label="Joined">
+                {{ member.joined_at | shortdate(tz) }}, {{ (member.joined_at | localtime(tz)).year }}
+              </td>
+              <td data-label="Actions" class="cell-actions">
+                <form method="post" action="/admin/members/{{ member.id }}/role" class="inline-form">
+                  <input type="hidden" name="role"
+                         value="{% if member.is_commissioner %}member{% else %}commissioner{% endif %}">
+                  <button class="btn btn-secondary btn-sm" type="submit">
+                    {% if member.is_commissioner %}Make a member{% else %}Make commissioner{% endif %}
+                    <span class="visually-hidden">, {{ player.display_name }}</span>
+                  </button>
+                </form>
+
+                {% if is_me %}
+                  <span class="cell-note muted">You cannot remove yourself from the pool.</span>
+                {% else %}
+                  <form method="post" action="/admin/members/{{ member.id }}/remove" class="inline-form">
+                    <button class="btn btn-danger btn-sm" type="submit" aria-describedby="remove-warning">
+                      Remove<span class="visually-hidden"> {{ player.display_name }}</span>
+                    </button>
+                    <span class="cell-note muted">This deletes their picks.</span>
+                  </form>
+                {% endif %}
+              </td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+
+    <p class="form-hint">
+      A commissioner can build slates, edit them, and change every setting on this page. Promote
+      carefully, and keep at least one commissioner in the pool.
+    </p>
+  {% else %}
+    <div class="empty-state">
+      {{ ic.icon("users", 28) }}
+      <h3 class="empty-state-title">Nobody has joined yet</h3>
+      <p>
+        Send the join code above to your players. They register with it and land straight in
+        {{ pool.name }}, ready for the first slate.
+      </p>
+    </div>
+  {% endif %}
+</section>
+{% endblock %}
