@@ -2257,6 +2257,15 @@ button.team-btn:not([disabled]):not(.is-picked):hover {
    ========================================================================== */
 
 .table-wrap {
+  /* Positioned so it is the containing block for everything inside it. Every
+     table in this app carries a visually hidden caption, and the results grid
+     puts a visually hidden sentence in every cell. .visually-hidden is
+     position: absolute, so without this their containing block is the page
+     itself: on a grid wider than the window they land past the right edge,
+     escape the overflow below and scroll the whole page sideways. Measured at
+     768px on the results page before this line went in: the document scrolled
+     53px. */
+  position: relative;
   width: 100%;
 }
 
@@ -3047,7 +3056,7 @@ button.team-btn:not([disabled]):not(.is-picked):hover {
   color: var(--decor-soft);      /* 7.49:1 on green */
 }
 
-/* -- Week summary panel --------------------------------------------------- */
+/* -- Week summary panel -------------------------------------------------- */
 
 .week-summary { margin-bottom: var(--space-4); }
 
@@ -3056,7 +3065,7 @@ button.team-btn:not([disabled]):not(.is-picked):hover {
   font-variant-numeric: tabular-nums;
 }
 
-/* -- Provider budgets ----------------------------------------------------- */
+/* -- Provider budgets ---------------------------------------------------- */
 
 .budget-intro {
   margin-bottom: var(--space-4);
@@ -3134,7 +3143,7 @@ button.team-btn:not([disabled]):not(.is-picked):hover {
   background: var(--accent);
 }
 
-/* -- Join code ------------------------------------------------------------ */
+/* -- Join code ----------------------------------------------------------- */
 
 .join-code {
   margin: 0;
@@ -3170,7 +3179,7 @@ button.team-btn:not([disabled]):not(.is-picked):hover {
   margin-bottom: 0;
 }
 
-/* -- Slate tables --------------------------------------------------------- */
+/* -- Slate tables -------------------------------------------------------- */
 
 .matchup {
   display: inline-flex;
@@ -3195,7 +3204,7 @@ button.team-btn:not([disabled]):not(.is-picked):hover {
   color: var(--text-muted);
 }
 
-/* -- Members -------------------------------------------------------------- */
+/* -- Members ------------------------------------------------------------- */
 
 .member-name { font-weight: 600; }
 
@@ -3488,7 +3497,6 @@ button.team-btn:not([disabled]):not(.is-picked):hover {
 
   .cell-note {
     display: inline-block;
-    flex: none;
     vertical-align: middle;
   }
 

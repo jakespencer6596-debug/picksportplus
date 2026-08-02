@@ -585,6 +585,43 @@ def test_voiding_stays_available_after_picks_exist(client, world, session_factor
     db.close()
 
 
+def test_validation_errors_can_actually_reach_the_browser():
+    """htmx does not swap a 4xx by default, so this wiring is load bearing.
+
+    Without the document level htmx:beforeSwap handler the server's validation messages
+    are computed, returned, and then silently dropped: the player sees a "Not saved" chip
+    and no reason. It has to be a document listener, because on an error response htmx
+    dispatches beforeSwap at the target rather than at the element that triggered the
+    request, so the same code as an hx-on attribute on the save button never runs.
+    """
+    from app.templating import STATIC_DIR, TEMPLATES_DIR
+
+    app_js = (STATIC_DIR / "app.js").read_text(encoding="utf-8")
+    assert 'document.addEventListener("htmx:beforeSwap"' in app_js
+    assert "shouldSwap = true" in app_js
+
+    picks = (TEMPLATES_DIR / "picks.html").read_text(encoding="utf-8")
+    assert "hx-on::before-swap" not in picks, (
+        "An hx-on::before-swap handler on the save button never fires for a 4xx. "
+        "Keep this in app.js as a document level listener."
+    )
+
+
+def test_the_error_partial_lists_each_problem_separately(client, world):
+    """The partial the browser swaps in must name every problem, not just the first."""
+    _login(client, "player@example.com")
+    data = _valid_submission(world["game_ids"])
+    first, second = world["game_ids"][0], world["game_ids"][1]
+    data[f"confidence-{second}"] = data[f"confidence-{first}"]
+
+    response = client.post("/picks", data=data, headers={"HX-Request": "true"})
+    assert response.status_code == 400
+    assert response.text.count("<li>") >= 2
+    assert 'role="alert"' in response.text
+    assert "used twice" in response.text
+    assert "is not used" in response.text
+
+
 def test_join_code_rotation_invalidates_the_old_code(client, world, session_factory):
     _login(client, "boss@example.com")
     response = client.post("/admin/join-code")

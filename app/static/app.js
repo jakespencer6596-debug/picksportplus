@@ -186,12 +186,38 @@
     init();
   }
 
-  /* HTMX save feedback. The server returns the summary partial. */
-  document.body && document.body.addEventListener("htmx:afterSwap", function (e) {
-    if (e.target && e.target.matches("[data-save-target]")) {
-      var el = e.target.querySelector("[data-saved-at]");
-      markSaved(el ? el.dataset.savedAt : "Saved");
+  /* htmx does not swap a 4xx response by default, so without this the server's validation
+     messages never reach the player: they would see only a small "Not saved" chip and no
+     explanation of what was wrong. Our validation replies are 400, and a lock that closed
+     mid-session is 403, so force the swap for client errors and let 5xx fall through to
+     htmx's own error handling.
+
+     This has to be a document level listener. On an error response htmx dispatches
+     htmx:beforeSwap at the target, not at the element that triggered the request, so the
+     same handler written as hx-on::before-swap on the save button never fires. */
+  document.addEventListener("htmx:beforeSwap", function (e) {
+    var xhr = e.detail && e.detail.xhr;
+    if (xhr && xhr.status >= 400 && xhr.status < 500) {
+      e.detail.shouldSwap = true;
+      e.detail.isError = false;
     }
+  });
+
+  /* HTMX save feedback. The server returns the summary partial. */
+  document.addEventListener("htmx:afterSwap", function (e) {
+    if (!e.target || !e.target.matches("[data-save-target]")) return;
+    var xhr = e.detail && e.detail.xhr;
+    if (xhr && xhr.status >= 400) {
+      /* The swapped partial already lists what is wrong. Only correct the chip. */
+      var badge = document.querySelector("[data-save-state]");
+      if (badge) {
+        badge.textContent = "Not saved";
+        badge.className = "save-state is-error";
+      }
+      return;
+    }
+    var el = e.target.querySelector("[data-saved-at]");
+    markSaved(el ? el.dataset.savedAt : "Saved");
   });
 
   document.addEventListener("htmx:beforeRequest", function (e) {

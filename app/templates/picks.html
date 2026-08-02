@@ -258,9 +258,9 @@
                 hx-post="/picks"
                 hx-target="[data-save-target]"
                 hx-swap="innerHTML"
-                hx-include="closest form"
-                hx-on::before-swap="if (event.detail.xhr.status >= 400) { event.detail.shouldSwap = true; event.detail.isError = false; }"
-                hx-on::after-request="if (event.detail.xhr.status >= 400) { var s = document.querySelector('[data-save-state]'); if (s) { s.textContent = 'Not saved'; s.className = 'save-state is-error'; } }">
+                hx-include="closest form">
+          {# Error handling lives in app.js. htmx dispatches beforeSwap at the target,
+             not at this button, so an hx-on handler here would never fire for a 4xx. #}
           {{ ic.icon("check", 18) }}<span>Save picks</span>
         </button>
       </div>
