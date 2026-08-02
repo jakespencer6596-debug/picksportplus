@@ -1,0 +1,27 @@
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+*.db
+*.db-journal
+*.sqlite3
+.env
+.env.*
+!.env.example
+
+# API key drops. These files hold live secrets and must never be pushed.
+CFBD_APIKEY.txt
+OddsAPI_APIKey.txt
+*APIKey*.txt
+*APIKEY*.txt
+*apikey*.txt
+*api_key*.txt
+*.key
+secrets/
+.cache/
+*.log
+.DS_Store
+Thumbs.db

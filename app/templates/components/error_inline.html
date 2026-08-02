@@ -1,0 +1,5 @@
+{% import "components/icons.html" as ic %}
+<div class="flash flash-error" role="alert">
+  {{ ic.icon("alert", 18) }}
+  <span>{{ detail or "That did not save. Try again." }}</span>
+</div>

@@ -1,0 +1,41 @@
+{% extends "base.html" %}
+{% block title %}Sign in. {{ APP_NAME }}{% endblock %}
+{% block body_class %}page-auth{% endblock %}
+
+{% block content %}
+<div class="auth-wrap">
+  <div class="card auth-card">
+    <div class="card-body">
+      <p class="eyebrow">Members</p>
+      <h1 class="page-title">Sign in</h1>
+      <p class="muted auth-intro">Pick the closest games. Rank your confidence. Take the week.</p>
+
+      {% if error %}
+        <div class="form-error" role="alert">{{ error }}</div>
+      {% endif %}
+
+      <form method="post" action="/login" class="stack" novalidate>
+        <input type="hidden" name="next" value="{{ next }}">
+
+        <div class="field">
+          <label class="field-label" for="email">Email</label>
+          <input class="input" type="email" id="email" name="email" value="{{ email }}"
+                 autocomplete="username" required autofocus>
+        </div>
+
+        <div class="field">
+          <label class="field-label" for="password">Password</label>
+          <input class="input" type="password" id="password" name="password"
+                 autocomplete="current-password" required>
+        </div>
+
+        <button class="btn btn-primary" type="submit">Sign in</button>
+      </form>
+
+      <p class="auth-alt muted">
+        New here? <a href="/register">Create an account</a> with your pool join code.
+      </p>
+    </div>
+  </div>
+</div>
+{% endblock %}

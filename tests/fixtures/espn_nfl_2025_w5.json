@@ -1,0 +1,1646 @@
+{
+ "leagues": [
+  {
+   "id": "28",
+   "abbreviation": "NFL",
+   "season": {
+    "year": 2025,
+    "startDate": "2025-07-31T07:00Z",
+    "endDate": "2026-02-12T07:59Z",
+    "displayName": "2025",
+    "type": {
+     "id": "2",
+     "type": 2,
+     "name": "Regular Season",
+     "abbreviation": "reg"
+    }
+   },
+   "calendar": [
+    {
+     "label": "Preseason",
+     "value": "1",
+     "startDate": "2025-07-31T07:00Z",
+     "endDate": "2025-09-04T06:59Z",
+     "entries": [
+      {
+       "label": "Hall of Fame Weekend",
+       "alternateLabel": "HOF",
+       "detail": "Jul 31-Aug 6",
+       "value": "1",
+       "startDate": "2025-07-31T07:00Z",
+       "endDate": "2025-08-07T06:59Z"
+      },
+      {
+       "label": "Preseason Week 1",
+       "alternateLabel": "Pre Wk 1",
+       "detail": "Aug 7-13",
+       "value": "2",
+       "startDate": "2025-08-07T07:00Z",
+       "endDate": "2025-08-14T06:59Z"
+      },
+      {
+       "label": "Preseason Week 2",
+       "alternateLabel": "Pre Wk 2",
+       "detail": "Aug 14-20",
+       "value": "3",
+       "startDate": "2025-08-14T07:00Z",
+       "endDate": "2025-08-21T06:59Z"
+      },
+      {
+       "label": "Preseason Week 3",
+       "alternateLabel": "Pre Wk 3",
+       "detail": "Aug 21-Sep 3",
+       "value": "4",
+       "startDate": "2025-08-21T07:00Z",
+       "endDate": "2025-09-04T06:59Z"
+      }
+     ]
+    },
+    {
+     "label": "Regular Season",
+     "value": "2",
+     "startDate": "2025-09-04T07:00Z",
+     "endDate": "2026-01-07T07:59Z",
+     "entries": [
+      {
+       "label": "Week 1",
+       "alternateLabel": "Week 1",
+       "detail": "Sep 4-9",
+       "value": "1",
+       "startDate": "2025-09-04T07:00Z",
+       "endDate": "2025-09-10T06:59Z"
+      },
+      {
+       "label": "Week 2",
+       "alternateLabel": "Week 2",
+       "detail": "Sep 10-16",
+       "value": "2",
+       "startDate": "2025-09-10T07:00Z",
+       "endDate": "2025-09-17T06:59Z"
+      },
+      {
+       "label": "Week 3",
+       "alternateLabel": "Week 3",
+       "detail": "Sep 17-23",
+       "value": "3",
+       "startDate": "2025-09-17T07:00Z",
+       "endDate": "2025-09-24T06:59Z"
+      },
+      {
+       "label": "Week 4",
+       "alternateLabel": "Week 4",
+       "detail": "Sep 24-30",
+       "value": "4",
+       "startDate": "2025-09-24T07:00Z",
+       "endDate": "2025-10-01T06:59Z"
+      },
+      {
+       "label": "Week 5",
+       "alternateLabel": "Week 5",
+       "detail": "Oct 1-7",
+       "value": "5",
+       "startDate": "2025-10-01T07:00Z",
+       "endDate": "2025-10-08T06:59Z"
+      },
+      {
+       "label": "Week 6",
+       "alternateLabel": "Week 6",
+       "detail": "Oct 8-14",
+       "value": "6",
+       "startDate": "2025-10-08T07:00Z",
+       "endDate": "2025-10-15T06:59Z"
+      },
+      {
+       "label": "Week 7",
+       "alternateLabel": "Week 7",
+       "detail": "Oct 15-21",
+       "value": "7",
+       "startDate": "2025-10-15T07:00Z",
+       "endDate": "2025-10-22T06:59Z"
+      },
+      {
+       "label": "Week 8",
+       "alternateLabel": "Week 8",
+       "detail": "Oct 22-28",
+       "value": "8",
+       "startDate": "2025-10-22T07:00Z",
+       "endDate": "2025-10-29T06:59Z"
+      },
+      {
+       "label": "Week 9",
+       "alternateLabel": "Week 9",
+       "detail": "Oct 29-Nov 4",
+       "value": "9",
+       "startDate": "2025-10-29T07:00Z",
+       "endDate": "2025-11-05T07:59Z"
+      },
+      {
+       "label": "Week 10",
+       "alternateLabel": "Week 10",
+       "detail": "Nov 5-11",
+       "value": "10",
+       "startDate": "2025-11-05T08:00Z",
+       "endDate": "2025-11-12T07:59Z"
+      },
+      {
+       "label": "Week 11",
+       "alternateLabel": "Week 11",
+       "detail": "Nov 12-18",
+       "value": "11",
+       "startDate": "2025-11-12T08:00Z",
+       "endDate": "2025-11-19T07:59Z"
+      },
+      {
+       "label": "Week 12",
+       "alternateLabel": "Week 12",
+       "detail": "Nov 19-25",
+       "value": "12",
+       "startDate": "2025-11-19T08:00Z",
+       "endDate": "2025-11-26T07:59Z"
+      },
+      {
+       "label": "Week 13",
+       "alternateLabel": "Week 13",
+       "detail": "Nov 26-Dec 2",
+       "value": "13",
+       "startDate": "2025-11-26T08:00Z",
+       "endDate": "2025-12-03T07:59Z"
+      },
+      {
+       "label": "Week 14",
+       "alternateLabel": "Week 14",
+       "detail": "Dec 3-9",
+       "value": "14",
+       "startDate": "2025-12-03T08:00Z",
+       "endDate": "2025-12-10T07:59Z"
+      },
+      {
+       "label": "Week 15",
+       "alternateLabel": "Week 15",
+       "detail": "Dec 10-16",
+       "value": "15",
+       "startDate": "2025-12-10T08:00Z",
+       "endDate": "2025-12-17T07:59Z"
+      },
+      {
+       "label": "Week 16",
+       "alternateLabel": "Week 16",
+       "detail": "Dec 17-23",
+       "value": "16",
+       "startDate": "2025-12-17T08:00Z",
+       "endDate": "2025-12-24T07:59Z"
+      },
+      {
+       "label": "Week 17",
+       "alternateLabel": "Week 17",
+       "detail": "Dec 24-30",
+       "value": "17",
+       "startDate": "2025-12-24T08:00Z",
+       "endDate": "2025-12-31T07:59Z"
+      },
+      {
+       "label": "Week 18",
+       "alternateLabel": "Week 18",
+       "detail": "Dec 31-Jan 6",
+       "value": "18",
+       "startDate": "2025-12-31T08:00Z",
+       "endDate": "2026-01-07T07:59Z"
+      }
+     ]
+    },
+    {
+     "label": "Postseason",
+     "value": "3",
+     "startDate": "2026-01-07T08:00Z",
+     "endDate": "2026-02-12T07:59Z",
+     "entries": [
+      {
+       "label": "Wild Card",
+       "alternateLabel": "Wild Card",
+       "detail": "Jan 7-13",
+       "value": "1",
+       "startDate": "2026-01-07T08:00Z",
+       "endDate": "2026-01-14T07:59Z"
+      },
+      {
+       "label": "Divisional Round",
+       "alternateLabel": "Div Rd",
+       "detail": "Jan 14-20",
+       "value": "2",
+       "startDate": "2026-01-14T08:00Z",
+       "endDate": "2026-01-21T07:59Z"
+      },
+      {
+       "label": "Conference Championship",
+       "alternateLabel": "Conf Champ",
+       "detail": "Jan 21-27",
+       "value": "3",
+       "startDate": "2026-01-21T08:00Z",
+       "endDate": "2026-01-28T07:59Z"
+      },
+      {
+       "label": "Pro Bowl",
+       "alternateLabel": "Pro Bowl",
+       "detail": "Jan 28-Feb 3",
+       "value": "4",
+       "startDate": "2026-01-28T08:00Z",
+       "endDate": "2026-02-04T07:59Z"
+      },
+      {
+       "label": "Super Bowl",
+       "alternateLabel": "Super Bowl",
+       "detail": "Feb 4-11",
+       "value": "5",
+       "startDate": "2026-02-04T08:00Z",
+       "endDate": "2026-02-12T07:59Z"
+      }
+     ]
+    },
+    {
+     "label": "Off Season",
+     "value": "4",
+     "startDate": "2026-02-12T08:00Z",
+     "endDate": "2026-08-06T06:59Z",
+     "entries": [
+      {
+       "label": "Week 1",
+       "alternateLabel": "Week 1",
+       "detail": "Feb 12-Aug 5",
+       "value": "1",
+       "startDate": "2026-02-12T08:00Z",
+       "endDate": "2026-08-06T06:59Z"
+      }
+     ]
+    }
+   ]
+  }
+ ],
+ "season": {
+  "type": 2,
+  "year": 2025
+ },
+ "week": {
+  "number": 5,
+  "teamsOnBye": [
+   {
+    "id": "1",
+    "uid": "s:20~l:28~t:1",
+    "location": "Atlanta",
+    "name": "Falcons",
+    "abbreviation": "ATL",
+    "displayName": "Atlanta Falcons",
+    "shortDisplayName": "Falcons",
+    "isActive": true,
+    "links": [
+     {
+      "rel": [
+       "clubhouse",
+       "desktop",
+       "team"
+      ],
+      "href": "https://www.espn.com/nfl/team/_/name/atl/atlanta-falcons",
+      "text": "Clubhouse",
+      "isExternal": false,
+      "isPremium": false
+     }
+    ],
+    "logo": "https://a.espncdn.com/i/teamlogos/nfl/500/scoreboard/atl.png"
+   },
+   {
+    "id": "3",
+    "uid": "s:20~l:28~t:3",
+    "location": "Chicago",
+    "name": "Bears",
+    "abbreviation": "CHI",
+    "displayName": "Chicago Bears",
+    "shortDisplayName": "Bears",
+    "isActive": true,
+    "links": [
+     {
+      "rel": [
+       "clubhouse",
+       "desktop",
+       "team"
+      ],
+      "href": "https://www.espn.com/nfl/team/_/name/chi/chicago-bears",
+      "text": "Clubhouse",
+      "isExternal": false,
+      "isPremium": false
+     }
+    ],
+    "logo": "https://a.espncdn.com/i/teamlogos/nfl/500/scoreboard/chi.png"
+   },
+   {
+    "id": "9",
+    "uid": "s:20~l:28~t:9",
+    "location": "Green Bay",
+    "name": "Packers",
+    "abbreviation": "GB",
+    "displayName": "Green Bay Packers",
+    "shortDisplayName": "Packers",
+    "isActive": true,
+    "links": [
+     {
+      "rel": [
+       "clubhouse",
+       "desktop",
+       "team"
+      ],
+      "href": "https://www.espn.com/nfl/team/_/name/gb/green-bay-packers",
+      "text": "Clubhouse",
+      "isExternal": false,
+      "isPremium": false
+     }
+    ],
+    "logo": "https://a.espncdn.com/i/teamlogos/nfl/500/scoreboard/gb.png"
+   },
+   {
+    "id": "23",
+    "uid": "s:20~l:28~t:23",
+    "location": "Pittsburgh",
+    "name": "Steelers",
+    "abbreviation": "PIT",
+    "displayName": "Pittsburgh Steelers",
+    "shortDisplayName": "Steelers",
+    "isActive": true,
+    "links": [
+     {
+      "rel": [
+       "clubhouse",
+       "desktop",
+       "team"
+      ],
+      "href": "https://www.espn.com/nfl/team/_/name/pit/pittsburgh-steelers",
+      "text": "Clubhouse",
+      "isExternal": false,
+      "isPremium": false
+     }
+    ],
+    "logo": "https://a.espncdn.com/i/teamlogos/nfl/500/scoreboard/pit.png"
+   }
+  ]
+ },
+ "events": [
+  {
+   "id": "401772939",
+   "date": "2025-10-03T00:15Z",
+   "name": "San Francisco 49ers at Los Angeles Rams",
+   "shortName": "SF @ LAR",
+   "season": {
+    "year": 2025,
+    "type": 2,
+    "slug": "regular-season"
+   },
+   "week": {
+    "number": 5
+   },
+   "status": {
+    "type": {
+     "id": "3",
+     "name": "STATUS_FINAL",
+     "state": "post",
+     "completed": true,
+     "description": "Final",
+     "detail": "Final/OT",
+     "shortDetail": "Final/OT",
+     "altDetail": "OT"
+    }
+   },
+   "competitions": [
+    {
+     "id": "401772939",
+     "date": "2025-10-03T00:15Z",
+     "neutralSite": false,
+     "competitors": [
+      {
+       "id": "14",
+       "homeAway": "home",
+       "score": "23",
+       "winner": false,
+       "team": {
+        "id": "14",
+        "abbreviation": "LAR",
+        "displayName": "Los Angeles Rams",
+        "shortDisplayName": "Rams",
+        "location": "Los Angeles",
+        "name": "Rams"
+       },
+       "records": [
+        {
+         "type": "total",
+         "summary": "3-2"
+        },
+        {
+         "type": "home",
+         "summary": "2-1"
+        },
+        {
+         "type": "road",
+         "summary": "1-1"
+        }
+       ]
+      },
+      {
+       "id": "25",
+       "homeAway": "away",
+       "score": "26",
+       "winner": true,
+       "team": {
+        "id": "25",
+        "abbreviation": "SF",
+        "displayName": "San Francisco 49ers",
+        "shortDisplayName": "49ers",
+        "location": "San Francisco",
+        "name": "49ers"
+       },
+       "records": [
+        {
+         "type": "total",
+         "summary": "4-1"
+        },
+        {
+         "type": "home",
+         "summary": "1-1"
+        },
+        {
+         "type": "road",
+         "summary": "3-0"
+        }
+       ]
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "401772633",
+   "date": "2025-10-05T13:30Z",
+   "name": "Minnesota Vikings at Cleveland Browns",
+   "shortName": "MIN VS CLE",
+   "season": {
+    "year": 2025,
+    "type": 2,
+    "slug": "regular-season"
+   },
+   "week": {
+    "number": 5
+   },
+   "status": {
+    "type": {
+     "id": "3",
+     "name": "STATUS_FINAL",
+     "state": "post",
+     "completed": true,
+     "description": "Final",
+     "detail": "Final",
+     "shortDetail": "Final"
+    }
+   },
+   "competitions": [
+    {
+     "id": "401772633",
+     "date": "2025-10-05T13:30Z",
+     "neutralSite": true,
+     "competitors": [
+      {
+       "id": "5",
+       "homeAway": "home",
+       "score": "17",
+       "winner": false,
+       "team": {
+        "id": "5",
+        "abbreviation": "CLE",
+        "displayName": "Cleveland Browns",
+        "shortDisplayName": "Browns",
+        "location": "Cleveland",
+        "name": "Browns"
+       },
+       "records": [
+        {
+         "type": "total",
+         "summary": "1-4"
+        },
+        {
+         "type": "home",
+         "summary": "1-2"
+        },
+        {
+         "type": "road",
+         "summary": "0-2"
+        }
+       ]
+      },
+      {
+       "id": "16",
+       "homeAway": "away",
+       "score": "21",
+       "winner": true,
+       "team": {
+        "id": "16",
+        "abbreviation": "MIN",
+        "displayName": "Minnesota Vikings",
+        "shortDisplayName": "Vikings",
+        "location": "Minnesota",
+        "name": "Vikings"
+       },
+       "records": [
+        {
+         "type": "total",
+         "summary": "3-2"
+        },
+        {
+         "type": "home",
+         "summary": "1-1"
+        },
+        {
+         "type": "road",
+         "summary": "2-1"
+        }
+       ]
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "401772851",
+   "date": "2025-10-05T17:00Z",
+   "name": "Las Vegas Raiders at Indianapolis Colts",
+   "shortName": "LV @ IND",
+   "season": {
+    "year": 2025,
+    "type": 2,
+    "slug": "regular-season"
+   },
+   "week": {
+    "number": 5
+   },
+   "status": {
+    "type": {
+     "id": "3",
+     "name": "STATUS_FINAL",
+     "state": "post",
+     "completed": true,
+     "description": "Final",
+     "detail": "Final",
+     "shortDetail": "Final"
+    }
+   },
+   "competitions": [
+    {
+     "id": "401772851",
+     "date": "2025-10-05T17:00Z",
+     "neutralSite": false,
+     "competitors": [
+      {
+       "id": "11",
+       "homeAway": "home",
+       "score": "40",
+       "winner": true,
+       "team": {
+        "id": "11",
+        "abbreviation": "IND",
+        "displayName": "Indianapolis Colts",
+        "shortDisplayName": "Colts",
+        "location": "Indianapolis",
+        "name": "Colts"
+       },
+       "records": [
+        {
+         "type": "total",
+         "summary": "4-1"
+        },
+        {
+         "type": "home",
+         "summary": "3-0"
+        },
+        {
+         "type": "road",
+         "summary": "1-1"
+        }
+       ]
+      },
+      {
+       "id": "13",
+       "homeAway": "away",
+       "score": "6",
+       "winner": false,
+       "team": {
+        "id": "13",
+        "abbreviation": "LV",
+        "displayName": "Las Vegas Raiders",
+        "shortDisplayName": "Raiders",
+        "location": "Las Vegas",
+        "name": "Raiders"
+       },
+       "records": [
+        {
+         "type": "total",
+         "summary": "1-4"
+        },
+        {
+         "type": "home",
+         "summary": "0-2"
+        },
+        {
+         "type": "road",
+         "summary": "1-2"
+        }
+       ]
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "401772744",
+   "date": "2025-10-05T17:00Z",
+   "name": "New York Giants at New Orleans Saints",
+   "shortName": "NYG @ NO",
+   "season": {
+    "year": 2025,
+    "type": 2,
+    "slug": "regular-season"
+   },
+   "week": {
+    "number": 5
+   },
+   "status": {
+    "type": {
+     "id": "3",
+     "name": "STATUS_FINAL",
+     "state": "post",
+     "completed": true,
+     "description": "Final",
+     "detail": "Final",
+     "shortDetail": "Final"
+    }
+   },
+   "competitions": [
+    {
+     "id": "401772744",
+     "date": "2025-10-05T17:00Z",
+     "neutralSite": false,
+     "competitors": [
+      {
+       "id": "18",
+       "homeAway": "home",
+       "score": "26",
+       "winner": true,
+       "team": {
+        "id": "18",
+        "abbreviation": "NO",
+        "displayName": "New Orleans Saints",
+        "shortDisplayName": "Saints",
+        "location": "New Orleans",
+        "name": "Saints"
+       },
+       "records": [
+        {
+         "type": "total",
+         "summary": "1-4"
+        },
+        {
+         "type": "home",
+         "summary": "1-2"
+        },
+        {
+         "type": "road",
+         "summary": "0-2"
+        }
+       ]
+      },
+      {
+       "id": "19",
+       "homeAway": "away",
+       "score": "14",
+       "winner": false,
+       "team": {
+        "id": "19",
+        "abbreviation": "NYG",
+        "displayName": "New York Giants",
+        "shortDisplayName": "Giants",
+        "location": "New York",
+        "name": "Giants"
+       },
+       "records": [
+        {
+         "type": "total",
+         "summary": "1-4"
+        },
+        {
+         "type": "home",
+         "summary": "1-1"
+        },
+        {
+         "type": "road",
+         "summary": "0-3"
+        }
+       ]
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "401772850",
+   "date": "2025-10-05T17:00Z",
+   "name": "Dallas Cowboys at New York Jets",
+   "shortName": "DAL @ NYJ",
+   "season": {
+    "year": 2025,
+    "type": 2,
+    "slug": "regular-season"
+   },
+   "week": {
+    "number": 5
+   },
+   "status": {
+    "type": {
+     "id": "3",
+     "name": "STATUS_FINAL",
+     "state": "post",
+     "completed": true,
+     "description": "Final",
+     "detail": "Final",
+     "shortDetail": "Final"
+    }
+   },
+   "competitions": [
+    {
+     "id": "401772850",
+     "date": "2025-10-05T17:00Z",
+     "neutralSite": false,
+     "competitors": [
+      {
+       "id": "20",
+       "homeAway": "home",
+       "score": "22",
+       "winner": false,
+       "team": {
+        "id": "20",
+        "abbreviation": "NYJ",
+        "displayName": "New York Jets",
+        "shortDisplayName": "Jets",
+        "location": "New York",
+        "name": "Jets"
+       },
+       "records": [
+        {
+         "type": "total",
+         "summary": "0-5"
+        },
+        {
+         "type": "home",
+         "summary": "0-3"
+        },
+        {
+         "type": "road",
+         "summary": "0-2"
+        }
+       ]
+      },
+      {
+       "id": "6",
+       "homeAway": "away",
+       "score": "37",
+       "winner": true,
+       "team": {
+        "id": "6",
+        "abbreviation": "DAL",
+        "displayName": "Dallas Cowboys",
+        "shortDisplayName": "Cowboys",
+        "location": "Dallas",
+        "name": "Cowboys"
+       },
+       "records": [
+        {
+         "type": "total",
+         "summary": "2-2-1"
+        },
+        {
+         "type": "home",
+         "summary": "1-0-1"
+        },
+        {
+         "type": "road",
+         "summary": "1-2"
+        }
+       ]
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "401772745",
+   "date": "2025-10-05T17:00Z",
+   "name": "Denver Broncos at Philadelphia Eagles",
+   "shortName": "DEN @ PHI",
+   "season": {
+    "year": 2025,
+    "type": 2,
+    "slug": "regular-season"
+   },
+   "week": {
+    "number": 5
+   },
+   "status": {
+    "type": {
+     "id": "3",
+     "name": "STATUS_FINAL",
+     "state": "post",
+     "completed": true,
+     "description": "Final",
+     "detail": "Final",
+     "shortDetail": "Final"
+    }
+   },
+   "competitions": [
+    {
+     "id": "401772745",
+     "date": "2025-10-05T17:00Z",
+     "neutralSite": false,
+     "competitors": [
+      {
+       "id": "21",
+       "homeAway": "home",
+       "score": "17",
+       "winner": false,
+       "team": {
+        "id": "21",
+        "abbreviation": "PHI",
+        "displayName": "Philadelphia Eagles",
+        "shortDisplayName": "Eagles",
+        "location": "Philadelphia",
+        "name": "Eagles"
+       },
+       "records": [
+        {
+         "type": "total",
+         "summary": "4-1"
+        },
+        {
+         "type": "home",
+         "summary": "2-1"
+        },
+        {
+         "type": "road",
+         "summary": "2-0"
+        }
+       ]
+      },
+      {
+       "id": "7",
+       "homeAway": "away",
+       "score": "21",
+       "winner": true,
+       "team": {
+        "id": "7",
+        "abbreviation": "DEN",
+        "displayName": "Denver Broncos",
+        "shortDisplayName": "Broncos",
+        "location": "Denver",
+        "name": "Broncos"
+       },
+       "records": [
+        {
+         "type": "total",
+         "summary": "3-2"
+        },
+        {
+         "type": "home",
+         "summary": "2-0"
+        },
+        {
+         "type": "road",
+         "summary": "1-2"
+        }
+       ]
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "401772852",
+   "date": "2025-10-05T17:00Z",
+   "name": "Miami Dolphins at Carolina Panthers",
+   "shortName": "MIA @ CAR",
+   "season": {
+    "year": 2025,
+    "type": 2,
+    "slug": "regular-season"
+   },
+   "week": {
+    "number": 5
+   },
+   "status": {
+    "type": {
+     "id": "3",
+     "name": "STATUS_FINAL",
+     "state": "post",
+     "completed": true,
+     "description": "Final",
+     "detail": "Final",
+     "shortDetail": "Final"
+    }
+   },
+   "competitions": [
+    {
+     "id": "401772852",
+     "date": "2025-10-05T17:00Z",
+     "neutralSite": false,
+     "competitors": [
+      {
+       "id": "29",
+       "homeAway": "home",
+       "score": "27",
+       "winner": true,
+       "team": {
+        "id": "29",
+        "abbreviation": "CAR",
+        "displayName": "Carolina Panthers",
+        "shortDisplayName": "Panthers",
+        "location": "Carolina",
+        "name": "Panthers"
+       },
+       "records": [
+        {
+         "type": "total",
+         "summary": "2-3"
+        },
+        {
+         "type": "home",
+         "summary": "2-0"
+        },
+        {
+         "type": "road",
+         "summary": "0-3"
+        }
+       ]
+      },
+      {
+       "id": "15",
+       "homeAway": "away",
+       "score": "24",
+       "winner": false,
+       "team": {
+        "id": "15",
+        "abbreviation": "MIA",
+        "displayName": "Miami Dolphins",
+        "shortDisplayName": "Dolphins",
+        "location": "Miami",
+        "name": "Dolphins"
+       },
+       "records": [
+        {
+         "type": "total",
+         "summary": "1-4"
+        },
+        {
+         "type": "home",
+         "summary": "1-1"
+        },
+        {
+         "type": "road",
+         "summary": "0-3"
+        }
+       ]
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "401772743",
+   "date": "2025-10-05T17:00Z",
+   "name": "Houston Texans at Baltimore Ravens",
+   "shortName": "HOU @ BAL",
+   "season": {
+    "year": 2025,
+    "type": 2,
+    "slug": "regular-season"
+   },
+   "week": {
+    "number": 5
+   },
+   "status": {
+    "type": {
+     "id": "3",
+     "name": "STATUS_FINAL",
+     "state": "post",
+     "completed": true,
+     "description": "Final",
+     "detail": "Final",
+     "shortDetail": "Final"
+    }
+   },
+   "competitions": [
+    {
+     "id": "401772743",
+     "date": "2025-10-05T17:00Z",
+     "neutralSite": false,
+     "competitors": [
+      {
+       "id": "33",
+       "homeAway": "home",
+       "score": "10",
+       "winner": false,
+       "team": {
+        "id": "33",
+        "abbreviation": "BAL",
+        "displayName": "Baltimore Ravens",
+        "shortDisplayName": "Ravens",
+        "location": "Baltimore",
+        "name": "Ravens"
+       },
+       "records": [
+        {
+         "type": "total",
+         "summary": "1-4"
+        },
+        {
+         "type": "home",
+         "summary": "1-2"
+        },
+        {
+         "type": "road",
+         "summary": "0-2"
+        }
+       ]
+      },
+      {
+       "id": "34",
+       "homeAway": "away",
+       "score": "44",
+       "winner": true,
+       "team": {
+        "id": "34",
+        "abbreviation": "HOU",
+        "displayName": "Houston Texans",
+        "shortDisplayName": "Texans",
+        "location": "Houston",
+        "name": "Texans"
+       },
+       "records": [
+        {
+         "type": "total",
+         "summary": "2-3"
+        },
+        {
+         "type": "home",
+         "summary": "1-1"
+        },
+        {
+         "type": "road",
+         "summary": "1-2"
+        }
+       ]
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "401772747",
+   "date": "2025-10-05T20:05Z",
+   "name": "Tennessee Titans at Arizona Cardinals",
+   "shortName": "TEN @ ARI",
+   "season": {
+    "year": 2025,
+    "type": 2,
+    "slug": "regular-season"
+   },
+   "week": {
+    "number": 5
+   },
+   "status": {
+    "type": {
+     "id": "3",
+     "name": "STATUS_FINAL",
+     "state": "post",
+     "completed": true,
+     "description": "Final",
+     "detail": "Final",
+     "shortDetail": "Final"
+    }
+   },
+   "competitions": [
+    {
+     "id": "401772747",
+     "date": "2025-10-05T20:05Z",
+     "neutralSite": false,
+     "competitors": [
+      {
+       "id": "22",
+       "homeAway": "home",
+       "score": "21",
+       "winner": false,
+       "team": {
+        "id": "22",
+        "abbreviation": "ARI",
+        "displayName": "Arizona Cardinals",
+        "shortDisplayName": "Cardinals",
+        "location": "Arizona",
+        "name": "Cardinals"
+       },
+       "records": [
+        {
+         "type": "total",
+         "summary": "2-3"
+        },
+        {
+         "type": "home",
+         "summary": "1-2"
+        },
+        {
+         "type": "road",
+         "summary": "1-1"
+        }
+       ]
+      },
+      {
+       "id": "10",
+       "homeAway": "away",
+       "score": "22",
+       "winner": true,
+       "team": {
+        "id": "10",
+        "abbreviation": "TEN",
+        "displayName": "Tennessee Titans",
+        "shortDisplayName": "Titans",
+        "location": "Tennessee",
+        "name": "Titans"
+       },
+       "records": [
+        {
+         "type": "total",
+         "summary": "1-4"
+        },
+        {
+         "type": "home",
+         "summary": "0-2"
+        },
+        {
+         "type": "road",
+         "summary": "1-2"
+        }
+       ]
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "401772746",
+   "date": "2025-10-05T20:05Z",
+   "name": "Tampa Bay Buccaneers at Seattle Seahawks",
+   "shortName": "TB @ SEA",
+   "season": {
+    "year": 2025,
+    "type": 2,
+    "slug": "regular-season"
+   },
+   "week": {
+    "number": 5
+   },
+   "status": {
+    "type": {
+     "id": "3",
+     "name": "STATUS_FINAL",
+     "state": "post",
+     "completed": true,
+     "description": "Final",
+     "detail": "Final",
+     "shortDetail": "Final"
+    }
+   },
+   "competitions": [
+    {
+     "id": "401772746",
+     "date": "2025-10-05T20:05Z",
+     "neutralSite": false,
+     "competitors": [
+      {
+       "id": "26",
+       "homeAway": "home",
+       "score": "35",
+       "winner": false,
+       "team": {
+        "id": "26",
+        "abbreviation": "SEA",
+        "displayName": "Seattle Seahawks",
+        "shortDisplayName": "Seahawks",
+        "location": "Seattle",
+        "name": "Seahawks"
+       },
+       "records": [
+        {
+         "type": "total",
+         "summary": "3-2"
+        },
+        {
+         "type": "home",
+         "summary": "1-2"
+        },
+        {
+         "type": "road",
+         "summary": "2-0"
+        }
+       ]
+      },
+      {
+       "id": "27",
+       "homeAway": "away",
+       "score": "38",
+       "winner": true,
+       "team": {
+        "id": "27",
+        "abbreviation": "TB",
+        "displayName": "Tampa Bay Buccaneers",
+        "shortDisplayName": "Buccaneers",
+        "location": "Tampa Bay",
+        "name": "Buccaneers"
+       },
+       "records": [
+        {
+         "type": "total",
+         "summary": "4-1"
+        },
+        {
+         "type": "home",
+         "summary": "1-1"
+        },
+        {
+         "type": "road",
+         "summary": "3-0"
+        }
+       ]
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "401772854",
+   "date": "2025-10-05T20:25Z",
+   "name": "Detroit Lions at Cincinnati Bengals",
+   "shortName": "DET @ CIN",
+   "season": {
+    "year": 2025,
+    "type": 2,
+    "slug": "regular-season"
+   },
+   "week": {
+    "number": 5
+   },
+   "status": {
+    "type": {
+     "id": "3",
+     "name": "STATUS_FINAL",
+     "state": "post",
+     "completed": true,
+     "description": "Final",
+     "detail": "Final",
+     "shortDetail": "Final"
+    }
+   },
+   "competitions": [
+    {
+     "id": "401772854",
+     "date": "2025-10-05T20:25Z",
+     "neutralSite": false,
+     "competitors": [
+      {
+       "id": "4",
+       "homeAway": "home",
+       "score": "24",
+       "winner": false,
+       "team": {
+        "id": "4",
+        "abbreviation": "CIN",
+        "displayName": "Cincinnati Bengals",
+        "shortDisplayName": "Bengals",
+        "location": "Cincinnati",
+        "name": "Bengals"
+       },
+       "records": [
+        {
+         "type": "total",
+         "summary": "2-3"
+        },
+        {
+         "type": "home",
+         "summary": "1-1"
+        },
+        {
+         "type": "road",
+         "summary": "1-2"
+        }
+       ]
+      },
+      {
+       "id": "8",
+       "homeAway": "away",
+       "score": "37",
+       "winner": true,
+       "team": {
+        "id": "8",
+        "abbreviation": "DET",
+        "displayName": "Detroit Lions",
+        "shortDisplayName": "Lions",
+        "location": "Detroit",
+        "name": "Lions"
+       },
+       "records": [
+        {
+         "type": "total",
+         "summary": "4-1"
+        },
+        {
+         "type": "home",
+         "summary": "2-0"
+        },
+        {
+         "type": "road",
+         "summary": "2-1"
+        }
+       ]
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "401772853",
+   "date": "2025-10-05T20:25Z",
+   "name": "Washington Commanders at Los Angeles Chargers",
+   "shortName": "WSH @ LAC",
+   "season": {
+    "year": 2025,
+    "type": 2,
+    "slug": "regular-season"
+   },
+   "week": {
+    "number": 5
+   },
+   "status": {
+    "type": {
+     "id": "3",
+     "name": "STATUS_FINAL",
+     "state": "post",
+     "completed": true,
+     "description": "Final",
+     "detail": "Final",
+     "shortDetail": "Final"
+    }
+   },
+   "competitions": [
+    {
+     "id": "401772853",
+     "date": "2025-10-05T20:25Z",
+     "neutralSite": false,
+     "competitors": [
+      {
+       "id": "24",
+       "homeAway": "home",
+       "score": "10",
+       "winner": false,
+       "team": {
+        "id": "24",
+        "abbreviation": "LAC",
+        "displayName": "Los Angeles Chargers",
+        "shortDisplayName": "Chargers",
+        "location": "Los Angeles",
+        "name": "Chargers"
+       },
+       "records": [
+        {
+         "type": "total",
+         "summary": "3-2"
+        },
+        {
+         "type": "home",
+         "summary": "2-1"
+        },
+        {
+         "type": "road",
+         "summary": "1-1"
+        }
+       ]
+      },
+      {
+       "id": "28",
+       "homeAway": "away",
+       "score": "27",
+       "winner": true,
+       "team": {
+        "id": "28",
+        "abbreviation": "WSH",
+        "displayName": "Washington Commanders",
+        "shortDisplayName": "Commanders",
+        "location": "Washington",
+        "name": "Commanders"
+       },
+       "records": [
+        {
+         "type": "total",
+         "summary": "3-2"
+        },
+        {
+         "type": "home",
+         "summary": "2-0"
+        },
+        {
+         "type": "road",
+         "summary": "1-2"
+        }
+       ]
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "401772922",
+   "date": "2025-10-06T00:20Z",
+   "name": "New England Patriots at Buffalo Bills",
+   "shortName": "NE @ BUF",
+   "season": {
+    "year": 2025,
+    "type": 2,
+    "slug": "regular-season"
+   },
+   "week": {
+    "number": 5
+   },
+   "status": {
+    "type": {
+     "id": "3",
+     "name": "STATUS_FINAL",
+     "state": "post",
+     "completed": true,
+     "description": "Final",
+     "detail": "Final",
+     "shortDetail": "Final"
+    }
+   },
+   "competitions": [
+    {
+     "id": "401772922",
+     "date": "2025-10-06T00:20Z",
+     "neutralSite": false,
+     "competitors": [
+      {
+       "id": "2",
+       "homeAway": "home",
+       "score": "20",
+       "winner": false,
+       "team": {
+        "id": "2",
+        "abbreviation": "BUF",
+        "displayName": "Buffalo Bills",
+        "shortDisplayName": "Bills",
+        "location": "Buffalo",
+        "name": "Bills"
+       },
+       "records": [
+        {
+         "type": "total",
+         "summary": "4-1"
+        },
+        {
+         "type": "home",
+         "summary": "3-1"
+        },
+        {
+         "type": "road",
+         "summary": "1-0"
+        }
+       ]
+      },
+      {
+       "id": "17",
+       "homeAway": "away",
+       "score": "23",
+       "winner": true,
+       "team": {
+        "id": "17",
+        "abbreviation": "NE",
+        "displayName": "New England Patriots",
+        "shortDisplayName": "Patriots",
+        "location": "New England",
+        "name": "Patriots"
+       },
+       "records": [
+        {
+         "type": "total",
+         "summary": "3-2"
+        },
+        {
+         "type": "home",
+         "summary": "1-2"
+        },
+        {
+         "type": "road",
+         "summary": "2-0"
+        }
+       ]
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "401772814",
+   "date": "2025-10-07T00:15Z",
+   "name": "Kansas City Chiefs at Jacksonville Jaguars",
+   "shortName": "KC @ JAX",
+   "season": {
+    "year": 2025,
+    "type": 2,
+    "slug": "regular-season"
+   },
+   "week": {
+    "number": 5
+   },
+   "status": {
+    "type": {
+     "id": "3",
+     "name": "STATUS_FINAL",
+     "state": "post",
+     "completed": true,
+     "description": "Final",
+     "detail": "Final",
+     "shortDetail": "Final"
+    }
+   },
+   "competitions": [
+    {
+     "id": "401772814",
+     "date": "2025-10-07T00:15Z",
+     "neutralSite": false,
+     "competitors": [
+      {
+       "id": "30",
+       "homeAway": "home",
+       "score": "31",
+       "winner": true,
+       "team": {
+        "id": "30",
+        "abbreviation": "JAX",
+        "displayName": "Jacksonville Jaguars",
+        "shortDisplayName": "Jaguars",
+        "location": "Jacksonville",
+        "name": "Jaguars"
+       },
+       "records": [
+        {
+         "type": "total",
+         "summary": "4-1"
+        },
+        {
+         "type": "home",
+         "summary": "3-0"
+        },
+        {
+         "type": "road",
+         "summary": "1-1"
+        }
+       ]
+      },
+      {
+       "id": "12",
+       "homeAway": "away",
+       "score": "28",
+       "winner": false,
+       "team": {
+        "id": "12",
+        "abbreviation": "KC",
+        "displayName": "Kansas City Chiefs",
+        "shortDisplayName": "Chiefs",
+        "location": "Kansas City",
+        "name": "Chiefs"
+       },
+       "records": [
+        {
+         "type": "total",
+         "summary": "2-3"
+        },
+        {
+         "type": "home",
+         "summary": "1-1"
+        },
+        {
+         "type": "road",
+         "summary": "1-2"
+        }
+       ]
+      }
+     ]
+    }
+   ]
+  }
+ ]
+}

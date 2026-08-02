@@ -1,0 +1,492 @@
+{
+ "401772939": {
+  "count": 2,
+  "items": [
+   {
+    "provider": {
+     "id": "58",
+     "name": "ESPN BET"
+    },
+    "details": "LAR -8.5",
+    "spread": -8.5,
+    "overUnder": 43.5,
+    "homeTeamOdds": {
+     "favorite": true
+    },
+    "awayTeamOdds": {
+     "favorite": false
+    }
+   },
+   {
+    "provider": {
+     "id": "59",
+     "name": "ESPN Bet - Live Odds"
+    },
+    "details": "SF -1.5",
+    "spread": 1.5,
+    "overUnder": 46.5,
+    "homeTeamOdds": {
+     "favorite": false
+    },
+    "awayTeamOdds": {
+     "favorite": true
+    }
+   }
+  ]
+ },
+ "401772633": {
+  "count": 2,
+  "items": [
+   {
+    "provider": {
+     "id": "58",
+     "name": "ESPN BET"
+    },
+    "details": "MIN -3.5",
+    "spread": 3.5,
+    "overUnder": 35.5,
+    "homeTeamOdds": {
+     "favorite": false
+    },
+    "awayTeamOdds": {
+     "favorite": true
+    }
+   },
+   {
+    "provider": {
+     "id": "59",
+     "name": "ESPN Bet - Live Odds"
+    },
+    "details": "CLE -2.5",
+    "spread": -2.5,
+    "overUnder": 31.5,
+    "homeTeamOdds": {
+     "favorite": true
+    },
+    "awayTeamOdds": {
+     "favorite": false
+    }
+   }
+  ]
+ },
+ "401772851": {
+  "count": 2,
+  "items": [
+   {
+    "provider": {
+     "id": "58",
+     "name": "ESPN BET"
+    },
+    "details": "IND -7.5",
+    "spread": -7.5,
+    "overUnder": 46.5,
+    "homeTeamOdds": {
+     "favorite": true
+    },
+    "awayTeamOdds": {
+     "favorite": false
+    }
+   },
+   {
+    "provider": {
+     "id": "59",
+     "name": "ESPN Bet - Live Odds"
+    },
+    "details": "IND -31.5",
+    "spread": -31.5,
+    "overUnder": 46.5,
+    "homeTeamOdds": {
+     "favorite": true
+    },
+    "awayTeamOdds": {
+     "favorite": false
+    }
+   }
+  ]
+ },
+ "401772744": {
+  "count": 2,
+  "items": [
+   {
+    "provider": {
+     "id": "58",
+     "name": "ESPN BET"
+    },
+    "details": "NO -2.5",
+    "spread": -2.5,
+    "overUnder": 42.5,
+    "homeTeamOdds": {
+     "favorite": true
+    },
+    "awayTeamOdds": {
+     "favorite": false
+    }
+   },
+   {
+    "provider": {
+     "id": "59",
+     "name": "ESPN Bet - Live Odds"
+    },
+    "details": "NO -12.5",
+    "spread": -12.5,
+    "overUnder": 40.5,
+    "homeTeamOdds": {
+     "favorite": true
+    },
+    "awayTeamOdds": {
+     "favorite": false
+    }
+   }
+  ]
+ },
+ "401772850": {
+  "count": 2,
+  "items": [
+   {
+    "provider": {
+     "id": "58",
+     "name": "ESPN BET"
+    },
+    "details": "NYJ -2.5",
+    "spread": -2.5,
+    "overUnder": 47.5,
+    "homeTeamOdds": {
+     "favorite": true
+    },
+    "awayTeamOdds": {
+     "favorite": false
+    }
+   },
+   {
+    "provider": {
+     "id": "59",
+     "name": "ESPN Bet - Live Odds"
+    },
+    "details": "DAL -20.5",
+    "spread": 20.5,
+    "overUnder": 47.5,
+    "homeTeamOdds": {
+     "favorite": false
+    },
+    "awayTeamOdds": {
+     "favorite": true
+    }
+   }
+  ]
+ },
+ "401772745": {
+  "count": 2,
+  "items": [
+   {
+    "provider": {
+     "id": "58",
+     "name": "ESPN BET"
+    },
+    "details": "PHI -4.5",
+    "spread": -4.5,
+    "overUnder": 44.5,
+    "homeTeamOdds": {
+     "favorite": true
+    },
+    "awayTeamOdds": {
+     "favorite": false
+    }
+   },
+   {
+    "provider": {
+     "id": "59",
+     "name": "ESPN Bet - Live Odds"
+    },
+    "details": "PHI -1.5",
+    "spread": -1.5,
+    "overUnder": 37.5,
+    "homeTeamOdds": {
+     "favorite": true
+    },
+    "awayTeamOdds": {
+     "favorite": false
+    }
+   }
+  ]
+ },
+ "401772852": {
+  "count": 2,
+  "items": [
+   {
+    "provider": {
+     "id": "58",
+     "name": "ESPN BET"
+    },
+    "details": "MIA -1.5",
+    "spread": 1.5,
+    "overUnder": 44.5,
+    "homeTeamOdds": {
+     "favorite": false
+    },
+    "awayTeamOdds": {
+     "favorite": true
+    }
+   },
+   {
+    "provider": {
+     "id": "59",
+     "name": "ESPN Bet - Live Odds"
+    },
+    "details": "MIA -2.5",
+    "spread": 2.5,
+    "overUnder": 51.5,
+    "homeTeamOdds": {
+     "favorite": false
+    },
+    "awayTeamOdds": {
+     "favorite": true
+    }
+   }
+  ]
+ },
+ "401772743": {
+  "count": 2,
+  "items": [
+   {
+    "provider": {
+     "id": "58",
+     "name": "ESPN BET"
+    },
+    "details": "HOU -2.5",
+    "spread": 2.5,
+    "overUnder": 41.5,
+    "homeTeamOdds": {
+     "favorite": false
+    },
+    "awayTeamOdds": {
+     "favorite": true
+    }
+   },
+   {
+    "provider": {
+     "id": "59",
+     "name": "ESPN Bet - Live Odds"
+    },
+    "details": "HOU -31.5",
+    "spread": 31.5,
+    "overUnder": 54.5,
+    "homeTeamOdds": {
+     "favorite": false
+    },
+    "awayTeamOdds": {
+     "favorite": true
+    }
+   }
+  ]
+ },
+ "401772747": {
+  "count": 2,
+  "items": [
+   {
+    "provider": {
+     "id": "58",
+     "name": "ESPN BET"
+    },
+    "details": "ARI -7.5",
+    "spread": -7.5,
+    "overUnder": 41.5,
+    "homeTeamOdds": {
+     "favorite": true
+    },
+    "awayTeamOdds": {
+     "favorite": false
+    }
+   },
+   {
+    "provider": {
+     "id": "59",
+     "name": "ESPN Bet - Live Odds"
+    },
+    "details": "ARI -6.5",
+    "spread": -6.5,
+    "overUnder": 36.5,
+    "homeTeamOdds": {
+     "favorite": true
+    },
+    "awayTeamOdds": {
+     "favorite": false
+    }
+   }
+  ]
+ },
+ "401772746": {
+  "count": 2,
+  "items": [
+   {
+    "provider": {
+     "id": "58",
+     "name": "ESPN BET"
+    },
+    "details": "SEA -3.5",
+    "spread": -3.5,
+    "overUnder": 45.5,
+    "homeTeamOdds": {
+     "favorite": true
+    },
+    "awayTeamOdds": {
+     "favorite": false
+    }
+   },
+   {
+    "provider": {
+     "id": "59",
+     "name": "ESPN Bet - Live Odds"
+    },
+    "details": "SEA -2.5",
+    "spread": -2.5,
+    "overUnder": 72.5,
+    "homeTeamOdds": {
+     "favorite": true
+    },
+    "awayTeamOdds": {
+     "favorite": false
+    }
+   }
+  ]
+ },
+ "401772854": {
+  "count": 2,
+  "items": [
+   {
+    "provider": {
+     "id": "58",
+     "name": "ESPN BET"
+    },
+    "details": "DET -9.5",
+    "spread": 9.5,
+    "overUnder": 48.5,
+    "homeTeamOdds": {
+     "favorite": false
+    },
+    "awayTeamOdds": {
+     "favorite": true
+    }
+   },
+   {
+    "provider": {
+     "id": "59",
+     "name": "ESPN Bet - Live Odds"
+    },
+    "details": "DET -10.5",
+    "spread": 10.5,
+    "overUnder": 58.5,
+    "homeTeamOdds": {
+     "favorite": false
+    },
+    "awayTeamOdds": {
+     "favorite": true
+    }
+   }
+  ]
+ },
+ "401772853": {
+  "count": 2,
+  "items": [
+   {
+    "provider": {
+     "id": "58",
+     "name": "ESPN BET"
+    },
+    "details": "LAC -3.5",
+    "spread": -3.5,
+    "overUnder": 48.5,
+    "homeTeamOdds": {
+     "favorite": true
+    },
+    "awayTeamOdds": {
+     "favorite": false
+    }
+   },
+   {
+    "provider": {
+     "id": "59",
+     "name": "ESPN Bet - Live Odds"
+    },
+    "details": "WSH -10.5",
+    "spread": 10.5,
+    "overUnder": 30.5,
+    "homeTeamOdds": {
+     "favorite": false
+    },
+    "awayTeamOdds": {
+     "favorite": true
+    }
+   }
+  ]
+ },
+ "401772922": {
+  "count": 2,
+  "items": [
+   {
+    "provider": {
+     "id": "58",
+     "name": "ESPN BET"
+    },
+    "details": "BUF -7.5",
+    "spread": -7.5,
+    "overUnder": 48.5,
+    "homeTeamOdds": {
+     "favorite": true
+    },
+    "awayTeamOdds": {
+     "favorite": false
+    }
+   },
+   {
+    "provider": {
+     "id": "59",
+     "name": "ESPN Bet - Live Odds"
+    },
+    "details": "BUF -3.5",
+    "spread": -3.5,
+    "overUnder": 44.5,
+    "homeTeamOdds": {
+     "favorite": true
+    },
+    "awayTeamOdds": {
+     "favorite": false
+    }
+   }
+  ]
+ },
+ "401772814": {
+  "count": 2,
+  "items": [
+   {
+    "provider": {
+     "id": "58",
+     "name": "ESPN BET"
+    },
+    "details": "KC -3.5",
+    "spread": 3.5,
+    "overUnder": 45.5,
+    "homeTeamOdds": {
+     "favorite": false
+    },
+    "awayTeamOdds": {
+     "favorite": true
+    }
+   },
+   {
+    "provider": {
+     "id": "59",
+     "name": "ESPN Bet - Live Odds"
+    },
+    "details": "KC -3.5",
+    "spread": 3.5,
+    "overUnder": 51.5,
+    "homeTeamOdds": {
+     "favorite": false
+    },
+    "awayTeamOdds": {
+     "favorite": true
+    }
+   }
+  ]
+ }
+}

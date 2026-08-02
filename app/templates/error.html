@@ -1,0 +1,14 @@
+{% extends "base.html" %}
+{% block title %}{{ title }}. {{ APP_NAME }}{% endblock %}
+
+{% block content %}
+<div class="empty-state error-state">
+  <p class="eyebrow">Error {{ code }}</p>
+  <h1 class="empty-state-title">{{ title }}</h1>
+  {% if detail %}<p class="muted">{{ detail }}</p>{% endif %}
+  <div class="row">
+    <a class="btn btn-primary" href="/picks">Back to this week</a>
+    {% if not current_user %}<a class="btn btn-secondary" href="/login">Sign in</a>{% endif %}
+  </div>
+</div>
+{% endblock %}

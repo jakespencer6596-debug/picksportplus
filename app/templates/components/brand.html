@@ -1,0 +1,20 @@
+{# The PSP varsity shield. Deep green field, thin antique gold outline, PSP monogram. #}
+{% macro brand_mark(size=30) -%}
+<svg class="brand-mark" width="{{ size }}" height="{{ (size * 1.16) | round | int }}" viewBox="0 0 60 70"
+     role="img" aria-label="PickSportPlus shield" focusable="false">
+  <path d="M30 2 55 9v27c0 15-11 26-25 32C16 62 5 51 5 36V9Z"
+        fill="var(--green)" stroke="var(--gold)" stroke-width="2.5" stroke-linejoin="round"/>
+  <path d="M30 8 49.5 13.5V36c0 12-8.7 21-19.5 26C19.2 57 10.5 48 10.5 36V13.5Z"
+        fill="none" stroke="var(--gold-soft)" stroke-width="1" opacity=".55"/>
+  <text x="30" y="41" text-anchor="middle" fill="var(--paper)"
+        font-family="Oswald, 'Arial Narrow', sans-serif" font-size="20" font-weight="600"
+        letter-spacing="0.5">PSP</text>
+</svg>
+{%- endmacro %}
+
+{% macro wordmark(size=30, href="/") -%}
+<a class="brand" href="{{ href }}" aria-label="PickSportPlus home">
+  {{ brand_mark(size) }}
+  <span class="brand-word">Pick<span class="brand-sport">Sport</span><span class="brand-plus">Plus</span></span>
+</a>
+{%- endmacro %}

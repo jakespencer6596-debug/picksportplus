@@ -1,0 +1,29 @@
+{% extends "base.html" %}
+{% block title %}Join a pool. {{ APP_NAME }}{% endblock %}
+{% block body_class %}page-auth{% endblock %}
+
+{% block content %}
+<div class="auth-wrap">
+  <div class="card auth-card">
+    <div class="card-body">
+      <p class="eyebrow">Pools</p>
+      <h1 class="page-title">Join a pool</h1>
+      <p class="muted auth-intro">Enter the code the commissioner gave you.</p>
+
+      {% if error %}
+        <div class="form-error" role="alert">{{ error }}</div>
+      {% endif %}
+
+      <form method="post" action="/join" class="stack" novalidate>
+        <div class="field">
+          <label class="field-label" for="join_code">Join code</label>
+          <input class="input input-code" type="text" id="join_code" name="join_code"
+                 value="{{ form.join_code or '' }}" autocomplete="off" spellcheck="false"
+                 required autofocus>
+        </div>
+        <button class="btn btn-primary" type="submit">Join</button>
+      </form>
+    </div>
+  </div>
+</div>
+{% endblock %}

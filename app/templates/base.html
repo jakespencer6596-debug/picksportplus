@@ -1,0 +1,107 @@
+{% import "components/icons.html" as ic %}
+{% import "components/brand.html" as brand %}
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="color-scheme" content="light">
+  <title>{% block title %}{{ APP_NAME }}{% endblock %}</title>
+  <meta name="description" content="A weekly confidence pick'em pool for NFL and college football. The closest games, every week.">
+
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Oswald:wght@400;500;600;700&family=Libre+Franklin:ital,wght@0,400;0,500;0,600;0,700;1,400&display=swap">
+  <link rel="stylesheet" href="{{ url_for('static', path='app.css') }}">
+  <link rel="icon" href="{{ url_for('static', path='favicon.svg') }}" type="image/svg+xml">
+
+  <script src="{{ url_for('static', path='vendor/htmx.min.js') }}" defer></script>
+  <script src="{{ url_for('static', path='vendor/sortable.min.js') }}" defer></script>
+  <script src="{{ url_for('static', path='app.js') }}" defer></script>
+  {% block head_extra %}{% endblock %}
+</head>
+<body class="{% block body_class %}{% endblock %}">
+<a class="skip-link" href="#main">Skip to content</a>
+
+<header class="topbar">
+  <div class="topbar-inner container">
+    {{ brand.wordmark(28) }}
+
+    {% if current_user %}
+      <nav class="nav" aria-label="Primary">
+        <a class="nav-link {{ 'is-active' if active_nav == 'picks' }}" href="/picks"
+           {{ 'aria-current=page' if active_nav == 'picks' }}>This Week</a>
+        <a class="nav-link {{ 'is-active' if active_nav == 'standings' }}" href="/standings"
+           {{ 'aria-current=page' if active_nav == 'standings' }}>Standings</a>
+        <a class="nav-link {{ 'is-active' if active_nav == 'results' }}" href="/results"
+           {{ 'aria-current=page' if active_nav == 'results' }}>Results</a>
+        {% if is_commissioner %}
+          <a class="nav-link {{ 'is-active' if active_nav == 'admin' }}" href="/admin"
+             {{ 'aria-current=page' if active_nav == 'admin' }}>Admin</a>
+        {% endif %}
+      </nav>
+
+      <div class="user-menu">
+        <span class="user-name">{{ current_user.display_name }}</span>
+        <form method="post" action="/logout" class="inline-form">
+          <button class="btn btn-ghost btn-sm" type="submit">
+            {{ ic.icon("logout", 16) }}<span class="btn-label">Sign out</span>
+          </button>
+        </form>
+      </div>
+    {% else %}
+      <div class="user-menu">
+        <a class="btn btn-secondary btn-sm" href="/login">Sign in</a>
+      </div>
+    {% endif %}
+  </div>
+</header>
+
+{% block subbar %}{% endblock %}
+
+<main id="main" class="shell">
+  <div class="container">
+    {% with flashes = flashes or [] %}
+      {% if flashes %}
+        <div class="flash-stack" role="status" aria-live="polite">
+          {% for f in flashes %}
+            <div class="flash flash-{{ f.level }}">
+              {{ ic.icon("check" if f.level == "ok" else ("alert" if f.level == "error" else "info"), 18) }}
+              <span>{{ f.message }}</span>
+            </div>
+          {% endfor %}
+        </div>
+      {% endif %}
+    {% endwith %}
+
+    {% block content %}{% endblock %}
+  </div>
+</main>
+
+{% if current_user %}
+  <nav class="tabbar" aria-label="Primary mobile">
+    <a class="tabbar-link {{ 'is-active' if active_nav == 'picks' }}" href="/picks">
+      {{ ic.icon("calendar", 20) }}<span>This Week</span>
+    </a>
+    <a class="tabbar-link {{ 'is-active' if active_nav == 'standings' }}" href="/standings">
+      {{ ic.icon("trophy", 20) }}<span>Standings</span>
+    </a>
+    <a class="tabbar-link {{ 'is-active' if active_nav == 'results' }}" href="/results">
+      {{ ic.icon("list", 20) }}<span>Results</span>
+    </a>
+    {% if is_commissioner %}
+      <a class="tabbar-link {{ 'is-active' if active_nav == 'admin' }}" href="/admin">
+        {{ ic.icon("settings", 20) }}<span>Admin</span>
+      </a>
+    {% endif %}
+  </nav>
+{% endif %}
+
+<footer class="footer">
+  <div class="container footer-inner">
+    <span class="muted">{{ APP_NAME }}. The closest games, every week.</span>
+    {% if pool %}<span class="muted">{{ pool.name }}, {{ pool.season_year }} season</span>{% endif %}
+  </div>
+</footer>
+</body>
+</html>

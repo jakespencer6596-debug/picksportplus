@@ -1,0 +1,1919 @@
+[
+ {
+  "id": "8c94552d022acec4a0458d70c19d3da9",
+  "sport_key": "americanfootball_nfl",
+  "sport_title": "NFL",
+  "commence_time": "2026-09-10T00:15:00Z",
+  "home_team": "Seattle Seahawks",
+  "away_team": "New England Patriots",
+  "bookmakers": [
+   {
+    "key": "draftkings",
+    "title": "DraftKings",
+    "last_update": "2026-08-02T16:40:18Z",
+    "markets": [
+     {
+      "key": "spreads",
+      "last_update": "2026-08-02T16:40:14Z",
+      "outcomes": [
+       {
+        "name": "New England Patriots",
+        "price": -110,
+        "point": 3.5
+       },
+       {
+        "name": "Seattle Seahawks",
+        "price": -110,
+        "point": -3.5
+       }
+      ]
+     }
+    ]
+   },
+   {
+    "key": "betus",
+    "title": "BetUS",
+    "last_update": "2026-08-02T16:40:34Z",
+    "markets": [
+     {
+      "key": "spreads",
+      "last_update": "2026-08-02T16:40:32Z",
+      "outcomes": [
+       {
+        "name": "New England Patriots",
+        "price": -110,
+        "point": 3.5
+       },
+       {
+        "name": "Seattle Seahawks",
+        "price": -110,
+        "point": -3.5
+       }
+      ]
+     }
+    ]
+   },
+   {
+    "key": "fanduel",
+    "title": "FanDuel",
+    "last_update": "2026-08-02T16:41:01Z",
+    "markets": [
+     {
+      "key": "spreads",
+      "last_update": "2026-08-02T16:41:01Z",
+      "outcomes": [
+       {
+        "name": "New England Patriots",
+        "price": -108,
+        "point": 3.5
+       },
+       {
+        "name": "Seattle Seahawks",
+        "price": -112,
+        "point": -3.5
+       }
+      ]
+     }
+    ]
+   },
+   {
+    "key": "lowvig",
+    "title": "LowVig.ag",
+    "last_update": "2026-08-02T16:41:12Z",
+    "markets": [
+     {
+      "key": "spreads",
+      "last_update": "2026-08-02T16:41:12Z",
+      "outcomes": [
+       {
+        "name": "New England Patriots",
+        "price": -105,
+        "point": 3.5
+       },
+       {
+        "name": "Seattle Seahawks",
+        "price": -105,
+        "point": -3.5
+       }
+      ]
+     }
+    ]
+   },
+   {
+    "key": "betonlineag",
+    "title": "BetOnline.ag",
+    "last_update": "2026-08-02T16:41:12Z",
+    "markets": [
+     {
+      "key": "spreads",
+      "last_update": "2026-08-02T16:41:12Z",
+      "outcomes": [
+       {
+        "name": "New England Patriots",
+        "price": -110,
+        "point": 3.5
+       },
+       {
+        "name": "Seattle Seahawks",
+        "price": -110,
+        "point": -3.5
+       }
+      ]
+     }
+    ]
+   },
+   {
+    "key": "betrivers",
+    "title": "BetRivers",
+    "last_update": "2026-08-02T16:40:41Z",
+    "markets": [
+     {
+      "key": "spreads",
+      "last_update": "2026-08-02T16:40:41Z",
+      "outcomes": [
+       {
+        "name": "New England Patriots",
+        "price": -114,
+        "point": 4.5
+       },
+       {
+        "name": "Seattle Seahawks",
+        "price": -109,
+        "point": -4.5
+       }
+      ]
+     }
+    ]
+   },
+   {
+    "key": "bovada",
+    "title": "Bovada",
+    "last_update": "2026-08-02T16:39:52Z",
+    "markets": [
+     {
+      "key": "spreads",
+      "last_update": "2026-08-02T16:39:52Z",
+      "outcomes": [
+       {
+        "name": "New England Patriots",
+        "price": -115,
+        "point": 4.0
+       },
+       {
+        "name": "Seattle Seahawks",
+        "price": -105,
+        "point": -4.0
+       }
+      ]
+     }
+    ]
+   },
+   {
+    "key": "mybookieag",
+    "title": "MyBookie.ag",
+    "last_update": "2026-08-02T16:40:29Z",
+    "markets": [
+     {
+      "key": "spreads",
+      "last_update": "2026-08-02T16:40:29Z",
+      "outcomes": [
+       {
+        "name": "New England Patriots",
+        "price": -110,
+        "point": 3.5
+       },
+       {
+        "name": "Seattle Seahawks",
+        "price": -110,
+        "point": -3.5
+       }
+      ]
+     }
+    ]
+   }
+  ]
+ },
+ {
+  "id": "acc580d74344ea3b31bbcdd057fe6a9c",
+  "sport_key": "americanfootball_nfl",
+  "sport_title": "NFL",
+  "commence_time": "2026-09-11T00:35:00Z",
+  "home_team": "Los Angeles Rams",
+  "away_team": "San Francisco 49ers",
+  "bookmakers": [
+   {
+    "key": "draftkings",
+    "title": "DraftKings",
+    "last_update": "2026-08-02T16:40:18Z",
+    "markets": [
+     {
+      "key": "spreads",
+      "last_update": "2026-08-02T16:40:14Z",
+      "outcomes": [
+       {
+        "name": "Los Angeles Rams",
+        "price": -105,
+        "point": -3.5
+       },
+       {
+        "name": "San Francisco 49ers",
+        "price": -115,
+        "point": 3.5
+       }
+      ]
+     }
+    ]
+   },
+   {
+    "key": "fanduel",
+    "title": "FanDuel",
+    "last_update": "2026-08-02T16:41:01Z",
+    "markets": [
+     {
+      "key": "spreads",
+      "last_update": "2026-08-02T16:41:01Z",
+      "outcomes": [
+       {
+        "name": "Los Angeles Rams",
+        "price": -115,
+        "point": -3.5
+       },
+       {
+        "name": "San Francisco 49ers",
+        "price": -105,
+        "point": 3.5
+       }
+      ]
+     }
+    ]
+   },
+   {
+    "key": "betonlineag",
+    "title": "BetOnline.ag",
+    "last_update": "2026-08-02T16:41:12Z",
+    "markets": [
+     {
+      "key": "spreads",
+      "last_update": "2026-08-02T16:41:12Z",
+      "outcomes": [
+       {
+        "name": "Los Angeles Rams",
+        "price": 100,
+        "point": -3.5
+       },
+       {
+        "name": "San Francisco 49ers",
+        "price": -120,
+        "point": 3.5
+       }
+      ]
+     }
+    ]
+   },
+   {
+    "key": "lowvig",
+    "title": "LowVig.ag",
+    "last_update": "2026-08-02T16:41:12Z",
+    "markets": [
+     {
+      "key": "spreads",
+      "last_update": "2026-08-02T16:41:12Z",
+      "outcomes": [
+       {
+        "name": "Los Angeles Rams",
+        "price": 105,
+        "point": -3.5
+       },
+       {
+        "name": "San Francisco 49ers",
+        "price": -116,
+        "point": 3.5
+       }
+      ]
+     }
+    ]
+   },
+   {
+    "key": "betrivers",
+    "title": "BetRivers",
+    "last_update": "2026-08-02T16:40:41Z",
+    "markets": [
+     {
+      "key": "spreads",
+      "last_update": "2026-08-02T16:40:41Z",
+      "outcomes": [
+       {
+        "name": "Los Angeles Rams",
+        "price": -110,
+        "point": -3.5
+       },
+       {
+        "name": "San Francisco 49ers",
+        "price": -112,
+        "point": 3.5
+       }
+      ]
+     }
+    ]
+   },
+   {
+    "key": "bovada",
+    "title": "Bovada",
+    "last_update": "2026-08-02T16:39:52Z",
+    "markets": [
+     {
+      "key": "spreads",
+      "last_update": "2026-08-02T16:39:52Z",
+      "outcomes": [
+       {
+        "name": "Los Angeles Rams",
+        "price": -110,
+        "point": -3.5
+       },
+       {
+        "name": "San Francisco 49ers",
+        "price": -110,
+        "point": 3.5
+       }
+      ]
+     }
+    ]
+   },
+   {
+    "key": "betus",
+    "title": "BetUS",
+    "last_update": "2026-08-02T16:40:34Z",
+    "markets": [
+     {
+      "key": "spreads",
+      "last_update": "2026-08-02T16:40:32Z",
+      "outcomes": [
+       {
+        "name": "Los Angeles Rams",
+        "price": 100,
+        "point": -3.5
+       },
+       {
+        "name": "San Francisco 49ers",
+        "price": -120,
+        "point": 3.5
+       }
+      ]
+     }
+    ]
+   }
+  ]
+ },
+ {
+  "id": "95c01d1bb797d6df14824b106c5a9130",
+  "sport_key": "americanfootball_nfl",
+  "sport_title": "NFL",
+  "commence_time": "2026-09-13T17:00:00Z",
+  "home_team": "Pittsburgh Steelers",
+  "away_team": "Atlanta Falcons",
+  "bookmakers": [
+   {
+    "key": "draftkings",
+    "title": "DraftKings",
+    "last_update": "2026-08-02T16:40:18Z",
+    "markets": [
+     {
+      "key": "spreads",
+      "last_update": "2026-08-02T16:40:14Z",
+      "outcomes": [
+       {
+        "name": "Atlanta Falcons",
+        "price": 100,
+        "point": 3.0
+       },
+       {
+        "name": "Pittsburgh Steelers",
+        "price": -120,
+        "point": -3.0
+       }
+      ]
+     }
+    ]
+   },
+   {
+    "key": "betrivers",
+    "title": "BetRivers",
+    "last_update": "2026-08-02T16:40:41Z",
+    "markets": [
+     {
+      "key": "spreads",
+      "last_update": "2026-08-02T16:40:41Z",
+      "outcomes": [
+       {
+        "name": "Atlanta Falcons",
+        "price": -118,
+        "point": 3.0
+       },
+       {
+        "name": "Pittsburgh Steelers",
+        "price": -105,
+        "point": -3.0
+       }
+      ]
+     }
+    ]
+   },
+   {
+    "key": "betonlineag",
+    "title": "BetOnline.ag",
+    "last_update": "2026-08-02T16:41:12Z",
+    "markets": [
+     {
+      "key": "spreads",
+      "last_update": "2026-08-02T16:41:12Z",
+      "outcomes": [
+       {
+        "name": "Atlanta Falcons",
+        "price": -110,
+        "point": 3.0
+       },
+       {
+        "name": "Pittsburgh Steelers",
+        "price": -110,
+        "point": -3.0
+       }
+      ]
+     }
+    ]
+   },
+   {
+    "key": "fanduel",
+    "title": "FanDuel",
+    "last_update": "2026-08-02T16:41:01Z",
+    "markets": [
+     {
+      "key": "spreads",
+      "last_update": "2026-08-02T16:41:01Z",
+      "outcomes": [
+       {
+        "name": "Atlanta Falcons",
+        "price": -102,
+        "point": 2.5
+       },
+       {
+        "name": "Pittsburgh Steelers",
+        "price": -120,
+        "point": -2.5
+       }
+      ]
+     }
+    ]
+   },
+   {
+    "key": "lowvig",
+    "title": "LowVig.ag",
+    "last_update": "2026-08-02T16:41:12Z",
+    "markets": [
+     {
+      "key": "spreads",
+      "last_update": "2026-08-02T16:41:12Z",
+      "outcomes": [
+       {
+        "name": "Atlanta Falcons",
+        "price": -105,
+        "point": 3.0
+       },
+       {
+        "name": "Pittsburgh Steelers",
+        "price": -105,
+        "point": -3.0
+       }
+      ]
+     }
+    ]
+   },
+   {
+    "key": "betus",
+    "title": "BetUS",
+    "last_update": "2026-08-02T16:40:34Z",
+    "markets": [
+     {
+      "key": "spreads",
+      "last_update": "2026-08-02T16:40:32Z",
+      "outcomes": [
+       {
+        "name": "Atlanta Falcons",
+        "price": -110,
+        "point": 3.0
+       },
+       {
+        "name": "Pittsburgh Steelers",
+        "price": -110,
+        "point": -3.0
+       }
+      ]
+     }
+    ]
+   },
+   {
+    "key": "bovada",
+    "title": "Bovada",
+    "last_update": "2026-08-02T16:39:52Z",
+    "markets": [
+     {
+      "key": "spreads",
+      "last_update": "2026-08-02T16:39:52Z",
+      "outcomes": [
+       {
+        "name": "Atlanta Falcons",
+        "price": -110,
+        "point": 3.0
+       },
+       {
+        "name": "Pittsburgh Steelers",
+        "price": -110,
+        "point": -3.0
+       }
+      ]
+     }
+    ]
+   },
+   {
+    "key": "mybookieag",
+    "title": "MyBookie.ag",
+    "last_update": "2026-08-02T16:40:29Z",
+    "markets": [
+     {
+      "key": "spreads",
+      "last_update": "2026-08-02T16:40:29Z",
+      "outcomes": [
+       {
+        "name": "Atlanta Falcons",
+        "price": -110,
+        "point": 3.0
+       },
+       {
+        "name": "Pittsburgh Steelers",
+        "price": -110,
+        "point": -3.0
+       }
+      ]
+     }
+    ]
+   }
+  ]
+ },
+ {
+  "id": "b6cfdcbafa61ce220ba87dc2d9b80c77",
+  "sport_key": "americanfootball_nfl",
+  "sport_title": "NFL",
+  "commence_time": "2026-09-13T17:00:00Z",
+  "home_team": "Indianapolis Colts",
+  "away_team": "Baltimore Ravens",
+  "bookmakers": [
+   {
+    "key": "draftkings",
+    "title": "DraftKings",
+    "last_update": "2026-08-02T16:40:18Z",
+    "markets": [
+     {
+      "key": "spreads",
+      "last_update": "2026-08-02T16:40:14Z",
+      "outcomes": [
+       {
+        "name": "Baltimore Ravens",
+        "price": -110,
+        "point": -3.5
+       },
+       {
+        "name": "Indianapolis Colts",
+        "price": -110,
+        "point": 3.5
+       }
+      ]
+     }
+    ]
+   },
+   {
+    "key": "betus",
+    "title": "BetUS",
+    "last_update": "2026-08-02T16:40:34Z",
+    "markets": [
+     {
+      "key": "spreads",
+      "last_update": "2026-08-02T16:40:32Z",
+      "outcomes": [
+       {
+        "name": "Baltimore Ravens",
+        "price": -105,
+        "point": -3.5
+       },
+       {
+        "name": "Indianapolis Colts",
+        "price": -115,
+        "point": 3.5
+       }
+      ]
+     }
+    ]
+   },
+   {
+    "key": "lowvig",
+    "title": "LowVig.ag",
+    "last_update": "2026-08-02T16:41:12Z",
+    "markets": [
+     {
+      "key": "spreads",
+      "last_update": "2026-08-02T16:41:12Z",
+      "outcomes": [
+       {
+        "name": "Baltimore Ravens",
+        "price": 100,
+        "point": -3.5
+       },
+       {
+        "name": "Indianapolis Colts",
+        "price": -110,
+        "point": 3.5
+       }
+      ]
+     }
+    ]
+   },
+   {
+    "key": "betrivers",
+    "title": "BetRivers",
+    "last_update": "2026-08-02T16:40:41Z",
+    "markets": [
+     {
+      "key": "spreads",
+      "last_update": "2026-08-02T16:40:41Z",
+      "outcomes": [
+       {
+        "name": "Baltimore Ravens",
+        "price": -113,
+        "point": -3.5
+       },
+       {
+        "name": "Indianapolis Colts",
+        "price": -109,
+        "point": 3.5
+       }
+      ]
+     }
+    ]
+   },
+   {
+    "key": "betonlineag",
+    "title": "BetOnline.ag",
+    "last_update": "2026-08-02T16:41:12Z",
+    "markets": [
+     {
+      "key": "spreads",
+      "last_update": "2026-08-02T16:41:12Z",
+      "outcomes": [
+       {
+        "name": "Baltimore Ravens",
+        "price": -105,
+        "point": -3.5
+       },
+       {
+        "name": "Indianapolis Colts",
+        "price": -115,
+        "point": 3.5
+       }
+      ]
+     }
+    ]
+   },
+   {
+    "key": "fanduel",
+    "title": "FanDuel",
+    "last_update": "2026-08-02T16:41:01Z",
+    "markets": [
+     {
+      "key": "spreads",
+      "last_update": "2026-08-02T16:41:01Z",
+      "outcomes": [
+       {
+        "name": "Baltimore Ravens",
+        "price": -115,
+        "point": -3.5
+       },
+       {
+        "name": "Indianapolis Colts",
+        "price": -105,
+        "point": 3.5
+       }
+      ]
+     }
+    ]
+   },
+   {
+    "key": "bovada",
+    "title": "Bovada",
+    "last_update": "2026-08-02T16:39:52Z",
+    "markets": [
+     {
+      "key": "spreads",
+      "last_update": "2026-08-02T16:39:52Z",
+      "outcomes": [
+       {
+        "name": "Baltimore Ravens",
+        "price": 100,
+        "point": -3.5
+       },
+       {
+        "name": "Indianapolis Colts",
+        "price": -120,
+        "point": 3.5
+       }
+      ]
+     }
+    ]
+   },
+   {
+    "key": "mybookieag",
+    "title": "MyBookie.ag",
+    "last_update": "2026-08-02T16:40:29Z",
+    "markets": [
+     {
+      "key": "spreads",
+      "last_update": "2026-08-02T16:40:29Z",
+      "outcomes": [
+       {
+        "name": "Baltimore Ravens",
+        "price": -110,
+        "point": -3.5
+       },
+       {
+        "name": "Indianapolis Colts",
+        "price": -110,
+        "point": 3.5
+       }
+      ]
+     }
+    ]
+   }
+  ]
+ },
+ {
+  "id": "7e09efed7e12c659b82740b67ce2f9a1",
+  "sport_key": "americanfootball_nfl",
+  "sport_title": "NFL",
+  "commence_time": "2026-09-13T17:00:00Z",
+  "home_team": "Houston Texans",
+  "away_team": "Buffalo Bills",
+  "bookmakers": [
+   {
+    "key": "draftkings",
+    "title": "DraftKings",
+    "last_update": "2026-08-02T16:40:18Z",
+    "markets": [
+     {
+      "key": "spreads",
+      "last_update": "2026-08-02T16:40:14Z",
+      "outcomes": [
+       {
+        "name": "Buffalo Bills",
+        "price": -108,
+        "point": -1.5
+       },
+       {
+        "name": "Houston Texans",
+        "price": -112,
+        "point": 1.5
+       }
+      ]
+     }
+    ]
+   },
+   {
+    "key": "betus",
+    "title": "BetUS",
+    "last_update": "2026-08-02T16:40:34Z",
+    "markets": [
+     {
+      "key": "spreads",
+      "last_update": "2026-08-02T16:40:32Z",
+      "outcomes": [
+       {
+        "name": "Buffalo Bills",
+        "price": -110,
+        "point": 0.0
+       },
+       {
+        "name": "Houston Texans",
+        "price": -110,
+        "point": 0.0
+       }
+      ]
+     }
+    ]
+   },
+   {
+    "key": "lowvig",
+    "title": "LowVig.ag",
+    "last_update": "2026-08-02T16:41:12Z",
+    "markets": [
+     {
+      "key": "spreads",
+      "last_update": "2026-08-02T16:41:12Z",
+      "outcomes": [
+       {
+        "name": "Buffalo Bills",
+        "price": -105,
+        "point": 0.0
+       },
+       {
+        "name": "Houston Texans",
+        "price": -105,
+        "point": 0.0
+       }
+      ]
+     }
+    ]
+   },
+   {
+    "key": "betrivers",
+    "title": "BetRivers",
+    "last_update": "2026-08-02T16:40:41Z",
+    "markets": [
+     {
+      "key": "spreads",
+      "last_update": "2026-08-02T16:40:41Z",
+      "outcomes": [
+       {
+        "name": "Buffalo Bills",
+        "price": -113,
+        "point": -1.0
+       },
+       {
+        "name": "Houston Texans",
+        "price": -110,
+        "point": 1.0
+       }
+      ]
+     }
+    ]
+   },
+   {
+    "key": "betonlineag",
+    "title": "BetOnline.ag",
+    "last_update": "2026-08-02T16:41:12Z",
+    "markets": [
+     {
+      "key": "spreads",
+      "last_update": "2026-08-02T16:41:12Z",
+      "outcomes": [
+       {
+        "name": "Buffalo Bills",
+        "price": -110,
+        "point": 0.0
+       },
+       {
+        "name": "Houston Texans",
+        "price": -110,
+        "point": 0.0
+       }
+      ]
+     }
+    ]
+   },
+   {
+    "key": "fanduel",
+    "title": "FanDuel",
+    "last_update": "2026-08-02T16:41:01Z",
+    "markets": [
+     {
+      "key": "spreads",
+      "last_update": "2026-08-02T16:41:01Z",
+      "outcomes": [
+       {
+        "name": "Buffalo Bills",
+        "price": 100,
+        "point": -1.5
+       },
+       {
+        "name": "Houston Texans",
+        "price": -122,
+        "point": 1.5
+       }
+      ]
+     }
+    ]
+   },
+   {
+    "key": "bovada",
+    "title": "Bovada",
+    "last_update": "2026-08-02T16:39:52Z",
+    "markets": [
+     {
+      "key": "spreads",
+      "last_update": "2026-08-02T16:39:52Z",
+      "outcomes": [
+       {
+        "name": "Buffalo Bills",
+        "price": -115,
+        "point": 1.0
+       },
+       {
+        "name": "Houston Texans",
+        "price": -105,
+        "point": -1.0
+       }
+      ]
+     }
+    ]
+   },
+   {
+    "key": "mybookieag",
+    "title": "MyBookie.ag",
+    "last_update": "2026-08-02T16:40:29Z",
+    "markets": [
+     {
+      "key": "spreads",
+      "last_update": "2026-08-02T16:40:29Z",
+      "outcomes": [
+       {
+        "name": "Buffalo Bills",
+        "price": -110,
+        "point": -1.0
+       },
+       {
+        "name": "Houston Texans",
+        "price": -110,
+        "point": 1.0
+       }
+      ]
+     }
+    ]
+   }
+  ]
+ },
+ {
+  "id": "fc362aff0d889ec52d358307a70c32ed",
+  "sport_key": "americanfootball_nfl",
+  "sport_title": "NFL",
+  "commence_time": "2026-09-13T17:00:00Z",
+  "home_team": "Carolina Panthers",
+  "away_team": "Chicago Bears",
+  "bookmakers": [
+   {
+    "key": "draftkings",
+    "title": "DraftKings",
+    "last_update": "2026-08-02T16:40:18Z",
+    "markets": [
+     {
+      "key": "spreads",
+      "last_update": "2026-08-02T16:40:14Z",
+      "outcomes": [
+       {
+        "name": "Carolina Panthers",
+        "price": -102,
+        "point": 2.5
+       },
+       {
+        "name": "Chicago Bears",
+        "price": -118,
+        "point": -2.5
+       }
+      ]
+     }
+    ]
+   },
+   {
+    "key": "fanduel",
+    "title": "FanDuel",
+    "last_update": "2026-08-02T16:41:01Z",
+    "markets": [
+     {
+      "key": "spreads",
+      "last_update": "2026-08-02T16:41:01Z",
+      "outcomes": [
+       {
+        "name": "Carolina Panthers",
+        "price": -105,
+        "point": 2.5
+       },
+       {
+        "name": "Chicago Bears",
+        "price": -115,
+        "point": -2.5
+       }
+      ]
+     }
+    ]
+   },
+   {
+    "key": "lowvig",
+    "title": "LowVig.ag",
+    "last_update": "2026-08-02T16:41:12Z",
+    "markets": [
+     {
+      "key": "spreads",
+      "last_update": "2026-08-02T16:41:12Z",
+      "outcomes": [
+       {
+        "name": "Carolina Panthers",
+        "price": 100,
+        "point": 2.5
+       },
+       {
+        "name": "Chicago Bears",
+        "price": -110,
+        "point": -2.5
+       }
+      ]
+     }
+    ]
+   },
+   {
+    "key": "betus",
+    "title": "BetUS",
+    "last_update": "2026-08-02T16:40:34Z",
+    "markets": [
+     {
+      "key": "spreads",
+      "last_update": "2026-08-02T16:40:32Z",
+      "outcomes": [
+       {
+        "name": "Carolina Panthers",
+        "price": -110,
+        "point": 3.0
+       },
+       {
+        "name": "Chicago Bears",
+        "price": -110,
+        "point": -3.0
+       }
+      ]
+     }
+    ]
+   },
+   {
+    "key": "betonlineag",
+    "title": "BetOnline.ag",
+    "last_update": "2026-08-02T16:41:12Z",
+    "markets": [
+     {
+      "key": "spreads",
+      "last_update": "2026-08-02T16:41:12Z",
+      "outcomes": [
+       {
+        "name": "Carolina Panthers",
+        "price": -105,
+        "point": 2.5
+       },
+       {
+        "name": "Chicago Bears",
+        "price": -115,
+        "point": -2.5
+       }
+      ]
+     }
+    ]
+   },
+   {
+    "key": "betrivers",
+    "title": "BetRivers",
+    "last_update": "2026-08-02T16:40:41Z",
+    "markets": [
+     {
+      "key": "spreads",
+      "last_update": "2026-08-02T16:40:41Z",
+      "outcomes": [
+       {
+        "name": "Carolina Panthers",
+        "price": -113,
+        "point": 2.5
+       },
+       {
+        "name": "Chicago Bears",
+        "price": -110,
+        "point": -2.5
+       }
+      ]
+     }
+    ]
+   },
+   {
+    "key": "bovada",
+    "title": "Bovada",
+    "last_update": "2026-08-02T16:39:52Z",
+    "markets": [
+     {
+      "key": "spreads",
+      "last_update": "2026-08-02T16:39:52Z",
+      "outcomes": [
+       {
+        "name": "Carolina Panthers",
+        "price": -105,
+        "point": 2.5
+       },
+       {
+        "name": "Chicago Bears",
+        "price": -115,
+        "point": -2.5
+       }
+      ]
+     }
+    ]
+   },
+   {
+    "key": "mybookieag",
+    "title": "MyBookie.ag",
+    "last_update": "2026-08-02T16:40:29Z",
+    "markets": [
+     {
+      "key": "spreads",
+      "last_update": "2026-08-02T16:40:29Z",
+      "outcomes": [
+       {
+        "name": "Carolina Panthers",
+        "price": -110,
+        "point": 3.0
+       },
+       {
+        "name": "Chicago Bears",
+        "price": -110,
+        "point": -3.0
+       }
+      ]
+     }
+    ]
+   }
+  ]
+ },
+ {
+  "id": "ed6d24ff979f9c71979fead577b0b3f7",
+  "sport_key": "americanfootball_nfl",
+  "sport_title": "NFL",
+  "commence_time": "2026-09-13T17:00:00Z",
+  "home_team": "Cincinnati Bengals",
+  "away_team": "Tampa Bay Buccaneers",
+  "bookmakers": [
+   {
+    "key": "draftkings",
+    "title": "DraftKings",
+    "last_update": "2026-08-02T16:40:18Z",
+    "markets": [
+     {
+      "key": "spreads",
+      "last_update": "2026-08-02T16:40:14Z",
+      "outcomes": [
+       {
+        "name": "Cincinnati Bengals",
+        "price": -110,
+        "point": -3.5
+       },
+       {
+        "name": "Tampa Bay Buccaneers",
+        "price": -110,
+        "point": 3.5
+       }
+      ]
+     }
+    ]
+   },
+   {
+    "key": "fanduel",
+    "title": "FanDuel",
+    "last_update": "2026-08-02T16:41:01Z",
+    "markets": [
+     {
+      "key": "spreads",
+      "last_update": "2026-08-02T16:41:01Z",
+      "outcomes": [
+       {
+        "name": "Cincinnati Bengals",
+        "price": -115,
+        "point": -3.5
+       },
+       {
+        "name": "Tampa Bay Buccaneers",
+        "price": -105,
+        "point": 3.5
+       }
+      ]
+     }
+    ]
+   },
+   {
+    "key": "lowvig",
+    "title": "LowVig.ag",
+    "last_update": "2026-08-02T16:41:12Z",
+    "markets": [
+     {
+      "key": "spreads",
+      "last_update": "2026-08-02T16:41:12Z",
+      "outcomes": [
+       {
+        "name": "Cincinnati Bengals",
+        "price": 100,
+        "point": -3.5
+       },
+       {
+        "name": "Tampa Bay Buccaneers",
+        "price": -110,
+        "point": 3.5
+       }
+      ]
+     }
+    ]
+   },
+   {
+    "key": "betus",
+    "title": "BetUS",
+    "last_update": "2026-08-02T16:40:34Z",
+    "markets": [
+     {
+      "key": "spreads",
+      "last_update": "2026-08-02T16:40:32Z",
+      "outcomes": [
+       {
+        "name": "Cincinnati Bengals",
+        "price": -110,
+        "point": -3.5
+       },
+       {
+        "name": "Tampa Bay Buccaneers",
+        "price": -110,
+        "point": 3.5
+       }
+      ]
+     }
+    ]
+   },
+   {
+    "key": "betonlineag",
+    "title": "BetOnline.ag",
+    "last_update": "2026-08-02T16:41:12Z",
+    "markets": [
+     {
+      "key": "spreads",
+      "last_update": "2026-08-02T16:41:12Z",
+      "outcomes": [
+       {
+        "name": "Cincinnati Bengals",
+        "price": -105,
+        "point": -3.5
+       },
+       {
+        "name": "Tampa Bay Buccaneers",
+        "price": -115,
+        "point": 3.5
+       }
+      ]
+     }
+    ]
+   },
+   {
+    "key": "betrivers",
+    "title": "BetRivers",
+    "last_update": "2026-08-02T16:40:41Z",
+    "markets": [
+     {
+      "key": "spreads",
+      "last_update": "2026-08-02T16:40:41Z",
+      "outcomes": [
+       {
+        "name": "Cincinnati Bengals",
+        "price": -113,
+        "point": -3.5
+       },
+       {
+        "name": "Tampa Bay Buccaneers",
+        "price": -110,
+        "point": 3.5
+       }
+      ]
+     }
+    ]
+   },
+   {
+    "key": "bovada",
+    "title": "Bovada",
+    "last_update": "2026-08-02T16:39:52Z",
+    "markets": [
+     {
+      "key": "spreads",
+      "last_update": "2026-08-02T16:39:52Z",
+      "outcomes": [
+       {
+        "name": "Cincinnati Bengals",
+        "price": -105,
+        "point": -3.5
+       },
+       {
+        "name": "Tampa Bay Buccaneers",
+        "price": -115,
+        "point": 3.5
+       }
+      ]
+     }
+    ]
+   },
+   {
+    "key": "mybookieag",
+    "title": "MyBookie.ag",
+    "last_update": "2026-08-02T16:40:29Z",
+    "markets": [
+     {
+      "key": "spreads",
+      "last_update": "2026-08-02T16:40:29Z",
+      "outcomes": [
+       {
+        "name": "Cincinnati Bengals",
+        "price": -110,
+        "point": -3.5
+       },
+       {
+        "name": "Tampa Bay Buccaneers",
+        "price": -110,
+        "point": 3.5
+       }
+      ]
+     }
+    ]
+   }
+  ]
+ },
+ {
+  "id": "e55c6fe19fce094ce214c8b0e5b504e9",
+  "sport_key": "americanfootball_nfl",
+  "sport_title": "NFL",
+  "commence_time": "2026-09-13T17:00:00Z",
+  "home_team": "Jacksonville Jaguars",
+  "away_team": "Cleveland Browns",
+  "bookmakers": [
+   {
+    "key": "draftkings",
+    "title": "DraftKings",
+    "last_update": "2026-08-02T16:40:18Z",
+    "markets": [
+     {
+      "key": "spreads",
+      "last_update": "2026-08-02T16:40:14Z",
+      "outcomes": [
+       {
+        "name": "Cleveland Browns",
+        "price": -110,
+        "point": 7.5
+       },
+       {
+        "name": "Jacksonville Jaguars",
+        "price": -110,
+        "point": -7.5
+       }
+      ]
+     }
+    ]
+   },
+   {
+    "key": "fanduel",
+    "title": "FanDuel",
+    "last_update": "2026-08-02T16:41:01Z",
+    "markets": [
+     {
+      "key": "spreads",
+      "last_update": "2026-08-02T16:41:01Z",
+      "outcomes": [
+       {
+        "name": "Cleveland Browns",
+        "price": -105,
+        "point": 7.5
+       },
+       {
+        "name": "Jacksonville Jaguars",
+        "price": -115,
+        "point": -7.5
+       }
+      ]
+     }
+    ]
+   },
+   {
+    "key": "betus",
+    "title": "BetUS",
+    "last_update": "2026-08-02T16:40:34Z",
+    "markets": [
+     {
+      "key": "spreads",
+      "last_update": "2026-08-02T16:40:32Z",
+      "outcomes": [
+       {
+        "name": "Cleveland Browns",
+        "price": -110,
+        "point": 7.5
+       },
+       {
+        "name": "Jacksonville Jaguars",
+        "price": -110,
+        "point": -7.5
+       }
+      ]
+     }
+    ]
+   },
+   {
+    "key": "betrivers",
+    "title": "BetRivers",
+    "last_update": "2026-08-02T16:40:41Z",
+    "markets": [
+     {
+      "key": "spreads",
+      "last_update": "2026-08-02T16:40:41Z",
+      "outcomes": [
+       {
+        "name": "Cleveland Browns",
+        "price": -114,
+        "point": 7.5
+       },
+       {
+        "name": "Jacksonville Jaguars",
+        "price": -109,
+        "point": -7.5
+       }
+      ]
+     }
+    ]
+   },
+   {
+    "key": "betonlineag",
+    "title": "BetOnline.ag",
+    "last_update": "2026-08-02T16:41:12Z",
+    "markets": [
+     {
+      "key": "spreads",
+      "last_update": "2026-08-02T16:41:12Z",
+      "outcomes": [
+       {
+        "name": "Cleveland Browns",
+        "price": -110,
+        "point": 7.5
+       },
+       {
+        "name": "Jacksonville Jaguars",
+        "price": -110,
+        "point": -7.5
+       }
+      ]
+     }
+    ]
+   },
+   {
+    "key": "lowvig",
+    "title": "LowVig.ag",
+    "last_update": "2026-08-02T16:41:12Z",
+    "markets": [
+     {
+      "key": "spreads",
+      "last_update": "2026-08-02T16:41:12Z",
+      "outcomes": [
+       {
+        "name": "Cleveland Browns",
+        "price": -105,
+        "point": 7.5
+       },
+       {
+        "name": "Jacksonville Jaguars",
+        "price": -105,
+        "point": -7.5
+       }
+      ]
+     }
+    ]
+   },
+   {
+    "key": "bovada",
+    "title": "Bovada",
+    "last_update": "2026-08-02T16:39:52Z",
+    "markets": [
+     {
+      "key": "spreads",
+      "last_update": "2026-08-02T16:39:52Z",
+      "outcomes": [
+       {
+        "name": "Cleveland Browns",
+        "price": -115,
+        "point": 7.5
+       },
+       {
+        "name": "Jacksonville Jaguars",
+        "price": -105,
+        "point": -7.5
+       }
+      ]
+     }
+    ]
+   },
+   {
+    "key": "mybookieag",
+    "title": "MyBookie.ag",
+    "last_update": "2026-08-02T16:40:29Z",
+    "markets": [
+     {
+      "key": "spreads",
+      "last_update": "2026-08-02T16:40:29Z",
+      "outcomes": [
+       {
+        "name": "Cleveland Browns",
+        "price": -110,
+        "point": 7.5
+       },
+       {
+        "name": "Jacksonville Jaguars",
+        "price": -110,
+        "point": -7.5
+       }
+      ]
+     }
+    ]
+   }
+  ]
+ },
+ {
+  "id": "c1d3fcec25aaeb06ebd2244d33d338e0",
+  "sport_key": "americanfootball_nfl",
+  "sport_title": "NFL",
+  "commence_time": "2026-09-13T17:00:00Z",
+  "home_team": "Detroit Lions",
+  "away_team": "New Orleans Saints",
+  "bookmakers": [
+   {
+    "key": "draftkings",
+    "title": "DraftKings",
+    "last_update": "2026-08-02T16:40:18Z",
+    "markets": [
+     {
+      "key": "spreads",
+      "last_update": "2026-08-02T16:40:14Z",
+      "outcomes": [
+       {
+        "name": "Detroit Lions",
+        "price": -110,
+        "point": -7.0
+       },
+       {
+        "name": "New Orleans Saints",
+        "price": -110,
+        "point": 7.0
+       }
+      ]
+     }
+    ]
+   },
+   {
+    "key": "fanduel",
+    "title": "FanDuel",
+    "last_update": "2026-08-02T16:41:01Z",
+    "markets": [
+     {
+      "key": "spreads",
+      "last_update": "2026-08-02T16:41:01Z",
+      "outcomes": [
+       {
+        "name": "Detroit Lions",
+        "price": -115,
+        "point": -6.5
+       },
+       {
+        "name": "New Orleans Saints",
+        "price": -105,
+        "point": 6.5
+       }
+      ]
+     }
+    ]
+   },
+   {
+    "key": "lowvig",
+    "title": "LowVig.ag",
+    "last_update": "2026-08-02T16:41:12Z",
+    "markets": [
+     {
+      "key": "spreads",
+      "last_update": "2026-08-02T16:41:12Z",
+      "outcomes": [
+       {
+        "name": "Detroit Lions",
+        "price": -105,
+        "point": -7.0
+       },
+       {
+        "name": "New Orleans Saints",
+        "price": -105,
+        "point": 7.0
+       }
+      ]
+     }
+    ]
+   },
+   {
+    "key": "betonlineag",
+    "title": "BetOnline.ag",
+    "last_update": "2026-08-02T16:41:12Z",
+    "markets": [
+     {
+      "key": "spreads",
+      "last_update": "2026-08-02T16:41:12Z",
+      "outcomes": [
+       {
+        "name": "Detroit Lions",
+        "price": -110,
+        "point": -7.0
+       },
+       {
+        "name": "New Orleans Saints",
+        "price": -110,
+        "point": 7.0
+       }
+      ]
+     }
+    ]
+   },
+   {
+    "key": "betus",
+    "title": "BetUS",
+    "last_update": "2026-08-02T16:40:34Z",
+    "markets": [
+     {
+      "key": "spreads",
+      "last_update": "2026-08-02T16:40:32Z",
+      "outcomes": [
+       {
+        "name": "Detroit Lions",
+        "price": -110,
+        "point": -7.0
+       },
+       {
+        "name": "New Orleans Saints",
+        "price": -110,
+        "point": 7.0
+       }
+      ]
+     }
+    ]
+   },
+   {
+    "key": "betrivers",
+    "title": "BetRivers",
+    "last_update": "2026-08-02T16:40:41Z",
+    "markets": [
+     {
+      "key": "spreads",
+      "last_update": "2026-08-02T16:40:41Z",
+      "outcomes": [
+       {
+        "name": "Detroit Lions",
+        "price": -112,
+        "point": -7.0
+       },
+       {
+        "name": "New Orleans Saints",
+        "price": -112,
+        "point": 7.0
+       }
+      ]
+     }
+    ]
+   },
+   {
+    "key": "bovada",
+    "title": "Bovada",
+    "last_update": "2026-08-02T16:39:52Z",
+    "markets": [
+     {
+      "key": "spreads",
+      "last_update": "2026-08-02T16:39:52Z",
+      "outcomes": [
+       {
+        "name": "Detroit Lions",
+        "price": -115,
+        "point": -7.0
+       },
+       {
+        "name": "New Orleans Saints",
+        "price": -105,
+        "point": 7.0
+       }
+      ]
+     }
+    ]
+   },
+   {
+    "key": "mybookieag",
+    "title": "MyBookie.ag",
+    "last_update": "2026-08-02T16:40:29Z",
+    "markets": [
+     {
+      "key": "spreads",
+      "last_update": "2026-08-02T16:40:29Z",
+      "outcomes": [
+       {
+        "name": "Detroit Lions",
+        "price": -110,
+        "point": -7.0
+       },
+       {
+        "name": "New Orleans Saints",
+        "price": -110,
+        "point": 7.0
+       }
+      ]
+     }
+    ]
+   }
+  ]
+ },
+ {
+  "id": "7dddb296a42e7a41a774b24bd1709ce1",
+  "sport_key": "americanfootball_nfl",
+  "sport_title": "NFL",
+  "commence_time": "2026-09-13T17:00:00Z",
+  "home_team": "Tennessee Titans",
+  "away_team": "New York Jets",
+  "bookmakers": [
+   {
+    "key": "draftkings",
+    "title": "DraftKings",
+    "last_update": "2026-08-02T16:40:18Z",
+    "markets": [
+     {
+      "key": "spreads",
+      "last_update": "2026-08-02T16:40:14Z",
+      "outcomes": [
+       {
+        "name": "New York Jets",
+        "price": -120,
+        "point": 3.0
+       },
+       {
+        "name": "Tennessee Titans",
+        "price": 100,
+        "point": -3.0
+       }
+      ]
+     }
+    ]
+   },
+   {
+    "key": "fanduel",
+    "title": "FanDuel",
+    "last_update": "2026-08-02T16:41:01Z",
+    "markets": [
+     {
+      "key": "spreads",
+      "last_update": "2026-08-02T16:41:01Z",
+      "outcomes": [
+       {
+        "name": "New York Jets",
+        "price": -110,
+        "point": 2.5
+       },
+       {
+        "name": "Tennessee Titans",
+        "price": -110,
+        "point": -2.5
+       }
+      ]
+     }
+    ]
+   },
+   {
+    "key": "lowvig",
+    "title": "LowVig.ag",
+    "last_update": "2026-08-02T16:41:12Z",
+    "markets": [
+     {
+      "key": "spreads",
+      "last_update": "2026-08-02T16:41:12Z",
+      "outcomes": [
+       {
+        "name": "New York Jets",
+        "price": 100,
+        "point": 2.5
+       },
+       {
+        "name": "Tennessee Titans",
+        "price": -110,
+        "point": -2.5
+       }
+      ]
+     }
+    ]
+   },
+   {
+    "key": "betus",
+    "title": "BetUS",
+    "last_update": "2026-08-02T16:40:34Z",
+    "markets": [
+     {
+      "key": "spreads",
+      "last_update": "2026-08-02T16:40:32Z",
+      "outcomes": [
+       {
+        "name": "New York Jets",
+        "price": 100,
+        "point": 2.0
+       },
+       {
+        "name": "Tennessee Titans",
+        "price": -120,
+        "point": -2.0
+       }
+      ]
+     }
+    ]
+   },
+   {
+    "key": "betonlineag",
+    "title": "BetOnline.ag",
+    "last_update": "2026-08-02T16:41:12Z",
+    "markets": [
+     {
+      "key": "spreads",
+      "last_update": "2026-08-02T16:41:12Z",
+      "outcomes": [
+       {
+        "name": "New York Jets",
+        "price": -105,
+        "point": 2.5
+       },
+       {
+        "name": "Tennessee Titans",
+        "price": -115,
+        "point": -2.5
+       }
+      ]
+     }
+    ]
+   },
+   {
+    "key": "betrivers",
+    "title": "BetRivers",
+    "last_update": "2026-08-02T16:40:41Z",
+    "markets": [
+     {
+      "key": "spreads",
+      "last_update": "2026-08-02T16:40:41Z",
+      "outcomes": [
+       {
+        "name": "New York Jets",
+        "price": -112,
+        "point": 2.5
+       },
+       {
+        "name": "Tennessee Titans",
+        "price": -112,
+        "point": -2.5
+       }
+      ]
+     }
+    ]
+   },
+   {
+    "key": "bovada",
+    "title": "Bovada",
+    "last_update": "2026-08-02T16:39:52Z",
+    "markets": [
+     {
+      "key": "spreads",
+      "last_update": "2026-08-02T16:39:52Z",
+      "outcomes": [
+       {
+        "name": "New York Jets",
+        "price": 100,
+        "point": 2.5
+       },
+       {
+        "name": "Tennessee Titans",
+        "price": -120,
+        "point": -2.5
+       }
+      ]
+     }
+    ]
+   },
+   {
+    "key": "mybookieag",
+    "title": "MyBookie.ag",
+    "last_update": "2026-08-02T16:40:29Z",
+    "markets": [
+     {
+      "key": "spreads",
+      "last_update": "2026-08-02T16:40:29Z",
+      "outcomes": [
+       {
+        "name": "New York Jets",
+        "price": -110,
+        "point": 2.5
+       },
+       {
+        "name": "Tennessee Titans",
+        "price": -110,
+        "point": -2.5
+       }
+      ]
+     }
+    ]
+   }
+  ]
+ }
+]

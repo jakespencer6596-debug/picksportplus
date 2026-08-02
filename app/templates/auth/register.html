@@ -1,0 +1,65 @@
+{% extends "base.html" %}
+{% block title %}Create an account. {{ APP_NAME }}{% endblock %}
+{% block body_class %}page-auth{% endblock %}
+
+{% block content %}
+<div class="auth-wrap">
+  <div class="card auth-card">
+    <div class="card-body">
+      <p class="eyebrow">Join the pool</p>
+      <h1 class="page-title">Create an account</h1>
+      <p class="muted auth-intro">
+        {% if open_registration %}
+          Registration is open. A join code puts you straight into a pool.
+        {% else %}
+          This pool is private. You need the join code from the commissioner.
+        {% endif %}
+      </p>
+
+      {% if errors %}
+        <div class="form-error" role="alert">
+          <ul class="error-list">
+            {% for e in errors %}<li>{{ e }}</li>{% endfor %}
+          </ul>
+        </div>
+      {% endif %}
+
+      <form method="post" action="/register" class="stack" novalidate>
+        <div class="field">
+          <label class="field-label" for="display_name">Display name</label>
+          <input class="input" type="text" id="display_name" name="display_name"
+                 value="{{ form.display_name or '' }}" autocomplete="nickname" required autofocus>
+          <p class="form-hint">This is the name on the leaderboard.</p>
+        </div>
+
+        <div class="field">
+          <label class="field-label" for="email">Email</label>
+          <input class="input" type="email" id="email" name="email"
+                 value="{{ form.email or '' }}" autocomplete="email" required>
+        </div>
+
+        <div class="field">
+          <label class="field-label" for="password">Password</label>
+          <input class="input" type="password" id="password" name="password"
+                 autocomplete="new-password" minlength="8" required>
+          <p class="form-hint">At least 8 characters.</p>
+        </div>
+
+        <div class="field">
+          <label class="field-label" for="join_code">
+            Join code{% if open_registration %} <span class="muted">(optional)</span>{% endif %}
+          </label>
+          <input class="input input-code" type="text" id="join_code" name="join_code"
+                 value="{{ join_code or form.join_code or '' }}"
+                 autocomplete="off" spellcheck="false"
+                 {% if not open_registration %}required{% endif %}>
+        </div>
+
+        <button class="btn btn-primary" type="submit">Create account</button>
+      </form>
+
+      <p class="auth-alt muted">Already a member? <a href="/login">Sign in</a>.</p>
+    </div>
+  </div>
+</div>
+{% endblock %}
