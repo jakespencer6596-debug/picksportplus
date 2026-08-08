@@ -140,6 +140,7 @@ def settings_save(
     open_registration: str = Form(""),
     sports_nfl: str = Form(""),
     sports_ncaaf: str = Form(""),
+    week1_anchor_date: str = Form(""),
     db: Session = Depends(get_db),
     user: User = Depends(require_user),
     pool: Pool = Depends(require_commissioner),
@@ -162,6 +163,16 @@ def settings_save(
     except Exception:
         errors.append("That timezone is not recognised.")
 
+    anchor_date: dt.date | None = pool.week1_anchor_date
+    week1_anchor_date = week1_anchor_date.strip()
+    if week1_anchor_date:
+        try:
+            anchor_date = dt.date.fromisoformat(week1_anchor_date)
+        except ValueError:
+            errors.append("Week 1 anchor date is not a valid date.")
+    else:
+        anchor_date = None
+
     if errors:
         for message in errors:
             flash(request, message, "error")
@@ -176,6 +187,7 @@ def settings_save(
     pool.sports = sports
     pool.auto_publish = bool(auto_publish)
     pool.open_registration = bool(open_registration)
+    pool.week1_anchor_date = anchor_date
     db.commit()
 
     total = sum(pool.league_targets.values())

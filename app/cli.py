@@ -168,7 +168,9 @@ def seed_demo(
 
 @app.command("build-slate")
 def build_slate_cmd(
-    week: int = typer.Option(..., "--week", "-w", help="ESPN week number."),
+    week: int = typer.Option(
+        ..., "--week", "-w", help="The pool's own week number, not an ESPN week number."
+    ),
     year: int | None = typer.Option(None, "--year", "-y"),
     pool_id: int | None = typer.Option(None, "--pool"),
     publish: bool | None = typer.Option(None, "--publish/--no-publish"),

@@ -149,7 +149,7 @@ All three providers are free. ESPN is the primary source for schedule, live stat
 - College FBS scoreboard: `https://site.api.espn.com/apis/site/v2/sports/football/college-football/scoreboard?groups=80&seasontype=2&week={W}&dates={YEAR}` (`groups=80` is FBS, `seasontype=2` is regular season, `3` is postseason)
 - Single game detail if needed: `.../summary?event={espn_event_id}`
 
-Use ESPN week numbering to scope a week per league and detect the current week (the scoreboard response includes calendar and current week metadata, read it, do not hand roll date math). From each event read: event id, kickoff datetime, home and away team (name plus abbreviation, optional record), final scores, whether the game is completed, the winner flag per competitor, and when present the odds under `competitions[0].odds[]`.
+NFL and college football week numbers are not aligned: college week 1 starts about three weeks before NFL week 1, they stay that far apart all season, and college has a bowl season the NFL has no equivalent of on the same calendar. So a pool's own week number is never sent to ESPN directly as a week number for both leagues. Instead each pool week carries an `anchor_date` (a calendar Saturday), and each enabled league independently resolves its own ESPN week number and season type by finding the calendar entry whose `[startDate, endDate)` window contains that date, trying the regular season first and the postseason (bowl season) second. See `app/services/calendar.py` and Section 6. From each event read: event id, kickoff datetime, home and away team (name plus abbreviation, optional record), final scores, whether the game is completed, the winner flag per competitor, and when present the odds under `competitions[0].odds[]`.
 
 **Verified field behaviour (recorded 2026-08-02 against the live API):**
 
@@ -198,9 +198,9 @@ Cross provider matching is the main integration risk. Build a normalization plus
 
 ## 6. Slate selection, closest spreads
 
-Given a season year and a week number:
+Given a pool week (its own season year and week number, plus its `anchor_date`):
 
-1. Pull NFL (`week=W`) and CFB FBS (`week=W`, `groups=80`) games from ESPN.
+1. For each enabled league, resolve the ESPN week number and season type from `anchor_date` (Section 5a), then pull that league's games from ESPN (FBS games use `groups=80`). A league whose anchor date falls outside both its regular season and its postseason resolves to no games for that week, which is not an error: the slate is built from whichever leagues did resolve. The resolution actually used is recorded on the week (`resolved_weeks`, `is_bowl_week`).
 2. Resolve each candidate home relative spread via 5e and compute `closeness = abs(spread)`.
 3. Drop candidates with no resolvable spread (still visible to admin) and optionally drop games already kicked off.
 4. Sort by closeness ascending (a pick'em at 0 is closest). Break ties by earliest kickoff, then by key so the result is stable.
@@ -225,7 +225,7 @@ The tool always proposes a slate. The commissioner can override it.
 
 The pool runs itself. `pool.auto_publish` defaults to true.
 
-- Detect the current or upcoming football week from ESPN automatically. Do not require anyone to set the week by hand.
+- Detect the pool's current or upcoming week automatically. When `pool.week1_anchor_date` is set this is date arithmetic against that anchor, not an ESPN lookup. A pool with no anchor configured falls back to asking ESPN what NFL's current week number is, which the commissioner should replace with a real anchor date before the season NFL and college drift out of step (see Section 5a). Do not require anyone to set the week by hand once an anchor is configured.
 - A scheduled job builds the slate for the upcoming week, and because `auto_publish` is true, opens it automatically (status open) and sets `lock_at`. No human action is required to run a normal week.
 - The commissioner may still adjust a published slate before `lock_at`, but only non destructive changes once picks exist. Before any picks exist, free edits are allowed. After picks exist, allow voiding a game but not reshuffling the whole slate.
 - `pool.current_week` advances automatically as the calendar moves.

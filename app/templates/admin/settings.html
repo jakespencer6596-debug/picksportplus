@@ -45,6 +45,19 @@
         </div>
 
         <div class="field">
+          <label class="field-label" for="week1_anchor_date">Week 1 anchor date</label>
+          <input class="input" type="date" id="week1_anchor_date" name="week1_anchor_date"
+                 value="{{ pool.week1_anchor_date.isoformat() if pool.week1_anchor_date else '' }}">
+          <p class="form-hint">
+            The Saturday your pool's week 1 belongs to. Each later pool week anchors seven days
+            after the last. NFL and college resolve their own ESPN week from this date
+            independently, since the two seasons are not on the same week numbering. Leave this
+            blank and the tool falls back to asking ESPN what NFL's current week is, which is
+            wrong once the two seasons drift apart.
+          </p>
+        </div>
+
+        <div class="field">
           <label class="field-label" for="timezone">Timezone</label>
           <select class="select" id="timezone" name="timezone">
             {% for zone in timezones %}

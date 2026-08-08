@@ -8,6 +8,7 @@ from typing import Any
 from sqlalchemy import (
     JSON,
     Boolean,
+    Date,
     DateTime,
     Float,
     ForeignKey,
@@ -82,6 +83,11 @@ class Pool(Base):
     # Per pool override of the OPEN_REGISTRATION env default, owned by the commissioner.
     open_registration: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     current_week: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+    # The commissioner-set Saturday that pool week 1 anchors to for the season. Pool week N's
+    # own anchor is week1_anchor_date + (N - 1) weeks. Nullable because a pool created before
+    # this feature, or one nobody has configured yet, has none: see app/services/ingest.py
+    # detect_week for the fallback that keeps such a pool working without it.
+    week1_anchor_date: Mapped[dt.date | None] = mapped_column(Date, nullable=True)
     timezone: Mapped[str] = mapped_column(String(64), default="America/New_York", nullable=False)
     created_at: Mapped[dt.datetime] = mapped_column(
         DateTime(timezone=True), default=utcnow, server_default=func.now(), nullable=False
@@ -139,7 +145,21 @@ class Week(Base):
         ForeignKey("pools.id", ondelete="CASCADE"), index=True, nullable=False
     )
     season_year: Mapped[int] = mapped_column(Integer, nullable=False)
+    # The pool's own 1, 2, 3... sequence number. Never sent to ESPN directly: each enabled
+    # league resolves its own ESPN week number and season type from anchor_date, see
+    # app/services/calendar.py. resolved_weeks records what each league actually resolved to.
     week_number: Mapped[int] = mapped_column(Integer, nullable=False)
+    # The Saturday this pool week is anchored to: pool.week1_anchor_date + (week_number - 1)
+    # weeks. Nullable because a week created while the pool has no week1_anchor_date configured
+    # gets none, and fetch_candidates falls back to sending week_number to ESPN directly.
+    anchor_date: Mapped[dt.date | None] = mapped_column(Date, nullable=True)
+    # What each enabled league actually resolved to when the candidate pool was last fetched,
+    # for example {"nfl": {"week": 1, "season_type": 2}, "ncaaf": {"week": 3, "season_type": 2}}.
+    # A league that had no games for anchor_date (regular season or postseason) maps to None.
+    resolved_weeks: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict, nullable=False)
+    # True when any enabled league needed season_type=3 (postseason/bowl season) to find a
+    # calendar window containing anchor_date.
+    is_bowl_week: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     label: Mapped[str] = mapped_column(String(60), nullable=False)
     status: Mapped[str] = mapped_column(String(12), default="draft", nullable=False)
     lock_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

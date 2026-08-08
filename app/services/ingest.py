@@ -19,6 +19,7 @@ from __future__ import annotations
 import datetime as dt
 import logging
 from dataclasses import dataclass, field
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
@@ -28,6 +29,7 @@ from app.models import Game, Pick, Pool, Week, utcnow
 from app.providers import cfbd, espn, odds_api
 from app.providers.http import BudgetExceeded, ProviderError
 from app.providers.teams import match_by_teams_and_date
+from app.services import calendar as calendar_svc
 from app.slate import Candidate, compute_lock_at, select_slate_by_targets
 
 log = logging.getLogger("picksportplus.ingest")
@@ -76,7 +78,25 @@ LEAGUE_LABELS = {"nfl": "NFL", "ncaaf": "College"}
 # Weeks ----------------------------------------------------------------------
 
 
-def ensure_week(db: Session, pool: Pool, year: int, week_number: int) -> Week:
+def ensure_week(
+    db: Session,
+    pool: Pool,
+    year: int,
+    week_number: int,
+    *,
+    anchor_date: dt.date | None = None,
+) -> Week:
+    """Get or create the pool's week row.
+
+    week_number is always the pool's own 1, 2, 3... sequence, never an ESPN week number.
+
+    anchor_date is the calendar Saturday each enabled league resolves its own ESPN week
+    against, see app/services/calendar.py. Left unset, it is computed from
+    pool.week1_anchor_date + (week_number - 1) weeks, when the pool has one configured. A
+    pool with no week1_anchor_date gets a week with no anchor_date at all, and
+    fetch_candidates falls back to sending week_number to ESPN directly (the pre anchor
+    behaviour), with a clear warning that the pool needs configuring.
+    """
     week = db.scalar(
         select(Week).where(
             Week.pool_id == pool.id,
@@ -85,14 +105,22 @@ def ensure_week(db: Session, pool: Pool, year: int, week_number: int) -> Week:
         )
     )
     if week is None:
+        if anchor_date is None and pool.week1_anchor_date is not None:
+            anchor_date = pool.week1_anchor_date + dt.timedelta(weeks=week_number - 1)
         week = Week(
             pool_id=pool.id,
             season_year=year,
             week_number=week_number,
+            anchor_date=anchor_date,
             label=f"Week {week_number}",
             status="draft",
         )
         db.add(week)
+        db.flush()
+    elif anchor_date is not None and week.anchor_date is None:
+        # Backfill an anchor onto a week that was created before one was available, so a
+        # rebuild can resolve per league dates instead of repeating the old fallback.
+        week.anchor_date = anchor_date
         db.flush()
     return week
 
@@ -104,17 +132,186 @@ def week_has_picks(db: Session, week: Week) -> bool:
 # Candidates -----------------------------------------------------------------
 
 
-def fetch_candidates(db: Session, pool: Pool, year: int, week_number: int) -> list[espn.EspnGame]:
-    """Every game in the week across the pool's enabled leagues. ESPN only, unmetered."""
+@dataclass
+class LeagueAttempt:
+    """What happened when one league was asked for its slice of a pool week.
+
+    Kept even on success so a dead end build (every league came back with zero games) can
+    explain itself precisely: what was asked for, where, and what came back.
+    """
+
+    league: str
+    url: str
+    resolved_week: int | None
+    resolved_season_type: int | None
+    games_returned: int
+    error: str | None = None
+
+
+def _scoreboard_url(league: str) -> str:
+    segment, _extra = espn.LEAGUE_PATHS[league]
+    return f"{espn.SITE_BASE}/{segment}/scoreboard"
+
+
+def fetch_candidates(
+    db: Session, pool: Pool, week: Week
+) -> tuple[list[espn.EspnGame], list[LeagueAttempt]]:
+    """Every game for this pool week across its enabled leagues. ESPN only, unmetered.
+
+    Each league resolves its own ESPN week number and season type from week.anchor_date via
+    app/services/calendar.py, because NFL and college week numbers are not aligned: college
+    starts about three weeks earlier than the NFL and has a bowl season the NFL has no
+    equivalent of on the same calendar. The resolution is recorded on week.resolved_weeks and
+    week.is_bowl_week so the commissioner can see exactly what was asked for.
+
+    week.anchor_date is None for a week created while the pool had no week1_anchor_date
+    configured. That week falls back to the pre anchor behaviour: the pool's own week_number
+    is sent to ESPN directly for every league, which is wrong whenever the two calendars have
+    drifted apart, but keeps an unconfigured pool building something rather than nothing.
+    """
+    leagues = pool.sports or ["nfl", "ncaaf"]
     games: list[espn.EspnGame] = []
-    for league in pool.sports or ["nfl", "ncaaf"]:
-        try:
-            payload = espn.fetch_scoreboard(db, league, year, week_number)
-        except ProviderError as exc:
-            log.warning("could not load %s week %s: %s", league, week_number, exc)
+    attempts: list[LeagueAttempt] = []
+    resolved: dict[str, dict[str, int] | None] = {}
+
+    if week.anchor_date is None:
+        log.warning(
+            "week %s of pool %s has no anchor_date, sending week_number to ESPN directly for "
+            "every league. Set pool.week1_anchor_date to resolve per league dates instead.",
+            week.week_number,
+            pool.id,
+        )
+        for league in leagues:
+            resolved[league] = {"week": week.week_number, "season_type": espn.SEASON_TYPE_REGULAR}
+            error: str | None = None
+            league_games: list[espn.EspnGame] = []
+            try:
+                payload = espn.fetch_scoreboard(db, league, week.season_year, week.week_number)
+                league_games = espn.parse_scoreboard(payload, league)
+            except ProviderError as exc:
+                error = str(exc)
+                log.warning("could not load %s week %s: %s", league, week.week_number, exc)
+            games.extend(league_games)
+            attempts.append(
+                LeagueAttempt(
+                    league=league,
+                    url=_scoreboard_url(league),
+                    resolved_week=week.week_number,
+                    resolved_season_type=espn.SEASON_TYPE_REGULAR,
+                    games_returned=len(league_games),
+                    error=error,
+                )
+            )
+        week.resolved_weeks = resolved
+        week.is_bowl_week = False
+        return games, attempts
+
+    any_bowl = False
+    for league in leagues:
+        resolution = calendar_svc.resolve_league_week(
+            db, league, week.season_year, week.anchor_date
+        )
+        if resolution is None:
+            resolved[league] = None
+            attempts.append(
+                LeagueAttempt(
+                    league=league,
+                    url=_scoreboard_url(league),
+                    resolved_week=None,
+                    resolved_season_type=None,
+                    games_returned=0,
+                    error=None,
+                )
+            )
             continue
-        games.extend(espn.parse_scoreboard(payload, league))
-    return games
+
+        resolved[league] = {"week": resolution.week, "season_type": resolution.season_type}
+        any_bowl = any_bowl or resolution.is_postseason
+
+        error = None
+        league_games = []
+        try:
+            payload = espn.fetch_scoreboard(
+                db, league, week.season_year, resolution.week, season_type=resolution.season_type
+            )
+            league_games = espn.parse_scoreboard(payload, league)
+        except ProviderError as exc:
+            error = str(exc)
+            log.warning(
+                "could not load %s week %s (season_type %s): %s",
+                league,
+                resolution.week,
+                resolution.season_type,
+                exc,
+            )
+        games.extend(league_games)
+        attempts.append(
+            LeagueAttempt(
+                league=league,
+                url=_scoreboard_url(league),
+                resolved_week=resolution.week,
+                resolved_season_type=resolution.season_type,
+                games_returned=len(league_games),
+                error=error,
+            )
+        )
+
+    week.resolved_weeks = resolved
+    week.is_bowl_week = any_bowl
+    return games, attempts
+
+
+def _calendar_range_text(db: Session, league: str, year: int) -> str | None:
+    """The valid regular season week range from that league's own calendar, for a warning."""
+    try:
+        payload = espn.fetch_scoreboard(
+            db, league, year, ttl_minutes=calendar_svc.CALENDAR_TTL_MINUTES
+        )
+    except ProviderError:
+        return None
+    weeks = [w for w in espn.parse_calendar(payload) if w.season_type == espn.SEASON_TYPE_REGULAR]
+    if not weeks:
+        return None
+    lo, hi = weeks[0], weeks[-1]
+    return f"week {lo.week} ({lo.start.date()}) to week {hi.week} ({hi.end.date()})"
+
+
+def _dead_end_message(db: Session, pool: Pool, week: Week, attempts: list[LeagueAttempt]) -> str:
+    """Explain precisely why a build came back with nothing, and what the valid range was.
+
+    Replaces the old, unhelpful "ESPN returned no games for week {N}. Nothing to build yet."
+    with the anchor date, each league attempted, the resolved ESPN week or the reason none
+    resolved, the URL called, the HTTP status when a request failed, the game count returned,
+    and the valid week range from that league's calendar.
+    """
+    anchor = week.anchor_date.isoformat() if week.anchor_date else "not set"
+    parts = [f"ESPN returned no games for pool week {week.week_number} (anchor date {anchor})."]
+
+    for attempt in attempts:
+        label = LEAGUE_LABELS.get(attempt.league, attempt.league)
+        valid_range = _calendar_range_text(db, attempt.league, week.season_year)
+        range_text = f" Valid regular season range: {valid_range}." if valid_range else ""
+
+        if attempt.resolved_week is None:
+            parts.append(
+                f"{label}: the anchor date is outside both the regular season and the "
+                f"postseason, so no week was resolved. Calendar checked at {attempt.url}."
+                f"{range_text}"
+            )
+        elif attempt.error:
+            parts.append(
+                f"{label}: resolved to week {attempt.resolved_week} "
+                f"(season type {attempt.resolved_season_type}), but the request to "
+                f"{attempt.url} failed ({attempt.error}).{range_text}"
+            )
+        else:
+            parts.append(
+                f"{label}: resolved to week {attempt.resolved_week} "
+                f"(season type {attempt.resolved_season_type}) at {attempt.url}, "
+                f"HTTP ok, {attempt.games_returned} games returned.{range_text}"
+            )
+
+    return " ".join(parts)
 
 
 # Spread resolution ----------------------------------------------------------
@@ -513,7 +710,7 @@ def build_slate(
             "Picks have already been made for this week, so the slate was left alone. "
             "You can still void a game."
         )
-        games = fetch_candidates(db, pool, year, week_number)
+        games, _attempts = fetch_candidates(db, pool, week)
         existing_spreads = {
             g.espn_event_id: (g.spread_home, g.spread_source or "espn")
             for g in db.scalars(select(Game).where(Game.week_id == week.id))
@@ -529,12 +726,10 @@ def build_slate(
         )
         return report
 
-    games = fetch_candidates(db, pool, year, week_number)
+    games, attempts = fetch_candidates(db, pool, week)
     report.candidates = len(games)
     if not games:
-        report.warnings.append(
-            f"ESPN returned no games for week {week_number}. Nothing to build yet."
-        )
+        report.warnings.append(_dead_end_message(db, pool, week, attempts))
         return report
 
     before_refreshes = week.spread_refreshes
@@ -574,8 +769,53 @@ def publish_week(db: Session, week: Week) -> None:
 # The set and forget entry point ---------------------------------------------
 
 
+def _local_date(now: dt.datetime, timezone: str) -> dt.date:
+    """now converted to the pool's own timezone, so a late evening UTC date does not tip a
+    Saturday anchor comparison into Sunday for a pool that plays on the US west coast."""
+    try:
+        zone = ZoneInfo(timezone)
+    except (ZoneInfoNotFoundError, ValueError):
+        zone = dt.UTC
+    return now.astimezone(zone).date()
+
+
+def _week_number_from_anchor(week1_anchor_date: dt.date, today: dt.date) -> int:
+    """Which pool week's [anchor, anchor + 7 days) window today falls in, or the next
+    upcoming one when today is before week 1's anchor."""
+    if today < week1_anchor_date:
+        return 1
+    weeks_since = (today - week1_anchor_date).days // 7
+    return weeks_since + 1
+
+
 def detect_week(db: Session, pool: Pool, now: dt.datetime | None = None) -> int | None:
-    """Ask ESPN which week it is. NFL drives the calendar because its weeks are canonical."""
+    """The pool's own current (or next upcoming) week number.
+
+    When pool.week1_anchor_date is configured this is pure date arithmetic against the pool's
+    own anchor Saturdays: no ESPN call, no dependency on any one league's calendar, and it
+    naturally keeps NFL and college in step because each one resolves its own ESPN week later,
+    in fetch_candidates, from the same anchor date.
+
+    When week1_anchor_date is not configured (a pool that predates this feature, or one nobody
+    has set up yet) this falls back to the pre anchor behaviour: ask ESPN what NFL's current
+    week number is and use that number as the pool's own sequence. That conflates the pool's
+    sequence with NFL's, which is wrong once the two calendars drift apart, but it keeps an
+    unconfigured pool advancing on its own rather than building nothing. A warning is logged
+    so the gap gets noticed.
+    """
+    now = now or dt.datetime.now(dt.UTC)
+
+    if pool.week1_anchor_date is not None:
+        today = _local_date(now, pool.timezone)
+        return _week_number_from_anchor(pool.week1_anchor_date, today)
+
+    log.warning(
+        "pool %s (%s) has no week1_anchor_date configured, falling back to ESPN's NFL "
+        "calendar to guess the pool's current week number. Set week1_anchor_date in the "
+        "pool settings so NFL and college resolve independently.",
+        pool.id,
+        pool.name,
+    )
     calendar_week = espn.detect_current_week(db, "nfl", pool.season_year, now=now)
     if calendar_week is None:
         for league in pool.sports or ["ncaaf"]:
