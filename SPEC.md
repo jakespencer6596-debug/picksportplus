@@ -247,11 +247,14 @@ For a week that is open and before `lock_at`:
 ## 9. Scoring and leaderboards
 
 - Read each game outcome from ESPN once completed, winner is home, away, or tie from the final score.
-- For each pick on the slate, if `picked_team == winner` the player earns that pick's confidence points, else 0.
-- Tie games (possible in NFL) are voided: 0 points for everyone on that game and excluded from the correct and possible counts. Same for a game the commissioner voids (cancellation or moved out of week).
-- Weekly result per player: points (sum earned), correct (count), possible, stored in a `week_entries` row. Season standings aggregate weekly rows into total points, total correct, and weekly wins (most points that week, ties share the win).
-- Put per pick and per week scoring in `app/scoring.py` as pure functions and unit test heavily: all correct, all wrong, mixed, an unsubmitted player, a tie or voided game, and a shorter than N slate.
-- Render a weekly leaderboard, season standings, plus a Results page per week showing every game outcome and each player's picks.
+- Each pool runs in one of two scoring modes, set per pool on `Pool.scoring_mode` and switchable by the commissioner in pool settings without a code change:
+  - `inverse` (the default, and this pool's real rule): a wrong pick counts its confidence points AGAINST the player, a correct pick earns nothing. Lowest total wins. A player who submits no picks for a week is flagged `did_not_submit` and takes the maximum possible penalty, `sum(1..picks_required)`, so sitting a week out is never the safe play. A no-show is never eligible to win the week, no matter how the arithmetic compares.
+  - `standard` (the older rule, kept switchable): if `picked_team == winner` the player earns that pick's confidence points, else 0. Highest total wins. A player who submits no picks scores 0 and is excluded from winning the week the same way.
+- `correct` (how many picks matched the winner) is counted the same way in both modes; only the direction points run in is different. `possible` is the count of countable outcomes on the slate either way.
+- Tie games (possible in NFL) are voided: 0 points for everyone on that game and excluded from the correct and possible counts, in both modes. Same for a game the commissioner voids (cancellation or moved out of week).
+- Weekly result per player: points (sum earned or charged, depending on mode), correct (count), possible, `did_not_submit`, stored in a `week_entries` row. Season standings aggregate weekly rows into total points, total correct, and weekly wins (best points that week under the pool's mode, ties share the win, no-shows excluded).
+- Put per pick and per week scoring in `app/scoring.py` as pure functions and unit test heavily: all correct, all wrong, mixed, an unsubmitted player (in both modes, including the no-show max penalty), a tie or voided game, and a shorter than N slate.
+- Render a weekly leaderboard, season standings, plus a Results page per week showing every game outcome and each player's picks. Standings and leaderboards sort ascending on points under `inverse`, descending under `standard`, and the UI makes the active direction explicit (a "points against" column heading, a rule reminder, "no picks submitted" instead of a bare number) whenever a pool runs `inverse`.
 - All ingest and scoring commands are idempotent and safe to re run as scores update through the day.
 
 ## 10. Admin and commissioner tools

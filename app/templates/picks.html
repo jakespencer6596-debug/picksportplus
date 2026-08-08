@@ -166,8 +166,14 @@
     <div class="flash flash-error" role="status">
       {{ ic.icon("alert", 18) }}
       <span>
-        You did not submit picks for {{ week.label }}, so you score 0 points for the week.
-        The slate below is what everyone else played.
+        {% if pool.scoring_mode == "inverse" %}
+          You did not submit picks for {{ week.label }}, so you take the maximum penalty for
+          the week, {{ (n * (n + 1)) // 2 }} points against you. The slate below is what
+          everyone else played.
+        {% else %}
+          You did not submit picks for {{ week.label }}, so you score 0 points for the week.
+          The slate below is what everyone else played.
+        {% endif %}
       </span>
     </div>
   {% endif %}
@@ -207,7 +213,11 @@
   <p class="muted">
     {% if has_full_entry %}
       You staked {{ n }} points on the game at the top and 1 on the game at the bottom.
-      Correct picks earn the points staked on them.
+      {% if pool.scoring_mode == "inverse" %}
+        A wrong pick counts the points staked on it against you. A correct pick costs nothing.
+      {% else %}
+        Correct picks earn the points staked on them.
+      {% endif %}
     {% else %}
       Points are staked from {{ n }} at the top of a ranking down to 1 at the bottom.
     {% endif %}
@@ -220,11 +230,21 @@
 <section class="section">
   <div class="panel">
     <p class="eyebrow">How this week works</p>
-    <p>
-      Tap a team to take the winner, then rank all {{ n }} games. Drag a row by its grip,
-      or use the up and down buttons. The game at the top of the list stakes {{ n }} points
-      and the game at the bottom stakes 1. A correct pick earns the points you staked on it.
-    </p>
+    {% if pool.scoring_mode == "inverse" %}
+      <p>
+        Tap a team to take the winner, then rank all {{ n }} games. Drag a row by its grip,
+        or use the up and down buttons. The game at the top of the list stakes {{ n }} points
+        and the game at the bottom stakes 1. Low score wins: a wrong pick counts its staked
+        points against you, so stake {{ n }} on your surest pick only if you can afford to be
+        wrong about it.
+      </p>
+    {% else %}
+      <p>
+        Tap a team to take the winner, then rank all {{ n }} games. Drag a row by its grip,
+        or use the up and down buttons. The game at the top of the list stakes {{ n }} points
+        and the game at the bottom stakes 1. A correct pick earns the points you staked on it.
+      </p>
+    {% endif %}
     <p class="form-hint">
       Keyboard: focus a game, then hold alt and press the up or down arrow to move it.
     </p>

@@ -5,7 +5,7 @@ reasoning behind every judgment call made along the way.
 
 - [x] Phase 0. Orientation and baseline
 - [x] Phase 1. Fix week resolution (per-league date window)
-- [ ] Phase 2. Invert scoring, lowest total wins
+- [x] Phase 2. Invert scoring, lowest total wins
 - [ ] Phase 3. Pick 15 of 20
 - [ ] Phase 4. Two-step pick entry
 - [ ] Phase 5. Admin-curated slate with pinned games
@@ -113,3 +113,60 @@ Pool: PickSportPlus Demo (id 1)
 predates `week1_anchor_date` and has none set, so it is exercising the fallback path on
 purpose. The mandatory live re-verification against the real September 12, 2026 date, with an
 anchor actually configured, happens in Phase 9b per the note above.)
+
+## Phase 2 notes
+
+Inverted the pool's real scoring rule: wrong picks now count their staked confidence against
+the player, correct picks earn nothing, and the lowest weekly total wins. `standard` (the old
+behavior) keeps working, switchable per pool from `/admin/settings` without a code change.
+`Pool.scoring_mode` defaults to `"inverse"`, so every pool that does not explicitly choose
+`standard` runs the real rule starting now.
+
+- `app/scoring.py`. `score_pick` and `score_week` take a `mode` parameter (`"standard"` by
+  default at the function level, see `DECISIONS.md` for why that default did not flip even
+  though the pool level default did). `score_week` also takes `picks_required`, defaulted to
+  `len(outcomes)` until Phase 3 adds a real per-pool field. `WeekResult` gained
+  `did_not_submit: bool`. A no-show scores 0 under `standard` (unchanged) and the maximum
+  possible penalty, `sum(1..picks_required)`, under `inverse`. `weekly_winner_ids` takes a
+  `mode` too, excludes any `did_not_submit` result before picking a winner in either mode
+  (highest wins under `standard`, with the old "nobody wins a scoreless week" `<= 0` guard;
+  lowest wins under `inverse`, no such guard, since 0 is a perfect and winnable score there).
+- `app/models.py`. `Pool.scoring_mode` (new column, default `"inverse"`) and
+  `WeekEntry.did_not_submit` (new column), plus a `SCORING_MODES` constant.
+- `alembic/versions/6aa4a2f020c6_add_scoring_mode_and_did_not_submit.py`. The migration for
+  both columns, reversible, verified upgrade and downgrade against a fresh SQLite database.
+- `app/services/results.py`. `score_week_for_pool` threads `pool.scoring_mode` and
+  `pool.num_games_per_week` (as `picks_required`) into `score_week`, stores
+  `WeekEntry.did_not_submit` from the result, and passes `mode` into `weekly_winner_ids`.
+- `app/services/standings.py`. `season_standings` and `weekly_leaderboard` sort ascending on
+  points under `inverse`, descending under `standard`, read from `pool.scoring_mode`.
+  `_assign_ranks` needed no change, it is direction agnostic by construction (confirmed with a
+  comment and dedicated tests). `WeeklyRow` gained `did_not_submit`.
+- `app/routers/results.py`. Per pick "earned" value (used only for screen reader text) is now
+  computed with `score_pick(..., mode=pool.scoring_mode)` instead of assuming "correct means
+  points," and the player column sort direction follows `scoring_mode` too. `PlayerColumn`
+  gained `did_not_submit`.
+- `app/routers/admin.py` / `app/templates/admin/settings.html`. A new "Scoring" settings card,
+  two radio options, following the same pattern Phase 1 used for `week1_anchor_date`.
+- Templates (`leaderboard.html`, `results.html`, `picks.html`): "Points" becomes "Points
+  against" under inverse, a "low score wins" rule reminder under both standings tables, the
+  picks page explains the real stakes of a wrong pick and (this is a genuine behavior fix, not
+  just wording) the no-show banner no longer claims "you score 0 points" when the pool is
+  actually charging the maximum penalty. Non-submitters read "No picks submitted," driven by
+  `did_not_submit`, not inferred from `submitted_at`. See `DECISIONS.md` for the exact copy.
+- Audited every template and every `app/` module for a hard coded "highest wins" assumption
+  (`desc(`, `reverse=True`, "Correct, N points" style copy); the only real ones were the
+  standings/leaderboard sort direction and the results page per-cell copy, both fixed above.
+  `app/templates/admin/slate.html` shows no scores at all and needed no change.
+
+Test suite: **624 passed**, 0 failed (588 at the Phase 1 baseline, plus 36 new: most of
+`tests/test_scoring.py`'s existing tests were also rewritten to name their mode explicitly
+rather than lean on an unstated default, since the pool level default just flipped).
+`tests/test_scoring.py` includes `test_inverse_perfect_week_beats_a_no_shows_max_penalty`, the
+named regression for the central trap in this phase: a no-show's maximum penalty must never
+beat a perfect week. `tests/test_app.py::test_scoring_end_to_end` proves the same fact again
+through the real database and router, not just `app/scoring.py` directly, and
+`test_scoring_end_to_end_standard_mode_still_works` proves `standard` still works end to end
+when a commissioner chooses it. New `tests/test_standings.py` covers sort direction for both
+`season_standings` and `weekly_leaderboard`. `ruff check .` and `black .` both clean.
+Full judgment calls are recorded in `DECISIONS.md` under "Phase 2".

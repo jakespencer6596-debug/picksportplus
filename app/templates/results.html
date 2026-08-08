@@ -148,10 +148,12 @@
               {% if you %}<span class="pill pill-you">You</span>{% endif %}
               {% if col.is_winner %}<span class="ribbon">{{ ic.icon("flag", 13) }}Winner</span>{% endif %}
             </span>
-            {% if col.submitted %}
-              <span class="num">{{ col.points }} pts, {{ col.correct }} correct</span>
+            {% if col.did_not_submit %}
+              <span class="no-entry">No picks submitted</span>
+            {% elif pool.scoring_mode == "inverse" %}
+              <span class="num">{{ col.points }} against, {{ col.correct }} correct</span>
             {% else %}
-              <span class="no-entry">No entry</span>
+              <span class="num">{{ col.points }} pts, {{ col.correct }} correct</span>
             {% endif %}
           </li>
         {% endfor %}
@@ -172,10 +174,12 @@
                     <span class="ribbon">{{ ic.icon("flag", 13) }}Winner</span>
                   {% endif %}
                   <span class="pick-player-name">{{ col.display_name }}{% if you %} <span class="pill pill-you">You</span>{% endif %}</span>
-                  {% if col.submitted %}
-                    <span class="pick-player-stats num">{{ col.points }} pts, {{ col.correct }} correct</span>
+                  {% if col.did_not_submit %}
+                    <span class="no-entry">No picks submitted</span>
+                  {% elif pool.scoring_mode == "inverse" %}
+                    <span class="pick-player-stats num">{{ col.points }} against, {{ col.correct }} correct</span>
                   {% else %}
-                    <span class="no-entry">No entry</span>
+                    <span class="pick-player-stats num">{{ col.points }} pts, {{ col.correct }} correct</span>
                   {% endif %}
                 </th>
               {% endfor %}
@@ -218,8 +222,15 @@
                         <span class="pick-side">{{ side }}</span>
                         <span class="pick-points num">{{ pick.confidence }}</span>
                         <span class="visually-hidden">
-                          {%- if pick.state == "correct" %}Correct, {{ pick.earned }} {{ pick.earned | pluralize("point") }}
-                          {%- elif pick.state == "wrong" %}Wrong, no points
+                          {#- earned is read straight from scoring, so this is correct in
+                             either mode without checking scoring_mode directly: a wrong
+                             pick with a nonzero earned value is a penalty under inverse,
+                             a correct pick with a nonzero earned value is points under
+                             standard, and 0 always reads as no points either way. -#}
+                          {%- if pick.state == "correct" %}
+                            Correct{% if pick.earned %}, {{ pick.earned }} {{ pick.earned | pluralize("point") }}{% else %}, no points{% endif %}
+                          {%- elif pick.state == "wrong" %}
+                            Wrong{% if pick.earned %}, {{ pick.earned }} {{ pick.earned | pluralize("point") }} against you{% else %}, no points{% endif %}
                           {%- elif pick.state == "void" %}Void, no points
                           {%- else %}Not final yet{% endif -%}
                         </span>
@@ -236,7 +247,14 @@
       <div class="empty-state">
         {{ ic.icon("users", 28) }}
         <p class="empty-state-title">No cards to show</p>
-        <p>Nobody in this pool submitted picks for {{ week.label }}. A blank week scores zero.</p>
+        <p>
+          Nobody in this pool submitted picks for {{ week.label }}.
+          {% if pool.scoring_mode == "inverse" %}
+            A blank week charges everyone the same maximum penalty, so nobody gains an edge.
+          {% else %}
+            A blank week scores zero for everyone.
+          {% endif %}
+        </p>
       </div>
     {% endif %}
   </section>

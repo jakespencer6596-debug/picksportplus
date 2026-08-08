@@ -424,7 +424,14 @@ def test_picks_are_revealed_after_lock(client, world, session_factory):
 
 
 def test_scoring_end_to_end(client, world, session_factory):
-    """Save picks, finalise the games, score, and check the leaderboard math."""
+    """Save picks, finalise the games, score, and check the leaderboard math.
+
+    world's pool never sets scoring_mode, so it runs under the real default, "inverse":
+    wrong picks count against the player, not right ones. The boss never submits a pick at
+    all (see the world fixture), which doubles as the no-show side of Phase 2's central
+    rule: a no-show takes the maximum penalty and can never win the week, even though the
+    player's own inverse points are not the week's lowest number in isolation.
+    """
     from app.services.results import score_week_for_pool
 
     _login(client, "player@example.com")
@@ -436,7 +443,8 @@ def test_scoring_end_to_end(client, world, session_factory):
     games = list(db.scalars(select(Game).where(Game.week_id == week.id).order_by(Game.slate_rank)))
 
     # The player picked home, away, home, away with confidence 4, 3, 2, 1.
-    # Make the first two correct and the last two wrong. Expected points: 4 + 3 = 7.
+    # Make the first two correct and the last two wrong. Under inverse only the wrong
+    # picks count, against the player: 2 + 1 = 3.
     outcomes = ["home", "away", "away", "home"]
     for game, winner in zip(games, outcomes, strict=False):
         game.status = "final"
@@ -453,17 +461,78 @@ def test_scoring_end_to_end(client, world, session_factory):
             WeekEntry.user_id == world["player_id"], WeekEntry.week_id == week.id
         )
     )
-    assert entry.points == 7
+    assert entry.points == 3
     assert entry.correct == 2
     assert entry.possible == 4
+    assert entry.did_not_submit is False
     assert entry.is_winner is True
     assert report.week_complete is True
     assert db.get(Week, week.id).status == "scored"
+
+    # The boss never submitted a pick. With a 4 game slate the maximum penalty is
+    # sum(1..4) = 10, and did_not_submit keeps them out of the running no matter how that
+    # compares to the player's own score.
+    boss_entry = db.scalar(
+        select(WeekEntry).where(WeekEntry.user_id == world["boss_id"], WeekEntry.week_id == week.id)
+    )
+    assert boss_entry.did_not_submit is True
+    assert boss_entry.points == 10
+    assert boss_entry.correct == 0
+    assert boss_entry.is_winner is False
     db.close()
 
     response = client.get("/standings")
     assert response.status_code == 200
     assert "Regular Player" in response.text
+
+
+def test_scoring_end_to_end_standard_mode_still_works(client, world, session_factory):
+    """scoring_mode is switchable per pool without a code change: standard mode must keep
+    the pre-Phase-2 behavior exactly, correct picks earn points, highest total wins.
+    """
+    from app.services.results import score_week_for_pool
+
+    db = session_factory()
+    pool = db.get(Pool, world["pool_id"])
+    pool.scoring_mode = "standard"
+    db.commit()
+    db.close()
+
+    _login(client, "player@example.com")
+    client.post("/picks", data=_valid_submission(world["game_ids"]))
+
+    db = session_factory()
+    pool = db.get(Pool, world["pool_id"])
+    week = db.get(Week, world["week_id"])
+    games = list(db.scalars(select(Game).where(Game.week_id == week.id).order_by(Game.slate_rank)))
+
+    outcomes = ["home", "away", "away", "home"]
+    for game, winner in zip(games, outcomes, strict=False):
+        game.status = "final"
+        game.winner = winner
+        game.home_score = 21 if winner == "home" else 17
+        game.away_score = 17 if winner == "home" else 21
+    db.commit()
+
+    score_week_for_pool(db, pool, week)
+    db.commit()
+
+    entry = db.scalar(
+        select(WeekEntry).where(
+            WeekEntry.user_id == world["player_id"], WeekEntry.week_id == week.id
+        )
+    )
+    assert entry.points == 7
+    assert entry.correct == 2
+    assert entry.did_not_submit is False
+    assert entry.is_winner is True
+
+    boss_entry = db.scalar(
+        select(WeekEntry).where(WeekEntry.user_id == world["boss_id"], WeekEntry.week_id == week.id)
+    )
+    assert boss_entry.did_not_submit is True
+    assert boss_entry.points == 0
+    db.close()
 
 
 def test_scoring_is_idempotent(client, world, session_factory):
@@ -518,8 +587,10 @@ def test_a_voided_game_scores_nobody_and_leaves_the_possible_count(client, world
     score_week_for_pool(db, pool, week)
     db.commit()
     entry = db.scalar(select(WeekEntry).where(WeekEntry.user_id == world["player_id"]))
-    # home picks were games 1 and 3 with confidence 4 and 2. Game 1 is void, so only 2 scores.
-    assert entry.points == 2
+    # Game 1 (conf 4, picked home) is void, so it earns nothing and drops out of possible.
+    # Under the pool's default inverse mode, the wrong picks are what count: game 2
+    # (away, but home won, conf 3) and game 4 (away, but home won, conf 1): 3 + 1 = 4.
+    assert entry.points == 4
     assert entry.correct == 1
     assert entry.possible == 3
     db.close()
@@ -539,6 +610,7 @@ def test_commissioner_can_change_the_slate_size(client, world, session_factory):
             "num_games_per_week": "18",
             "target_nfl": "6",
             "target_ncaaf": "12",
+            "scoring_mode": "inverse",
             "auto_publish": "1",
             "open_registration": "",
             "sports_nfl": "1",

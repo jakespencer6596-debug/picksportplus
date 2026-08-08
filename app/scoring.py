@@ -4,16 +4,33 @@ Pure logic only. No database, no network, no imports from app.models. Everything
 takes plain dataclasses in and returns plain values out, so it can be unit tested
 without any application context.
 
-The rules, in one place:
+Every pool runs in one of two scoring modes, set per pool on Pool.scoring_mode:
 
-- A pick earns its staked confidence points when the player picked the team that won,
-  otherwise it earns nothing.
+- "standard": a pick earns its staked confidence points when the player picked the team
+  that won, otherwise it earns nothing. Highest total wins. This is the old behavior,
+  kept working for any pool that wants it, and it is what every function here defaults
+  to when a caller does not pass a mode.
+- "inverse": the real rule this pool runs under, and the default at the Pool level
+  (Pool.scoring_mode defaults to "inverse"). A pick earns its staked confidence points
+  AGAINST the player when the pick is wrong, and nothing when it is right. Lowest total
+  wins. You are penalized for being wrong, so staking your highest confidence on your
+  surest pick is a real risk: if that pick loses, you eat all of those points.
+
+Rules that hold in both modes:
+
 - A tie game and a voided game are not countable. Nobody scores them and they drop out
   of both the correct count and the possible count.
 - A game that is still scheduled or in progress is not countable yet, so it is not part
   of the possible count until it goes final.
-- A player who never submitted scores 0 points and 0 correct, but the possible count for
-  the week is still the size of the countable slate.
+- "correct" always counts picks that matched the winner, in both modes. It measures how
+  well someone actually picked, independent of which direction points run.
+- A player who never submitted a pick for the week is flagged with did_not_submit=True.
+  Under "standard" they score 0 points and 0 correct, unchanged from before this phase.
+  Under "inverse" a no-show is the trap this rule is built to catch: they take the
+  maximum possible penalty, sum(1..picks_required), since a player who dodges the risk
+  of a wrong pick cannot be allowed to end up better off than someone who played and
+  lost. Either way the possible count for the week is still the size of the countable
+  slate, and a no-show is never eligible to win the week (see weekly_winner_ids).
 """
 
 from __future__ import annotations
@@ -61,11 +78,17 @@ class PickInput:
 
 @dataclass(frozen=True)
 class WeekResult:
-    """What one player earned in one week."""
+    """What one player earned in one week.
+
+    did_not_submit is True when the player had no picks at all for the week. The UI reads
+    this directly to show "no picks submitted" instead of a bare score, and
+    weekly_winner_ids reads it to exclude a no-show from ever winning the week.
+    """
 
     points: int
     correct: int
     possible: int
+    did_not_submit: bool = False
 
 
 @dataclass(frozen=True)
@@ -97,28 +120,53 @@ def is_countable(outcome: GameOutcome) -> bool:
     return outcome.status == "final" and outcome.winner in TEAM_SIDES
 
 
-def score_pick(pick: PickInput, outcome: GameOutcome) -> int:
-    """Points earned. confidence when countable and correct, otherwise 0."""
+def score_pick(pick: PickInput, outcome: GameOutcome, mode: str = "standard") -> int:
+    """Points earned on one pick. 0 for any non countable outcome, in either mode.
+
+    "standard": confidence when correct, 0 when wrong.
+    "inverse": confidence AGAINST the player when wrong, 0 when correct.
+    """
     if not is_countable(outcome):
         return 0
-    if pick.picked_team != outcome.winner:
-        return 0
-    return pick.confidence
+    right = pick.picked_team == outcome.winner
+    if mode == "inverse":
+        return 0 if right else pick.confidence
+    return pick.confidence if right else 0
 
 
 def score_week(
     picks: Sequence[PickInput],
     outcomes: Sequence[GameOutcome],
+    *,
+    mode: str = "standard",
+    picks_required: int | None = None,
 ) -> WeekResult:
     """Score one player's week against the slate outcomes.
 
     possible = number of countable outcomes on the slate, regardless of whether the player
-    submitted a pick for them. correct = number of countable games the player picked right.
-    points = sum of earned points. A player with no picks scores 0 / 0 / possible.
-    Picks referring to a game_id not in outcomes are ignored (the game left the slate).
+    submitted a pick for them. correct = number of countable games the player picked right,
+    counted the same way in both modes. points = sum of score_pick over the picks, which is
+    the wrong ones under "inverse" and the right ones under "standard".
+
+    picks_required is how many picks a full submission needs. When not given it defaults to
+    len(outcomes), which is correct as long as every player picks the whole slate (true
+    today; a future phase that lets players pick a subset of the slate will pass this
+    explicitly instead of relying on the default).
+
+    A player with no picks at all is a no-show: did_not_submit=True, correct=0, and points
+    is 0 under "standard" (unchanged prior behavior) or the maximum possible penalty,
+    sum(1..picks_required), under "inverse". possible is still the size of the countable
+    slate either way. Picks referring to a game_id not in outcomes are ignored (the game
+    left the slate).
     """
     by_game: dict[int, GameOutcome] = {o.game_id: o for o in outcomes}
     possible = sum(1 for outcome in by_game.values() if is_countable(outcome))
+
+    if not picks:
+        if picks_required is None:
+            picks_required = len(outcomes)
+        penalty = sum(range(1, picks_required + 1)) if mode == "inverse" else 0
+        return WeekResult(points=penalty, correct=0, possible=possible, did_not_submit=True)
 
     points = 0
     correct = 0
@@ -126,12 +174,12 @@ def score_week(
         outcome = by_game.get(pick.game_id)
         if outcome is None or not is_countable(outcome):
             continue
-        if pick.picked_team != outcome.winner:
-            continue
         # correct comes from the pick being right, never from the earned points being
-        # non zero, so a stored confidence of 0 cannot hide a correct pick.
-        points += score_pick(pick, outcome)
-        correct += 1
+        # non zero, so a stored confidence of 0 cannot hide a correct pick, and it counts
+        # the same way regardless of mode.
+        if pick.picked_team == outcome.winner:
+            correct += 1
+        points += score_pick(pick, outcome, mode=mode)
 
     return WeekResult(points=points, correct=correct, possible=possible)
 
@@ -217,18 +265,32 @@ def _confidence_errors(
     return errors
 
 
-def weekly_winner_ids(results: Mapping[int, WeekResult]) -> set[int]:
-    """User ids with the highest points. Ties share the win.
+def weekly_winner_ids(results: Mapping[int, WeekResult], mode: str = "standard") -> set[int]:
+    """User ids who won the week. Ties share the win.
 
-    Returns an empty set when there are no results or when the highest score is 0, because
-    nobody wins a week nobody scored in.
+    A no-show (did_not_submit=True) is excluded from winning in both modes, before either
+    the highest or lowest score is worked out: sitting the week out must never be a route
+    to a weekly win, whether that is because the arithmetic makes 0 look like a win under
+    "inverse" or because it never was under "standard".
+
+    "standard": highest points among the remaining eligible results wins. If the eligible
+    set is empty, or the best remaining score is 0 or less, returns an empty set: nobody
+    wins a week nobody scored in.
+
+    "inverse": lowest points among the remaining eligible results wins. 0 is a perfect
+    score here, so the 0-or-less guard from "standard" does not apply. Returns an empty
+    set only when the eligible set itself is empty (everyone was a no-show).
     """
-    if not results:
+    eligible = {user_id: result for user_id, result in results.items() if not result.did_not_submit}
+    if not eligible:
         return set()
-    best = max(result.points for result in results.values())
+    if mode == "inverse":
+        best = min(result.points for result in eligible.values())
+        return {user_id for user_id, result in eligible.items() if result.points == best}
+    best = max(result.points for result in eligible.values())
     if best <= 0:
         return set()
-    return {user_id for user_id, result in results.items() if result.points == best}
+    return {user_id for user_id, result in eligible.items() if result.points == best}
 
 
 def season_totals(entries: Iterable[SeasonEntryInput]) -> SeasonTotals:

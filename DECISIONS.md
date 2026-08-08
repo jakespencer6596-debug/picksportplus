@@ -155,3 +155,133 @@ CONFIGURATION block and are being implemented as given, not re-litigated:
 - Payout rules ship empty; the commissioner enters real dollar figures later (Decision 3).
 
 No dollar amounts, entry fees, or Venmo handles are invented anywhere in this build.
+
+## Phase 2
+
+### Where "the default" actually flips: Pool.scoring_mode, not the scoring.py function
+### signatures
+
+The brief's Architecture section gives explicit signatures with `mode="standard"` as the
+literal default for `score_pick`, `score_week`, and `weekly_winner_ids` ("these decisions are
+made, implement them, do not re-derive"). The Tests section separately says to rewrite old
+tests to pass `mode="standard"` explicitly "since default is flipping to inverse," which read
+literally would contradict the signatures just above it.
+
+**Decision:** implemented the function level defaults exactly as given, `mode="standard"`, so
+`app/scoring.py` is unchanged in behavior for any caller that does not pass a mode. The
+"default is flipping to inverse" language is about the application's real, effective default:
+`Pool.scoring_mode` (new column) defaults to `"inverse"`, and that is what `score_week_for_pool`
+threads into `score_week`/`weekly_winner_ids` for every real pool from here on, including the
+demo pool and every pool that predates this migration (SQLite back-fills the column via the
+migration's server default, see below). `tests/test_scoring.py` still passes `mode="standard"`
+explicitly on every old test, per the instruction, purely so each test states which rule it is
+proving rather than leaning on an unstated default; it would pass with the mode omitted too.
+
+**Why:** the signatures are marked as decided, not open for re-derivation, and a pure function
+defaulting to the old, narrower behavior (no direction flip, no no-show penalty) is the safer
+choice for any future caller of `app/scoring.py` that forgets to pass a mode. The dangerous
+mistake to guard against is a silent, unintended inversion of real money math; a caller that
+forgets `mode=` should get the boring old behavior, not accidentally charge someone 120 points.
+The pool level default is where "this pool's real rule is inverse" actually lives, and it is
+what `app/routers/admin.py`/`admin/settings.html` expose to the commissioner.
+
+**Where:** `app/scoring.py` (`score_pick`, `score_week`, `weekly_winner_ids` signatures),
+`app/models.py` (`Pool.scoring_mode`, default `"inverse"`), `app/services/results.py`
+(`score_week_for_pool` reads `pool.scoring_mode`).
+
+### picks_required default: len(outcomes), not a stored field, until Phase 3
+
+`score_week`'s `picks_required` parameter defaults to `len(outcomes)` when the caller omits it,
+exactly as specified. `app/services/results.py`'s `score_week_for_pool` does not rely on that
+default: it passes `picks_required=pool.num_games_per_week` explicitly, which is correct today
+because every player still picks the entire slate (Phase 3 is what introduces "pick 15 of 20").
+No number is hard coded anywhere in this phase; the demo pool's real slate size (20) and the
+brief's own confirmed `PICKS_REQUIRED=15` example are both just call sites, not constants baked
+into `app/scoring.py`. When Phase 3 adds a real `picks_required`-shaped field, only the one
+argument at that call site needs to change; `score_week`'s own default keeps working unchanged
+for any other caller (a test, a script) that only has a slate to hand it.
+
+### season_totals needs no change, confirmed
+
+Read `season_totals` and its tests before touching anything. It is a plain, unconditional sum
+over whatever `points`/`correct`/`possible`/`is_winner` values it is handed; it has no opinion
+about which direction is "better." `is_winner` already reflects the correct, mode-aware answer
+by the time it reaches `season_totals`, because `weekly_winner_ids` (mode-aware) is what set it
+on the `WeekEntry` row in the first place. "Lower is better" under inverse is entirely a sort
+direction concern at read time (`app/services/standings.py`), never an aggregation concern, so
+`season_totals` and its dataclasses (`SeasonEntryInput`, `SeasonTotals`) are untouched. Added
+`test_season_totals_from_scored_weeks_end_to_end_inverse` alongside the existing standard
+version specifically to pin this: the same two weeks produce the same season point total under
+either mode, and the comment on that test explains why the total alone cannot tell you which
+week was the good one, only the sort direction can.
+
+### Exact UI copy landed on
+
+- Column headers: "Points against" (inverse) vs. "Points" (standard), on the season standings
+  table, the weekly leaderboard table, and the leader stat tile at the top of `/standings`.
+- Rule reminder under both standings tables, inverse only: "Low score wins. You take the
+  points you staked on any pick that loses."
+- Picks page, unlocked week, inverse: "...Low score wins: a wrong pick counts its staked
+  points against you, so stake {{ n }} on your surest pick only if you can afford to be wrong
+  about it." (n is the real slate size from the route, never hard coded).
+- Picks page, locked week summary, inverse: "A wrong pick counts the points staked on it
+  against you. A correct pick costs nothing."
+- Picks page, no-show banner, inverse (a real behavior fix, not just wording: the old copy
+  said "you score 0 points for the week," which is standard-mode-only and would have been
+  actively wrong the moment `inverse` became the default): "You did not submit picks for
+  {{ week.label }}, so you take the maximum penalty for the week, {{ (n * (n + 1)) // 2 }}
+  points against you." The penalty is computed in the template from `n`, the real slate size,
+  matching `score_week`'s own `sum(1..picks_required)` with `picks_required` defaulted to the
+  slate size, the same default `score_week_for_pool` overrides with the real value.
+- Results page: a non-submitting player's cell/column now reads "No picks submitted," driven
+  by the new `did_not_submit` flag (`WeekEntry.did_not_submit`, threaded onto `PlayerColumn`
+  and `WeeklyRow`), not by `submitted_at is None`. Player column stats read "{{ points }}
+  against, {{ correct }} correct" under inverse instead of "{{ points }} pts, ...". The per
+  pick screen-reader text ("Correct, 6 points" / "Wrong, no points") is generated from
+  `pick.earned` (which is computed with `score_pick(..., mode=pool.scoring_mode)`, so it is
+  already the real, mode-correct number) rather than from a hard coded assumption that only
+  "correct" states ever carry points; a wrong pick with a nonzero `earned` reads "Wrong, N
+  points against you."
+- "No cards to show" / "nobody submitted" empty states on Results and Picks both had a
+  pre-existing "a blank week scores zero" claim that is false under inverse (everyone would
+  take the same maximum penalty, not zero); both now branch on `pool.scoring_mode`.
+- Admin settings: a new "Scoring" card with two radio options, "Inverse: low score wins" and
+  "Standard: high score wins," each with a one paragraph explanation of what a correct and a
+  wrong pick do under that mode and what a no-show costs, following the existing card/fieldset
+  pattern `week1_anchor_date` used in Phase 1.
+
+### Commissioner setting: exposed as a required field, not optional
+
+`settings_save` requires `scoring_mode` as a `Form(...)` field (like `timezone` and
+`num_games_per_week` already were) rather than defaulting a missing value server side. The
+settings form always renders both radio options with one pre-checked from `pool.scoring_mode`,
+so a normal save always sends a value; a request that omits it (a stale form, a bypassed client)
+is rejected with a 422 rather than silently coercing to a mode nobody chose. Existing tests that
+post to `/admin/settings` were updated to include `scoring_mode` in their form data.
+
+### Existing integration tests in tests/test_app.py encode the old default and had to move
+
+`tests/test_app.py`'s `world` fixture builds a pool without setting `scoring_mode`, so it now
+runs under the real default, `"inverse"`. `test_scoring_end_to_end` and
+`test_a_voided_game_scores_nobody_and_leaves_the_possible_count` had hand-computed point totals
+that assumed the old, correct-picks-earn-points behavior; both were recomputed for inverse
+(wrong picks count instead) rather than pinned to `"standard"`, since the whole point of this
+phase is that the default pool behavior actually changed and the main end to end test should
+prove the real default works, not dodge it. Added `test_scoring_end_to_end_standard_mode_still_works`
+alongside it, which explicitly sets `pool.scoring_mode = "standard"` and asserts the old numbers
+still hold, so both modes have end to end coverage through the real router and templates, not
+just through `app/scoring.py` directly. `test_scoring_end_to_end` also gained assertions on the
+commissioner's own `WeekEntry` (who never submits picks in this fixture): `did_not_submit=True`,
+`points=10` (the max penalty for the fixture's 4 game slate), and `is_winner=False`, which is the
+same no-show-cannot-win fact `test_inverse_perfect_week_beats_a_no_shows_max_penalty` proves in
+`app/scoring.py`, now also proved through the real database and service layer.
+
+### Migration: two columns, one revision
+
+`Pool.scoring_mode` (String(16), NOT NULL, server default `'inverse'` for the migration only)
+and `WeekEntry.did_not_submit` (Boolean, NOT NULL, server default `false` for the migration
+only) landed in one Alembic revision, `6aa4a2f020c6`, on top of Phase 1's head (`d3ed4af188d3`),
+following the same pattern Phase 1 used for its four new columns: a server default exists only
+to back-fill existing rows, then gets dropped in the same migration so the schema matches
+`app/models.py` exactly (new rows always go through the ORM, which always sends an explicit
+value). Verified upgrade and downgrade both run cleanly against a throwaway SQLite file.

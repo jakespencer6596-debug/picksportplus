@@ -28,7 +28,7 @@
       <span class="stat-value stat-value-name">{{ leader.display_name }}</span>
     </div>
     <div class="stat">
-      <span class="stat-label">Points</span>
+      <span class="stat-label">{{ "Points against" if pool.scoring_mode == "inverse" else "Points" }}</span>
       <span class="stat-value num">{{ leader.points }}</span>
     </div>
     <div class="stat">
@@ -55,7 +55,7 @@
           <tr>
             <th scope="col">Rank</th>
             <th scope="col">Player</th>
-            <th scope="col" class="num">Points</th>
+            <th scope="col" class="num">{{ "Points against" if pool.scoring_mode == "inverse" else "Points" }}</th>
             <th scope="col" class="num">Correct</th>
             <th scope="col" class="num">Weekly wins</th>
             <th scope="col" class="num">Accuracy</th>
@@ -92,6 +92,11 @@
         </tbody>
       </table>
     </div>
+    {% if pool.scoring_mode == "inverse" %}
+      <p class="muted lb-note">
+        Low score wins. You take the points you staked on any pick that loses.
+      </p>
+    {% endif %}
   {% else %}
     <div class="empty-state">
       {{ ic.icon("trophy", 28) }}
@@ -125,7 +130,7 @@
           <tr>
             <th scope="col">Rank</th>
             <th scope="col">Player</th>
-            <th scope="col" class="num">Points</th>
+            <th scope="col" class="num">{{ "Points against" if pool.scoring_mode == "inverse" else "Points" }}</th>
             <th scope="col" class="num">Correct</th>
           </tr>
         </thead>
@@ -146,16 +151,21 @@
                 </span>
               </td>
               <td class="num" data-label="Points">
-                {% if row.submitted %}{{ row.points }}{% else %}<span class="no-entry">No entry</span>{% endif %}
+                {% if row.did_not_submit %}<span class="no-entry">No picks submitted</span>{% else %}{{ row.points }}{% endif %}
               </td>
               <td class="num" data-label="Correct">
-                {% if row.submitted %}{{ row.correct }} of {{ row.possible }}{% else %}<span class="no-entry">.</span>{% endif %}
+                {% if row.did_not_submit %}<span class="no-entry">.</span>{% else %}{{ row.correct }} of {{ row.possible }}{% endif %}
               </td>
             </tr>
           {% endfor %}
         </tbody>
       </table>
     </div>
+    {% if pool.scoring_mode == "inverse" %}
+      <p class="muted lb-note">
+        Low score wins. You take the points you staked on any pick that loses.
+      </p>
+    {% endif %}
   {% else %}
     <h2 class="section-title" id="weekly-heading">Weekly leaderboard</h2>
     <div class="empty-state">

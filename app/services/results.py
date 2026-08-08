@@ -160,6 +160,10 @@ def score_week_for_pool(db: Session, pool: Pool, week: Week) -> ScoreReport:
         e.user_id: e for e in db.scalars(select(WeekEntry).where(WeekEntry.week_id == week.id))
     }
 
+    # picks_required stands in for a real per pool "picks required" field until Phase 3
+    # adds one: today every player picks the whole slate, so the slate size is correct.
+    picks_required = pool.num_games_per_week
+
     results = {}
     for member in members:
         picks = picks_by_user.get(member.user_id, [])
@@ -169,6 +173,8 @@ def score_week_for_pool(db: Session, pool: Pool, week: Week) -> ScoreReport:
                 for p in picks
             ],
             outcomes,
+            mode=pool.scoring_mode,
+            picks_required=picks_required,
         )
         results[member.user_id] = result
 
@@ -179,14 +185,17 @@ def score_week_for_pool(db: Session, pool: Pool, week: Week) -> ScoreReport:
         entry.points = result.points
         entry.correct = result.correct
         entry.possible = result.possible
-        # A player who never submitted keeps a null submitted_at and scores zero.
+        entry.did_not_submit = result.did_not_submit
+        # A player who never submitted keeps a null submitted_at. did_not_submit above is
+        # the flag the UI checks; under scoring_mode "inverse" their points are the maximum
+        # penalty, not zero, so submitted_at is not a safe stand in for that any more.
         if picks:
             entry.submitted_at = entry.submitted_at or min(
                 (_aware(p.created_at) for p in picks), default=utcnow()
             )
         report.players += 1
 
-    winners = weekly_winner_ids(results)
+    winners = weekly_winner_ids(results, mode=pool.scoring_mode)
     for member in members:
         entry = existing.get(member.user_id) or db.scalar(
             select(WeekEntry).where(

@@ -22,7 +22,7 @@ from app.auth import (
 )
 from app.config import Settings, settings
 from app.db import get_db
-from app.models import Game, Pick, PoolMember, User, Week
+from app.models import SCORING_MODES, Game, Pick, PoolMember, User, Week
 from app.providers.http import provider_warnings, usage_report
 from app.services import ingest
 from app.templating import get_zone, render
@@ -114,6 +114,7 @@ def settings_page(
             "min_slate": Settings.MIN_SLATE,
             "max_slate": Settings.MAX_SLATE,
             "env_open_registration": settings.open_registration,
+            "scoring_modes": SCORING_MODES,
             "timezones": [
                 "America/New_York",
                 "America/Chicago",
@@ -136,6 +137,7 @@ def settings_save(
     num_games_per_week: int = Form(...),
     target_nfl: int = Form(...),
     target_ncaaf: int = Form(...),
+    scoring_mode: str = Form(...),
     auto_publish: str = Form(""),
     open_registration: str = Form(""),
     sports_nfl: str = Form(""),
@@ -155,6 +157,8 @@ def settings_save(
         )
     if target_nfl < 0 or target_ncaaf < 0:
         errors.append("League counts cannot be negative.")
+    if scoring_mode not in SCORING_MODES:
+        errors.append("Scoring mode must be either inverse or standard.")
     sports = [s for s, on in (("nfl", sports_nfl), ("ncaaf", sports_ncaaf)) if on]
     if not sports:
         errors.append("Pick at least one league.")
@@ -184,6 +188,7 @@ def settings_save(
     pool.num_games_per_week = num_games_per_week
     pool.target_nfl = target_nfl
     pool.target_ncaaf = target_ncaaf
+    pool.scoring_mode = scoring_mode
     pool.sports = sports
     pool.auto_publish = bool(auto_publish)
     pool.open_registration = bool(open_registration)

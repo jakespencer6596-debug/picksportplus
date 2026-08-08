@@ -12,6 +12,7 @@ from app.auth import get_active_pool, is_commissioner, require_user
 from app.db import get_db
 from app.models import Game, Pick, Pool, PoolMember, User, Week, WeekEntry
 from app.routers.picks import week_is_locked
+from app.scoring import GameOutcome, PickInput, score_pick
 from app.templating import render
 
 router = APIRouter(tags=["results"])
@@ -33,6 +34,7 @@ class PlayerColumn:
     correct: int
     is_winner: bool
     submitted: bool
+    did_not_submit: bool
     picks: dict[int, PlayerPick]
 
 
@@ -131,10 +133,19 @@ def _build_columns(db: Session, pool: Pool, week: Week, games: list[Game]) -> li
                 state, earned = "void", 0
             elif game.status != "final" or game.winner is None:
                 state, earned = "pending", 0
-            elif pick.picked_team == game.winner:
-                state, earned = "correct", pick.confidence
             else:
-                state, earned = "wrong", 0
+                # "correct" and "wrong" describe whether the pick matched the winner, the
+                # same in both scoring modes. earned is what the pick actually scored,
+                # which is mode dependent: score_pick returns 0 for a correct pick and the
+                # staked points against the player for a wrong one under "inverse".
+                state = "correct" if pick.picked_team == game.winner else "wrong"
+                earned = score_pick(
+                    PickInput(
+                        game_id=game.id, picked_team=pick.picked_team, confidence=pick.confidence
+                    ),
+                    GameOutcome(game_id=game.id, status=game.status, winner=game.winner),
+                    mode=pool.scoring_mode,
+                )
             cells[game.id] = PlayerPick(pick.picked_team, pick.confidence, earned, state)
 
         columns.append(
@@ -145,11 +156,13 @@ def _build_columns(db: Session, pool: Pool, week: Week, games: list[Game]) -> li
                 correct=entry.correct if entry else 0,
                 is_winner=bool(entry and entry.is_winner),
                 submitted=bool(entry and entry.submitted_at),
+                did_not_submit=bool(entry.did_not_submit) if entry else True,
                 picks=cells,
             )
         )
 
-    columns.sort(key=lambda c: (-c.points, -c.correct, c.display_name.lower()))
+    sign = 1 if pool.scoring_mode == "inverse" else -1
+    columns.sort(key=lambda c: (sign * c.points, -c.correct, c.display_name.lower()))
     return columns
 
 

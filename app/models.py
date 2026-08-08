@@ -34,6 +34,10 @@ WEEK_STATUSES = ("draft", "open", "locked", "scored")
 GAME_STATUSES = ("scheduled", "in_progress", "final", "void")
 LEAGUES = ("nfl", "ncaaf")
 SPREAD_SOURCES = ("espn", "espn_core", "odds_api", "cfbd", "manual")
+# "inverse": wrong picks count against the player, lowest total wins. This is the pool's
+# real rule and the default. "standard": correct picks earn points, highest total wins,
+# kept switchable per pool. See app/scoring.py.
+SCORING_MODES = ("standard", "inverse")
 
 
 class User(Base):
@@ -88,6 +92,10 @@ class Pool(Base):
     # this feature, or one nobody has configured yet, has none: see app/services/ingest.py
     # detect_week for the fallback that keeps such a pool working without it.
     week1_anchor_date: Mapped[dt.date | None] = mapped_column(Date, nullable=True)
+    # "inverse" (default): wrong picks count their staked confidence against the player,
+    # lowest total wins. "standard": correct picks earn their staked confidence, highest
+    # total wins. See app/scoring.py for the scoring functions both modes run through.
+    scoring_mode: Mapped[str] = mapped_column(String(16), default="inverse", nullable=False)
     timezone: Mapped[str] = mapped_column(String(64), default="America/New_York", nullable=False)
     created_at: Mapped[dt.datetime] = mapped_column(
         DateTime(timezone=True), default=utcnow, server_default=func.now(), nullable=False
@@ -299,6 +307,12 @@ class WeekEntry(Base):
     points: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     correct: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     possible: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    # Set from app.scoring.WeekResult.did_not_submit. The explicit flag the UI checks to
+    # show "no picks submitted" instead of a bare score, rather than inferring it from
+    # submitted_at is None. Under scoring_mode "inverse" a no-show still carries a real,
+    # nonzero points value (the maximum penalty), so this flag is what tells the UI and
+    # weekly_winner_ids that the number on the row is a penalty, not a real result.
+    did_not_submit: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     is_winner: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     created_at: Mapped[dt.datetime] = mapped_column(
         DateTime(timezone=True), default=utcnow, server_default=func.now(), nullable=False

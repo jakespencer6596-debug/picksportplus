@@ -156,6 +156,43 @@
     </div>
   </section>
 
+  <section class="card" aria-labelledby="scoring-title">
+    <div class="card-head">
+      <h2 id="scoring-title">Scoring</h2>
+    </div>
+    <div class="card-body">
+      <fieldset class="field-group">
+        <legend class="field-label">How points run</legend>
+        <label class="checkbox" for="scoring_mode_inverse">
+          <input type="radio" id="scoring_mode_inverse" name="scoring_mode" value="inverse"
+                 {% if pool.scoring_mode == "inverse" %}checked{% endif %}>
+          <span>Inverse: low score wins</span>
+        </label>
+        <p class="form-hint">
+          A wrong pick counts its staked confidence against the player. A correct pick earns
+          nothing. Lowest total for the week wins. A player who submits no picks takes the
+          maximum possible penalty for that week, so sitting a week out is never the safe play.
+        </p>
+
+        <label class="checkbox" for="scoring_mode_standard">
+          <input type="radio" id="scoring_mode_standard" name="scoring_mode" value="standard"
+                 {% if pool.scoring_mode == "standard" %}checked{% endif %}>
+          <span>Standard: high score wins</span>
+        </label>
+        <p class="form-hint">
+          A correct pick earns its staked confidence. A wrong pick earns nothing. Highest total
+          for the week wins. A player who submits no picks scores 0 for that week.
+        </p>
+      </fieldset>
+
+      <p class="form-hint">
+        This pool's real rule is inverse. Standard is here for a pool that wants the older,
+        familiar scoring instead. Changing this only affects weeks scored after you save it,
+        weeks already scored keep the points they were scored with until you rescore them.
+      </p>
+    </div>
+  </section>
+
   <section class="card" aria-labelledby="automation-title">
     <div class="card-head">
       <h2 id="automation-title">Automation and access</h2>
