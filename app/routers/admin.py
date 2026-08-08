@@ -247,6 +247,8 @@ def settings_save(
     target_ncaaf: int = Form(...),
     picks_required: int = Form(...),
     scoring_mode: str = Form(...),
+    scenarios_min_final_games: int = Form(...),
+    scenarios_min_remaining_games: int = Form(...),
     auto_publish: str = Form(""),
     open_registration: str = Form(""),
     sports_nfl: str = Form(""),
@@ -277,6 +279,10 @@ def settings_save(
         )
     if scoring_mode not in SCORING_MODES:
         errors.append("Scoring mode must be either inverse or standard.")
+    if scenarios_min_final_games < 0:
+        errors.append("Scenarios minimum final games cannot be negative.")
+    if scenarios_min_remaining_games < 1:
+        errors.append("Scenarios minimum remaining games must be at least 1.")
     sports = [s for s, on in (("nfl", sports_nfl), ("ncaaf", sports_ncaaf)) if on]
     if not sports:
         errors.append("Pick at least one league.")
@@ -324,6 +330,8 @@ def settings_save(
     pool.target_ncaaf = target_ncaaf
     pool.picks_required = picks_required
     pool.scoring_mode = scoring_mode
+    pool.scenarios_min_final_games = scenarios_min_final_games
+    pool.scenarios_min_remaining_games = scenarios_min_remaining_games
     pool.sports = sports
     pool.auto_publish = bool(auto_publish)
     pool.open_registration = bool(open_registration)

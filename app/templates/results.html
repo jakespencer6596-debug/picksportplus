@@ -437,5 +437,153 @@
       </div>
     {% endif %}
   </section>
+
+  {% if revealed %}
+  <section class="section" aria-labelledby="scenarios-heading">
+    <h2 class="section-title" id="scenarios-heading">Scenarios</h2>
+
+    {% if scenario_panel and scenario_panel.visible %}
+      {% set report = scenario_panel.report %}
+      <div class="row scenario-toolbar">
+        <p class="muted">
+          {% if report.method == "monte_carlo" %}
+            Estimated from {{ "{:,}".format(report.scenario_count) }} sampled scenarios
+            (too many remaining games to check every one exactly).
+          {% else %}
+            Exact, every one of the {{ "{:,}".format(report.scenario_count) }} possible
+            scenarios for the {{ scenario_panel.remaining_count }} remaining
+            {{ scenario_panel.remaining_count | pluralize("game") }} checked.
+          {% endif %}
+          {% if probability_model == "moneyline" %}
+            <strong>Estimated from betting odds.</strong>
+          {% endif %}
+        </p>
+        <div class="view-toggle" role="group" aria-label="Probability model">
+          <a class="toggle-btn{{ ' is-active' if probability_model == 'even' }}"
+             href="/results?week={{ week.week_number }}&amp;model=even" aria-pressed="{{ 'true' if probability_model == 'even' else 'false' }}">
+            Even odds
+          </a>
+          <a class="toggle-btn{{ ' is-active' if probability_model == 'moneyline' }}"
+             href="/results?week={{ week.week_number }}&amp;model=moneyline" aria-pressed="{{ 'true' if probability_model == 'moneyline' else 'false' }}">
+            Betting odds
+          </a>
+        </div>
+      </div>
+
+      <div class="table-wrap">
+        <table class="table">
+          <caption class="visually-hidden">
+            Every player's chance at 1st, 2nd and 3rd place for {{ week.label }}.
+          </caption>
+          <thead>
+            <tr>
+              <th scope="col">Player</th>
+              <th scope="col" class="num">1st</th>
+              <th scope="col" class="num">2nd</th>
+              <th scope="col" class="num">3rd</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for col in columns %}
+              {% set outlook = report.players.get(col.user_id) %}
+              {% if outlook %}
+                {% set you = me is not none and col.user_id == me %}
+                <tr class="{{ 'is-you' if you }}">
+                  <td data-label="Player">
+                    {{ col.display_name }}{% if you %} <span class="pill pill-you">You</span>{% endif %}
+                  </td>
+                  {% for place in (1, 2, 3) %}
+                    <td class="num" data-label="Place {{ place }}">
+                      {% if outlook.clinched[place] %}
+                        <span class="badge badge-final">Clinched</span>
+                      {% elif outlook.eliminated[place] %}
+                        <span class="no-entry">Eliminated</span>
+                      {% else %}
+                        {{ (outlook.pct_at_place[place] * 100) | round | int }}%
+                      {% endif %}
+                    </td>
+                  {% endfor %}
+                </tr>
+              {% endif %}
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+
+      {% if leverage_lines %}
+        <div class="panel scenario-leverage">
+          <p class="notice-title">What you need</p>
+          <ul class="leverage-list">
+            {% for line in leverage_lines %}
+              <li>{{ line.sentence }}</li>
+            {% endfor %}
+          </ul>
+        </div>
+      {% endif %}
+
+      {% if representative_lines %}
+        <details class="scenario-representative">
+          <summary>See {{ representative_lines | length }} example winning
+            {{ representative_lines | length | pluralize("scenario") }}</summary>
+          <ul class="representative-list">
+            {% for rep in representative_lines %}
+              <li>{{ rep.picks | join(", ") }}</li>
+            {% endfor %}
+          </ul>
+        </details>
+      {% endif %}
+    {% else %}
+      <div class="empty-state">
+        {{ ic.icon("list", 28) }}
+        <p class="empty-state-title">Scenarios open once {{ pool.scenarios_min_final_games }} {{ pool.scenarios_min_final_games | pluralize("game") }} {{ "are" if pool.scenarios_min_final_games != 1 else "is" }} final.</p>
+        <p class="muted">
+          {% if scenario_panel %}
+            {{ scenario_panel.final_count }} of {{ pool.scenarios_min_final_games }} final so far.
+          {% endif %}
+        </p>
+      </div>
+    {% endif %}
+  </section>
+
+  {% if scenario_panel and scenario_panel.visible and remaining_games_by_id %}
+    <section class="section" aria-labelledby="custom-scenario-heading">
+      <h2 class="section-title" id="custom-scenario-heading">Build your own scenario</h2>
+      <p class="muted lb-note">
+        Set any remaining game to a winner and see how the standings shift, for every
+        player. Leave a game undecided to keep it out of the count.
+      </p>
+
+      <form hx-post="/results/custom-scenario" hx-target="[data-custom-scenario-target]"
+            hx-swap="innerHTML">
+        <input type="hidden" name="week" value="{{ week.week_number }}">
+        <div class="custom-scenario-games">
+          {% for game in remaining_games_by_id.values() %}
+            <fieldset class="field-group custom-scenario-game">
+              <legend class="field-label">{{ game.matchup }}</legend>
+              <label class="checkbox" for="game_{{ game.id }}_away">
+                <input type="radio" id="game_{{ game.id }}_away" name="game_{{ game.id }}"
+                       value="away">
+                <span>{{ game.away_abbr }} wins</span>
+              </label>
+              <label class="checkbox" for="game_{{ game.id }}_undecided">
+                <input type="radio" id="game_{{ game.id }}_undecided" name="game_{{ game.id }}"
+                       value="undecided" checked>
+                <span>Undecided</span>
+              </label>
+              <label class="checkbox" for="game_{{ game.id }}_home">
+                <input type="radio" id="game_{{ game.id }}_home" name="game_{{ game.id }}"
+                       value="home">
+                <span>{{ game.home_abbr }} wins</span>
+              </label>
+            </fieldset>
+          {% endfor %}
+        </div>
+        <button class="btn btn-primary" type="submit">Recompute standings</button>
+      </form>
+
+      <div data-custom-scenario-target></div>
+    </section>
+  {% endif %}
+  {% endif %}
 {% endif %}
 {% endblock %}

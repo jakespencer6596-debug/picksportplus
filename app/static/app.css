@@ -2734,6 +2734,53 @@ button.team-btn:not([disabled]):not(.is-picked):hover {
   outline-offset: 2px;
 }
 
+a.toggle-btn { text-decoration: none; }
+
+/* -- Scenarios panel (Phase 8) -------------------------------------------- */
+
+.scenario-toolbar {
+  align-items: flex-start;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+}
+
+.scenario-leverage { margin-top: var(--space-4); }
+
+.leverage-list,
+.representative-list {
+  margin: 0;
+  padding-left: var(--space-5);
+}
+
+.leverage-list li,
+.representative-list li { margin-top: var(--space-2); }
+
+.scenario-representative {
+  margin-top: var(--space-4);
+}
+
+.scenario-representative summary {
+  cursor: pointer;
+  font-weight: 500;
+  color: var(--accent);
+}
+
+.custom-scenario-games {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: var(--space-3);
+  margin: var(--space-4) 0;
+}
+
+.custom-scenario-game {
+  border: var(--hairline);
+  border-radius: var(--radius);
+  padding: var(--space-3);
+}
+
+.custom-scenario-game .checkbox { margin-top: var(--space-1); }
+
 /* -- Winner pennant ------------------------------------------------------ */
 
 .ribbon {

@@ -64,6 +64,11 @@ class EspnGame:
     spread_home: float | None = None
     spread_source: str | None = None
     neutral_site: bool = False
+    # American odds (Phase 8, the scenario engine's moneyline probability model). See
+    # moneyline_from_items below: no fixture recorded in tests/fixtures for this codebase
+    # ever carries one, so this is commonly None on live traffic too, and that is expected.
+    home_moneyline: int | None = None
+    away_moneyline: int | None = None
 
     @property
     def is_final(self) -> bool:
@@ -247,6 +252,51 @@ def spread_from_items(items: list[dict], home_abbr: str, away_abbr: str) -> floa
     return float(statistics.median(values))
 
 
+def _moneyline_value(raw: Any) -> int | None:
+    if raw is None:
+        return None
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        return None
+
+
+def parse_moneyline_item(item: dict) -> tuple[int | None, int | None]:
+    """Home and away American moneyline odds from one bookmaker entry, if present.
+
+    Spec Section 5a documents the odds object as carrying details, spread, overUnder, and
+    homeTeamOdds/awayTeamOdds each with a favorite boolean, nothing more, and every payload
+    recorded in tests/fixtures for this codebase (checked directly, see DECISIONS.md,
+    Phase 8) agrees: none of them carry a moneyline anywhere. This reads the key a real
+    ESPN payload would most plausibly use for one, moneyLine, at the same nesting as the
+    favorite boolean, on the chance a live payload does carry it; when it does not, both
+    values come back None, and the caller (app.scenarios.win_probability, by way of
+    app/services/scenarios.py) already falls back to the spread derived probability model,
+    which is the expected, honest state for this feature today, not a bug.
+    """
+    home_odds = item.get("homeTeamOdds") or {}
+    away_odds = item.get("awayTeamOdds") or {}
+    return _moneyline_value(home_odds.get("moneyLine")), _moneyline_value(
+        away_odds.get("moneyLine")
+    )
+
+
+def moneyline_from_items(items: list[dict]) -> tuple[int | None, int | None]:
+    """The first bookmaker entry with both sides present.
+
+    Unlike spread_from_items there is no median here: American odds are not linear, and
+    with zero recorded payloads that ever carry a moneyline at all (see
+    parse_moneyline_item), there is nothing in this codebase's data to validate an
+    averaging strategy against. First-with-both-sides is the simplest rule that does not
+    invent one.
+    """
+    for item in items or []:
+        home_ml, away_ml = parse_moneyline_item(item)
+        if home_ml is not None and away_ml is not None:
+            return home_ml, away_ml
+    return None, None
+
+
 def parse_core_odds(payload: Any, home_abbr: str, away_abbr: str) -> float | None:
     if not isinstance(payload, dict):
         return None
@@ -300,6 +350,7 @@ def parse_event(event: dict, league: str) -> EspnGame | None:
             winner = "away"
 
     spread = spread_from_items(comp.get("odds") or [], home.abbr, away.abbr)
+    home_moneyline, away_moneyline = moneyline_from_items(comp.get("odds") or [])
 
     return EspnGame(
         event_id=str(event.get("id")),
@@ -312,6 +363,8 @@ def parse_event(event: dict, league: str) -> EspnGame | None:
         spread_home=spread,
         spread_source="espn" if spread is not None else None,
         neutral_site=bool(comp.get("neutralSite")),
+        home_moneyline=home_moneyline,
+        away_moneyline=away_moneyline,
     )
 
 

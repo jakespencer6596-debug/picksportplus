@@ -1021,6 +1021,8 @@ def test_commissioner_can_change_the_slate_size(client, world, session_factory):
             "target_ncaaf": "12",
             "picks_required": "15",
             "scoring_mode": "inverse",
+            "scenarios_min_final_games": "5",
+            "scenarios_min_remaining_games": "1",
             "auto_publish": "1",
             "open_registration": "",
             "sports_nfl": "1",
@@ -1056,6 +1058,8 @@ def test_commissioner_cannot_set_picks_required_above_the_slate_size(
             "target_ncaaf": "2",
             "picks_required": "5",  # more than the 4 game slate
             "scoring_mode": "inverse",
+            "scenarios_min_final_games": "5",
+            "scenarios_min_remaining_games": "1",
             "auto_publish": "1",
             "open_registration": "",
             "sports_nfl": "1",
@@ -1067,6 +1071,62 @@ def test_commissioner_cannot_set_picks_required_above_the_slate_size(
     pool = db.get(Pool, world["pool_id"])
     # Rejected: picks_required is unchanged from the world fixture's original value.
     assert pool.picks_required == 4
+    db.close()
+
+
+def test_commissioner_can_change_the_scenarios_panel_thresholds(client, world, session_factory):
+    _login(client, "boss@example.com")
+    response = client.post(
+        "/admin/settings",
+        data={
+            "name": "Test Pool",
+            "season_year": "2025",
+            "timezone": "America/New_York",
+            "num_games_per_week": "4",
+            "target_nfl": "2",
+            "target_ncaaf": "2",
+            "picks_required": "4",
+            "scoring_mode": "inverse",
+            "scenarios_min_final_games": "3",
+            "scenarios_min_remaining_games": "2",
+            "sports_nfl": "1",
+            "sports_ncaaf": "1",
+        },
+    )
+    assert response.status_code == 303
+    db = session_factory()
+    pool = db.get(Pool, world["pool_id"])
+    assert pool.scenarios_min_final_games == 3
+    assert pool.scenarios_min_remaining_games == 2
+    db.close()
+
+
+def test_commissioner_cannot_set_scenarios_min_remaining_games_below_one(
+    client, world, session_factory
+):
+    _login(client, "boss@example.com")
+    response = client.post(
+        "/admin/settings",
+        data={
+            "name": "Test Pool",
+            "season_year": "2025",
+            "timezone": "America/New_York",
+            "num_games_per_week": "4",
+            "target_nfl": "2",
+            "target_ncaaf": "2",
+            "picks_required": "4",
+            "scoring_mode": "inverse",
+            "scenarios_min_final_games": "5",
+            "scenarios_min_remaining_games": "0",
+            "sports_nfl": "1",
+            "sports_ncaaf": "1",
+        },
+    )
+    assert response.status_code == 303
+    db = session_factory()
+    pool = db.get(Pool, world["pool_id"])
+    # Rejected: unchanged from the world fixture's original value (the Pool default, 1).
+    assert pool.scenarios_min_remaining_games == 1
     db.close()
 
 
@@ -1389,6 +1449,8 @@ def test_settings_save_persists_venmo_and_payment_fields(client, world, session_
             "target_ncaaf": "2",
             "picks_required": "4",
             "scoring_mode": "inverse",
+            "scenarios_min_final_games": "5",
+            "scenarios_min_remaining_games": "1",
             "sports_nfl": "1",
             "sports_ncaaf": "1",
             "entry_fee": "25.50",
@@ -1421,6 +1483,8 @@ def test_settings_save_rejects_a_negative_entry_fee(client, world, session_facto
             "target_ncaaf": "2",
             "picks_required": "4",
             "scoring_mode": "inverse",
+            "scenarios_min_final_games": "5",
+            "scenarios_min_remaining_games": "1",
             "sports_nfl": "1",
             "sports_ncaaf": "1",
             "entry_fee": "-5",
@@ -1568,6 +1632,108 @@ def test_results_bowl_week_payout_uses_bowl_scope_not_weekly(client, world, sess
     assert response.status_code == 200
     assert "55 dollars" in response.text
     assert "999 dollars" not in response.text
+
+
+# Results: the scenarios panel and build-your-own-scenario (Phase 8) -----------
+
+
+def _lock_worlds_week(session_factory, world):
+    db = session_factory()
+    week = db.get(Week, world["week_id"])
+    week.lock_at = dt.datetime.now(UTC) - dt.timedelta(minutes=1)
+    week.status = "locked"
+    db.commit()
+    db.close()
+
+
+def test_scenarios_panel_shows_pending_state_below_the_threshold(client, world, session_factory):
+    """The world fixture's pool keeps the Pool model default thresholds (5 final games, 1
+    remaining) and only has 4 games total, none final, so the panel must show the pending
+    copy naming the real configured number, never a hard coded "five"."""
+    _lock_worlds_week(session_factory, world)
+    _login(client, "boss@example.com")
+    response = client.get("/results")
+    assert response.status_code == 200
+    assert "Scenarios open once 5 games are final" in response.text
+
+
+def test_scenarios_panel_visible_shows_placement_percentages(client, world, session_factory):
+    _login(client, "player@example.com")
+    client.post("/picks", data=_valid_submission(world["game_ids"]))
+    _login(client, "boss@example.com")
+
+    db = session_factory()
+    pool = db.get(Pool, world["pool_id"])
+    pool.scenarios_min_final_games = 1
+    pool.scenarios_min_remaining_games = 1
+    week = db.get(Week, world["week_id"])
+    week.lock_at = dt.datetime.now(UTC) - dt.timedelta(minutes=1)
+    week.status = "locked"
+    games = list(db.scalars(select(Game).where(Game.week_id == week.id).order_by(Game.slate_rank)))
+    # Finalise only the first game, leaving the other three remaining.
+    games[0].status = "final"
+    games[0].winner = "home"
+    games[0].home_score = 21
+    games[0].away_score = 17
+    db.commit()
+    db.close()
+
+    response = client.get("/results")
+    assert response.status_code == 200
+    assert "Scenarios open once" not in response.text
+    assert "1st" in response.text and "2nd" in response.text and "3rd" in response.text
+    assert "Build your own scenario" in response.text
+
+
+def test_scenarios_panel_moneyline_toggle_labels_estimated_from_betting_odds(
+    client, world, session_factory
+):
+    _login(client, "player@example.com")
+    client.post("/picks", data=_valid_submission(world["game_ids"]))
+    _login(client, "boss@example.com")
+
+    db = session_factory()
+    pool = db.get(Pool, world["pool_id"])
+    pool.scenarios_min_final_games = 0
+    pool.scenarios_min_remaining_games = 1
+    week = db.get(Week, world["week_id"])
+    week.lock_at = dt.datetime.now(UTC) - dt.timedelta(minutes=1)
+    week.status = "locked"
+    db.commit()
+    db.close()
+
+    even = client.get("/results")
+    assert "Estimated from betting odds" not in even.text
+
+    moneyline = client.get("/results?model=moneyline")
+    assert "Estimated from betting odds" in moneyline.text
+
+
+def test_custom_scenario_endpoint_recomputes_standings_for_every_player(
+    client, world, session_factory
+):
+    _login(client, "player@example.com")
+    client.post("/picks", data=_valid_submission(world["game_ids"]))
+    _lock_worlds_week(session_factory, world)
+    _login(client, "boss@example.com")
+
+    db = session_factory()
+    game_id = world["game_ids"][0]
+    db.close()
+
+    response = client.post(
+        "/results/custom-scenario", data={"week": "5", f"game_{game_id}": "home"}
+    )
+    assert response.status_code == 200
+    assert "Regular Player" in response.text
+    assert "The Commissioner" in response.text
+    assert "Assuming" in response.text
+
+
+def test_custom_scenario_endpoint_blocked_before_the_week_locks(client, world, session_factory):
+    _login(client, "boss@example.com")
+    response = client.post("/results/custom-scenario", data={"week": "5"})
+    assert response.status_code == 403
 
 
 # Season standings: the awards panel -------------------------------------------

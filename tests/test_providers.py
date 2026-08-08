@@ -371,6 +371,83 @@ def test_spread_from_items_always_returns_a_float():
     assert isinstance(value, float)
 
 
+# parse_moneyline_item / moneyline_from_items (Phase 8) ------------------------
+#
+# Spec Section 5a documents the odds object as carrying details, spread, overUnder, and
+# homeTeamOdds/awayTeamOdds each with only a favorite boolean, nothing more, and every
+# fixture recorded in tests/fixtures for this codebase agrees: none of them ever carry a
+# moneyline anywhere (checked directly, see DECISIONS.md, Phase 8). The items below are
+# NOT recordings of a real ESPN response. They are hand built, in the same shape
+# test_providers.py's own _synthetic_event already uses for a payload this codebase has
+# never actually observed, to prove the parsing path works IF a real payload ever does
+# carry a moneyline shaped key, without pretending any of this was seen live.
+
+
+def test_parse_moneyline_item_reads_a_synthetic_moneyline():
+    # Synthetic: no recorded ESPN payload in this codebase carries a moneyLine key.
+    item = {
+        "details": "KC -3.5",
+        "spread": 3.5,
+        "homeTeamOdds": {"favorite": True, "moneyLine": -180},
+        "awayTeamOdds": {"favorite": False, "moneyLine": 155},
+    }
+    assert espn.parse_moneyline_item(item) == (-180, 155)
+
+
+def test_parse_moneyline_item_missing_key_returns_none_none():
+    item = {"details": "KC -3.5", "spread": 3.5, "homeTeamOdds": {"favorite": True}}
+    assert espn.parse_moneyline_item(item) == (None, None)
+
+
+def test_parse_moneyline_item_tolerates_a_non_numeric_value():
+    # Synthetic: a malformed moneyline should not raise, just come back as missing.
+    item = {"homeTeamOdds": {"moneyLine": "N/A"}, "awayTeamOdds": {"moneyLine": 155}}
+    assert espn.parse_moneyline_item(item) == (None, 155)
+
+
+def test_moneyline_from_items_takes_the_first_book_with_both_sides():
+    # Synthetic: two bookmakers, the first with only one side, the second with both.
+    items = [
+        {"homeTeamOdds": {"moneyLine": -180}, "awayTeamOdds": {}},
+        {"homeTeamOdds": {"moneyLine": -175}, "awayTeamOdds": {"moneyLine": 150}},
+    ]
+    assert espn.moneyline_from_items(items) == (-175, 150)
+
+
+@pytest.mark.parametrize("items", [[], None, [{}], [{"homeTeamOdds": {}, "awayTeamOdds": {}}]])
+def test_moneyline_from_items_returns_none_none_without_a_usable_book(items):
+    assert espn.moneyline_from_items(items) == (None, None)
+
+
+def test_recorded_upcoming_fixture_has_no_moneyline(load_fixture):
+    """The real recording: confirms the documented reality that this codebase's data never
+    carries a moneyline, so parse_event's home_moneyline/away_moneyline come back None on
+    live-shaped traffic today (app.scenarios.win_probability then falls back to spread)."""
+    payload = load_fixture(NFL_UPCOMING)
+    games = espn.parse_scoreboard(payload, "nfl")
+    assert games
+    for game in games:
+        assert game.home_moneyline is None
+        assert game.away_moneyline is None
+
+
+def test_parse_event_reads_moneyline_when_a_synthetic_payload_carries_one():
+    event = _synthetic_event(
+        name="STATUS_SCHEDULED",
+        odds=[
+            {
+                "details": "KC -3.5",
+                "spread": 3.5,
+                "homeTeamOdds": {"favorite": True, "moneyLine": -180},
+                "awayTeamOdds": {"favorite": False, "moneyLine": 155},
+            }
+        ],
+    )
+    game = espn.parse_event(event, "nfl")
+    assert game.home_moneyline == -180
+    assert game.away_moneyline == 155
+
+
 # parse_core_odds -------------------------------------------------------------
 
 
@@ -788,9 +865,17 @@ def test_espn_game_field_names_and_order_are_stable():
         "spread_home",
         "spread_source",
         "neutral_site",
+        "home_moneyline",
+        "away_moneyline",
     ]
     defaults = {f.name: f.default for f in fields if f.default is not dataclasses.MISSING}
-    assert defaults == {"spread_home": None, "spread_source": None, "neutral_site": False}
+    assert defaults == {
+        "spread_home": None,
+        "spread_source": None,
+        "neutral_site": False,
+        "home_moneyline": None,
+        "away_moneyline": None,
+    }
     # Frozen, so a caller cannot quietly rewrite a spread after selection.
     assert espn.EspnGame.__dataclass_params__.frozen is True
 

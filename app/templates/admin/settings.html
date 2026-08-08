@@ -228,6 +228,37 @@
     </div>
   </section>
 
+  <section class="card" aria-labelledby="scenarios-title">
+    <div class="card-head">
+      <h2 id="scenarios-title">Scenarios panel</h2>
+    </div>
+    <div class="card-body">
+      <p class="form-hint">
+        On Weekly Results, the scenarios panel shows each player their percent chance at
+        1st, 2nd and 3rd for the week, and which of the remaining games they need to go
+        which way. It only opens once a week has enough of the picture in: enough final
+        games to be interesting, and at least one game still to play.
+      </p>
+      <div class="form-row">
+        <div class="field">
+          <label class="field-label" for="scenarios_min_final_games">Minimum final games</label>
+          <input class="input num" type="number" id="scenarios_min_final_games"
+                 name="scenarios_min_final_games" value="{{ pool.scenarios_min_final_games }}"
+                 min="0" step="1" required>
+          <p class="form-hint">How many countable games must be final before the panel opens.</p>
+        </div>
+
+        <div class="field">
+          <label class="field-label" for="scenarios_min_remaining_games">Minimum remaining games</label>
+          <input class="input num" type="number" id="scenarios_min_remaining_games"
+                 name="scenarios_min_remaining_games" value="{{ pool.scenarios_min_remaining_games }}"
+                 min="1" step="1" required>
+          <p class="form-hint">How many games must still be left to play for there to be a scenario to show.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
   <section class="card" aria-labelledby="automation-title">
     <div class="card-head">
       <h2 id="automation-title">Automation and access</h2>

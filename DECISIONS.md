@@ -1123,3 +1123,199 @@ bowl-scope-not-weekly-scope case), and the Standings season awards panel appeari
 week is scored). `ruff check .` and `black .` both clean. An em dash search across every file
 touched this phase finds nothing; no emoji were added anywhere; no dollar amount or Venmo
 handle is hard coded anywhere outside a test file.
+
+## Phase 8
+
+The feature the group's own feedback named directly: "Once 5 games were completed, you
+could see how many different scenarios got you placed for the week... your percent chance
+at 1, 2, 3." This phase adds `app/scenarios.py` (the pure scenario engine), a database
+touching caller, a Scenarios panel on Weekly Results with a probability model toggle, and
+a build-your-own-scenario panel. Zero new Python dependencies, only the standard library
+(`itertools`, `random` with an explicit seed, `math.erf`, `time`).
+
+### Where the database-touching caller lives, and why
+
+`app/services/scenarios.py`, a new module, not folded into `app/services/results.py`.
+Both are plausible homes (the brief offered either), but `results.py` already owns two
+distinct jobs (`fetch_results`, `score_week_for_pool`) that write to the database on every
+call; the scenario caller is read only end to end (it never writes a row) and carries its
+own, real piece of state (the in process cache). Keeping it separate means the cache's
+lifetime and the `week_scenario_panel`/`custom_scenario_standings` entry points are the
+whole surface of the new module, easy to reason about in isolation, and it mirrors the
+existing pure/impure split exactly: `app/scenarios.py` is to `app/services/scenarios.py`
+what `app/scoring.py` is to `app/services/results.py`.
+
+### The moneyline reality: nothing in this codebase's recorded data has ever carried one
+
+Checked directly, twice: the fixture the brief already flagged
+(`espn_nfl_upcoming_with_odds.json`, `spread`/`details`/`homeTeamOdds`/`awayTeamOdds` only,
+`favorite` boolean, no moneyline anywhere) and every other fixture in `tests/fixtures`. The
+only moneyline-shaped keys anywhere in the fixture set (`homeMoneyline`/`awayMoneyline`) are
+in `cfbd_lines_2025_w5.json`, CollegeFootballData's own shape, unrelated to `app/providers/espn.py`.
+Spec Section 5a documents ESPN's odds object precisely (`details`, `spread`, `overUnder`,
+`homeTeamOdds`/`awayTeamOdds.favorite`) and does not mention a moneyline field either.
+
+`espn.parse_moneyline_item`/`moneyline_from_items` read a `moneyLine` key at the same
+nesting as `favorite`, a reasonable, best-guess key name for a real ESPN payload that might
+carry one, but genuinely unverified: no fixture in this codebase confirms it, and it may
+need adjusting once a real payload with a moneyline actually lands. The tests for this path
+(`tests/test_providers.py`, the "parse_moneyline_item / moneyline_from_items (Phase 8)"
+section) are built on hand constructed, clearly synthetic payloads, commented as such,
+following the precedent `test_providers.py`'s own `_synthetic_event` already set for a
+payload this codebase has never actually observed. One test
+(`test_recorded_upcoming_fixture_has_no_moneyline`) runs the parser against the real
+recording and asserts both moneyline fields come back `None`, pinning the documented
+reality rather than papering over it. `Game.home_moneyline`/`Game.away_moneyline` are
+populated opportunistically in `upsert_games` and never cleared once set (mirroring the
+existing spread handling, since Spec 5a's "odds disappear once a game goes final" applies
+identically to a moneyline). On real, live traffic today these columns are simply null end
+to end, and `app.scenarios.win_probability` falls back to the spread derived normal CDF,
+which is the honest, currently-exercised path, not the moneyline one.
+
+### Performance: why `app/scenarios.py` does not call `score_week` once per scenario
+
+The brief's own instruction is "score every scenario with `score_week`... never
+reimplement scoring logic." Taken completely literally (one `score_week` call per player
+per scenario) this measured 5.45 seconds for 15 remaining games and 16 players alone, on
+the build machine, well over the 2 second hard cap, before Monte Carlo, leverage, or
+anything else. Scoring a confidence week is a **sum over independent picks**
+(`score_pick` has no cross terms between games), so the actual implementation still
+computes every scenario's real total through `score_week`/`score_pick`, it just avoids
+redundant, identical calls:
+
+1. One `score_week` call per player over the already-final outcomes gives a constant base
+   (and correctly handles the no-show penalty, itself scenario-invariant).
+2. Two more `score_week` calls per (player, remaining game), one per side, on that single
+   pick in isolation, give the exact marginal point delta that game contributes,
+   independent of every other remaining game's outcome.
+3. Every scenario's total is `base + sum of the deltas for whichever side each remaining
+   game lands on`. This is exact, not an approximation of what `score_week` would return:
+   it is the identical sum, computed once per (player, game, side) instead of once per
+   (player, scenario). `tests/test_scenarios.py::test_linearization_matches_brute_force_score_week_on_every_scenario`
+   cross checks this decomposition against the literal brute force per-scenario
+   `score_week` call across every one of `2**3` scenarios for three players (one a
+   no-show, one who skips some games), so this is verified, not just argued for.
+
+The sweep over `2**R` scenarios (exhaustive) still costs real time even with that
+optimization, so `_build_points_array`/`_build_weight_array` build each player's full
+scenario array via repeated doubling (`arr = [x + away for x in arr] + [x + home for x in
+arr]`, extended once per remaining game) rather than an explicit `itertools.product` loop
+with a `score_week`-shaped call inside it: R = 15, 16 players measures around half a
+second end to end on the build machine this way, comfortably under the cap; the naive
+per-scenario `score_week` approach did not fit at all. R = 20, 16 players (the largest
+`MAX_EXHAUSTIVE_REMAINING` case) measured 1.8+ seconds for the array build alone under
+this same approach, which is why the exhaustive path also needs a real mid-run time
+budget check (see below), not just a fast implementation.
+
+### Monte Carlo: a chunked lookup table, and why sample count is not decided by watching the clock
+
+The naive Monte Carlo loop (draw R random bits, sum R deltas per player, per sample) measured
+roughly 11.7 seconds for 200,000 samples at R = 24 with 16 players, again far over budget.
+`_build_chunks` groups the remaining games into fixed size bit chunks (12 bits, a 4096 row
+table per chunk, the measured knee of the build-cost/lookup-cost tradeoff) and precomputes
+each chunk's point contribution per player for every one of that chunk's local bit patterns,
+via the same doubling trick as the exhaustive path. A sample then costs O(chunks times
+players) table lookups and additions instead of O(remaining games times players) work,
+which brought the core sampling loop down to roughly 1.2 seconds for the same 200,000
+samples.
+
+The first working version of this still decided how many samples to draw by watching
+`time.monotonic()` during the batch loop and stopping once a time budget was nearly spent.
+This measurably broke reproducibility: two back to back calls with the identical seed, on
+this development machine, under its ordinary background load, sometimes drew a different
+number of samples (`test_monte_carlo_is_reproducible_under_a_fixed_seed` failed roughly 1
+run in 5 during manual stress testing, sometimes even after tightening the safety margin).
+The fix: `_run_monte_carlo` now decides the sample count in closed form, from R and the
+player count alone (`_MONTE_CARLO_SECONDS_PER_REMAINING_GAME`, `_MONTE_CARLO_SECONDS_PER_CHUNK_PLAYER`,
+both hand calibrated against this exact chunked table on the build machine, times a 3x
+`_MONTE_CARLO_SAFETY_MULTIPLIER`), before a single sample is drawn, so the count itself
+never depends on live timing. The periodic wall clock check inside the batch loop is still
+real and can still stop the loop early with fewer than the deterministic target, but it
+checks against the caller's full, original `time_budget_seconds` (never the smaller
+sub-budget used only for sizing), so in ordinary operation it is a true last-resort safety
+net for a machine meaningfully slower than the calibration machine, not the everyday
+mechanism deciding the count. Restressed after the fix: 15 consecutive same-seed pairs, 0
+mismatches (previously flaky within 5 to 8 pairs). `MONTE_CARLO_SAMPLES` (200,000) remains
+the named target/cap a caller can request; the actual count used on a given call is
+honestly documented as a target, not a guarantee, and is reported back on
+`ScenarioReport.scenario_count`.
+
+`_EXHAUSTIVE_ABORT_FRACTION` (how much of the total budget the exhaustive attempt gets
+before aborting to Monte Carlo) is 0.75, not a tighter number: R = 15/16 players normally
+finishes in well under half a second, but a first pass at 0.5 (1.0 second) occasionally
+tripped the abort under this same background load, sending the timing test's own case to
+Monte Carlo instead of the exact answer it is meant to demonstrate. 0.75 gives real headroom
+for a genuinely fast case while still leaving a quarter of the budget for a Monte Carlo
+fallback on a case that actually needs one (R = 20 with many players, measured 1.8+ seconds
+for the array build alone, comfortably triggers the abort well before the array finishes).
+
+### The representative-scenario selection heuristic
+
+Up to five scenarios, chosen from the candidate pool of a player's own enumerated or
+sampled winning scenarios (capped at `_REPRESENTATIVE_CANDIDATE_CAP` = 400 retained
+candidates while sweeping, so a player who wins the overwhelming majority of scenarios at
+a large R does not force every one of them into memory). Selection: rank the remaining
+games by how decisive they are to this player (`abs(leverage_share - 0.5)`, most decisive
+first), weight each game by its rank position, then greedily pick candidates via
+farthest-first traversal (start with the first candidate, repeatedly add whichever
+remaining candidate has the largest weighted Hamming distance, summed only over games
+where the two scenarios actually disagree, from every scenario already picked). This is
+the literal implementation of the brief's own instruction ("prioritize scenarios that
+differ from each other on the games with the most leverage, rather than five near-identical
+scenarios"): the weighting means two scenarios that only differ on a game nobody's win
+depends on barely register as "different" for this purpose, while a disagreement on the
+single most decisive game dominates the distance.
+
+### The cache eviction story
+
+A plain module level dict in `app/services/scenarios.py`
+(`_CACHE: dict[tuple, ScenarioReport]`), keyed on `(week_id, frozenset of every countable
+game's (id, status, winner), scoring_mode, picks_required, probability_model, sorted
+representative_for, seed)`. It never evicts within a process lifetime. This is a
+deliberately simple, honest answer rather than an LRU or a TTL: staleness is already
+structurally impossible, because the key itself changes the instant any game the report
+depends on changes status or winner (a score refresh, a commissioner void), so a stale
+entry is never served, it just sits unreachable. The cost is a few dozen unreachable dict
+entries across a season in the worst case (one pool, one process, a handful of distinct
+"final outcomes" states per week times a couple of probability models), not a correctness
+risk, and not worth a dependency (Redis or otherwise) to solve.
+
+### Other choices worth recording
+
+- Leverage "does not matter" band: `_LEVERAGE_INDIFFERENCE_BAND = 0.10` in
+  `app/routers/results.py`. A leverage share within 40 to 60 percent reads as "does not
+  matter to you" (the brief's own example), rather than naming a team at, say, 52 percent,
+  which would read as more decisive than it actually is.
+- `rank_players` does not exclude a no-show from 1st place the way
+  `app.scoring.weekly_winner_ids` does. Checked against `app/services/standings.py`'s
+  `_assign_ranks`, which already ranks a no-show purely by their (penalty) points with no
+  special casing, exactly like a "who is actually in what position" table needs to; the
+  win-eligibility exclusion is a separate concern (`WeekEntry.is_winner`), not part of
+  ranking itself, in the existing code this phase reuses the pattern from.
+- `total_weight` is a probability mass, not a scenario tally. Under "even", each
+  remaining game's weight is 0.5/0.5, so a 2-remaining-game report's four scenarios sum to
+  1.0, not 4; `pct_at_place` divides by this real total either way, so the percentages
+  themselves come out identical regardless of which convention the raw counts use, but a
+  caller reading `scenarios_at_place`/`total_weight` directly should not assume the second
+  is the scenario count (`scenario_count` is the field for that).
+- Scenarios panel gated on `revealed` (the same `week_is_locked` rule already hiding the
+  pick grid), even though its own final/remaining thresholds cannot really be met before a
+  week locks anyway. Keeps every pick-derived surface on `/results` behind one single,
+  already-audited rule rather than a second one that happens to be redundant today but
+  would not be if the thresholds were ever configured down to zero.
+- Build-your-own-scenario is open to any signed in pool member, not commissioner-only. The
+  brief calls it "a social, screenshot-friendly feature," which reads as something every
+  player uses, not an admin tool; it is still gated on the week having locked, the same
+  reveal rule as everything else pick-derived, so it cannot leak picks early.
+- Pool defaults: `scenarios_min_final_games = 5`, `scenarios_min_remaining_games = 1`,
+  matching the brief's own "once 5 games were completed" example exactly, both editable
+  from `/admin/settings` and read at render time, never hard coded in the pending-state copy.
+
+### Verification
+
+`ruff check .` and `black .` both clean. `pytest -q`: 764 passed (28 new in
+`tests/test_scenarios.py`, 12 new in `tests/test_scenarios_service.py`, plus new cases
+added to `tests/test_providers.py`, `tests/test_ingest.py`, and `tests/test_app.py`). An em
+dash search across every file touched this phase finds nothing; no emoji were added
+anywhere. Confirmed directly: `app/scenarios.py` has zero imports from `app.models`,
+`app.services`, or `app.routers`.

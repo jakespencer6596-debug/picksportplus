@@ -166,6 +166,15 @@ class Pool(Base):
     # or a Zelle fallback for anyone without Venmo. Never seeded with real instructions.
     payment_note: Mapped[str | None] = mapped_column(Text, nullable=True)
 
+    # Scenarios panel visibility (Phase 8: "Once 5 games were completed, you could see how
+    # many different scenarios got you placed for the week"). The panel on Weekly Results
+    # only renders once a week has at least this many final countable games AND at least
+    # this many still-remaining countable games; below that it shows a pending state
+    # instead. Both are commissioner settings, read at render time, never hard coded, so a
+    # smaller or larger pool can tune when the panel is worth showing.
+    scenarios_min_final_games: Mapped[int] = mapped_column(Integer, default=5, nullable=False)
+    scenarios_min_remaining_games: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+
     created_at: Mapped[dt.datetime] = mapped_column(
         DateTime(timezone=True), default=utcnow, server_default=func.now(), nullable=False
     )
@@ -311,6 +320,15 @@ class Game(Base):
     spread_home: Mapped[float | None] = mapped_column(Float, nullable=True)
     closeness: Mapped[float | None] = mapped_column(Float, nullable=True)
     spread_source: Mapped[str | None] = mapped_column(String(16), nullable=True)
+
+    # American odds (Phase 8, the scenario engine's moneyline probability model). Populated
+    # opportunistically wherever app/providers/espn.py already parses odds, when a moneyline
+    # shaped key is present in the payload. None of this codebase's recorded ESPN fixtures
+    # carry one (checked directly against tests/fixtures, see DECISIONS.md, Phase 8), so on
+    # live traffic these are commonly null and app.scenarios.win_probability falls back to
+    # the spread derived normal CDF model, which is expected and documented, not a bug.
+    home_moneyline: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    away_moneyline: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
     in_slate: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     slate_rank: Mapped[int | None] = mapped_column(Integer, nullable=True)

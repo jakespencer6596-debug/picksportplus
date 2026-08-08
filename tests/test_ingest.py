@@ -10,6 +10,7 @@ printing the old dead end "ESPN returned no games for week {N}. Nothing to build
 
 from __future__ import annotations
 
+import dataclasses
 import datetime as dt
 
 from sqlalchemy import select
@@ -421,6 +422,52 @@ def test_upsert_games_matches_a_rivalry_pair_regardless_of_pair_order_in_setting
     rows = ingest.upsert_games(db, week, [game], {}, pool)
 
     assert rows[0].pinned is True
+
+
+# Moneylines (Phase 8) ----------------------------------------------------------
+
+
+def test_upsert_games_writes_moneyline_when_the_feed_carries_one(db):
+    pool = _pool(db)
+    week = _week_row(db, pool)
+    game = dataclasses.replace(
+        _rivalry_game("evt1", "Ohio State", "Michigan"), home_moneyline=-180, away_moneyline=155
+    )
+
+    rows = ingest.upsert_games(db, week, [game], {}, pool)
+
+    assert rows[0].home_moneyline == -180
+    assert rows[0].away_moneyline == 155
+
+
+def test_upsert_games_leaves_moneyline_null_when_the_feed_has_none(db):
+    pool = _pool(db)
+    week = _week_row(db, pool)
+    game = _rivalry_game(
+        "evt1", "Ohio State", "Michigan"
+    )  # home_moneyline/away_moneyline default None
+
+    rows = ingest.upsert_games(db, week, [game], {}, pool)
+
+    assert rows[0].home_moneyline is None
+    assert rows[0].away_moneyline is None
+
+
+def test_upsert_games_never_wipes_a_previously_captured_moneyline(db):
+    # Spec 5a: ESPN drops odds once a game goes final. A later sync of the same, now
+    # final, game must not erase a moneyline an earlier, still-live sync had captured.
+    pool = _pool(db)
+    week = _week_row(db, pool)
+    with_odds = dataclasses.replace(
+        _rivalry_game("evt1", "Ohio State", "Michigan"), home_moneyline=-180, away_moneyline=155
+    )
+    ingest.upsert_games(db, week, [with_odds], {}, pool)
+
+    without_odds = _rivalry_game("evt1", "Ohio State", "Michigan")
+    rows = ingest.upsert_games(db, week, [without_odds], {}, pool)
+
+    assert rows[0].home_moneyline == -180
+    assert rows[0].away_moneyline == 155
 
 
 # Pin toggling and the freeze rule (Phase 5) -----------------------------------

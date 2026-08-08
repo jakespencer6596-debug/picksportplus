@@ -11,7 +11,7 @@ reasoning behind every judgment call made along the way.
 - [x] Phase 5. Admin-curated slate with pinned games
 - [x] Phase 6. Navigation, sortable tables, transposed results grid
 - [x] Phase 7. Entry payment and payouts
-- [ ] Phase 8. The scenarios engine
+- [x] Phase 8. The scenarios engine
 - [ ] Phase 9. Demo data, deploy, and launch readiness
 
 ## Phase 0 notes
@@ -432,3 +432,62 @@ Test suite: **704 passed**, 0 failed (668 at the Phase 6 baseline, 36 net new: 1
 Full judgment calls (the `Float` versus `Numeric` choice, the exact tie split wording, and the
 season awards panel gating decision with its rejected alternatives) are recorded in
 `DECISIONS.md` under "Phase 7".
+
+## Phase 8 notes
+
+The feature the group's own feedback named directly: "Once 5 games were completed, you could
+see how many different scenarios got you placed for the week... your percent chance at 1, 2,
+3." Added a pure scenario engine, a database touching caller, a Scenarios panel on Weekly
+Results with a probability model toggle, and a build-your-own-scenario panel. Zero new Python
+dependencies, standard library only (`itertools`, `random` with an explicit seed, `math.erf`,
+`time`).
+
+- `app/scenarios.py` (new, pure). `RemainingGame`, `PlayerScenarioOutlook`, `ScenarioReport`,
+  `RepresentativeScenario`, `StandingsRow`; `implied_probability_from_moneyline`,
+  `win_probability`, `rank_players` (the local competition-ranking helper), and the two entry
+  points, `compute_scenario_report` (the sweep, exhaustive up to 20 remaining games, seeded
+  Monte Carlo above that or on a time budget bail out) and `build_custom_scenario` (the
+  one-pass "build your own scenario" standings). Zero imports from `app.models` or any
+  `app.services`/`app.routers` module, confirmed directly. Reuses `app.scoring.score_week`/
+  `score_pick` throughout rather than reimplementing scoring, via an exact linear
+  decomposition (base plus per-game marginal deltas) needed to hit the 2 second hard cap; see
+  `DECISIONS.md` for the full performance story, including why Monte Carlo's sample count is
+  decided in closed form rather than by watching the clock (reproducibility depended on it).
+- `app/services/scenarios.py` (new). `week_scenario_panel` (pulls a week's games and picks,
+  checks the pool's visibility thresholds, calls the pure engine, caches the result in a
+  module level dict keyed on the week's real outcome state) and `custom_scenario_standings`
+  (the database side of build-your-own-scenario, with display names attached).
+- `app/models.py` / `alembic/versions/f6364f0b6497_add_scenario_engine_columns.py`.
+  `Game.home_moneyline`/`away_moneyline` (nullable Integer, American odds; commonly null in
+  practice, see `DECISIONS.md`), `Pool.scenarios_min_final_games` (default 5),
+  `Pool.scenarios_min_remaining_games` (default 1).
+- `app/providers/espn.py`. `parse_moneyline_item`/`moneyline_from_items`, wired into
+  `parse_event`. No recorded fixture in this codebase ever carries a moneyline (checked
+  directly, documented in both the module and `DECISIONS.md`); the parsing path is tested
+  against clearly labelled synthetic payloads, plus one test pinning that the real recorded
+  fixture comes back with both fields null.
+- `app/services/ingest.py`. `upsert_games` now writes a moneyline whenever the feed carries
+  one and never clears a previously captured value, mirroring the existing spread handling
+  (ESPN drops odds once a game goes final).
+- `app/routers/admin.py` / `app/templates/admin/settings.html`. A "Scenarios panel" settings
+  card for the two new thresholds, validated (final games can't be negative, remaining games
+  must be at least 1) the same way every other settings field already is.
+- `app/routers/results.py` / `app/templates/results.html` /
+  `app/templates/components/custom_scenario_results.html`. The Scenarios panel (placement
+  percentages for every player, a leverage table in plain sentences and an expandable list of
+  representative scenarios for the signed in viewer, an even/betting-odds toggle via a query
+  parameter, a pending state naming the pool's real configured thresholds) and the
+  build-your-own-scenario panel (a three state control per remaining game, an HTMX form
+  posting to a new `POST /results/custom-scenario` route that swaps in a recomputed standings
+  table for every player). Both gated on the same week-locked reveal rule that already hides
+  the pick grid.
+- `SPEC.md`. New Section 9a describing the scenario engine end to end: enumeration and the
+  time budget, the probability model, the leverage table, and build-your-own-scenario.
+
+Test suite: **764 passed**, 0 failed (704 at the Phase 7 baseline, 60 net new: 28 in the new
+`tests/test_scenarios.py`, 12 in the new `tests/test_scenarios_service.py`, 10 in
+`tests/test_providers.py`, 3 in `tests/test_ingest.py`, 7 in `tests/test_app.py`).
+`ruff check .` and `black .` both clean. Full judgment calls (the linear decomposition that
+makes the 2 second cap achievable, the chunked Monte Carlo table, why sample count is decided
+up front instead of by watching the clock, the representative-scenario selection heuristic,
+and the cache eviction story) are recorded in `DECISIONS.md` under "Phase 8".

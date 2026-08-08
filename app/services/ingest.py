@@ -515,6 +515,17 @@ def upsert_games(
         if game.winner is not None:
             row.winner = game.winner
 
+        # Moneylines (Phase 8): only ever set when the feed actually carries one, never
+        # cleared back to null, exactly like the spread handling above and for the same
+        # reason (Spec 5a: ESPN drops odds once a game goes final, so a later sync of an
+        # already-final game would otherwise wipe a value a prior, still-live sync had
+        # captured). In practice these are commonly None end to end today: see
+        # espn.moneyline_from_items's docstring.
+        if game.home_moneyline is not None:
+            row.home_moneyline = game.home_moneyline
+        if game.away_moneyline is not None:
+            row.away_moneyline = game.away_moneyline
+
         rows.append(row)
 
     db.flush()

@@ -1,0 +1,47 @@
+{#
+  Swapped into [data-custom-scenario-target] on the results page (Phase 8, "build your
+  own scenario"). Plain and readable on purpose, since the brief calls this a social,
+  screenshot-friendly feature: a commissioner or a player fixes some remaining games and
+  gets back everyone's standings under that one assumption.
+#}
+<div class="panel">
+  {% if fixed_count %}
+    <p class="form-hint">
+      Assuming {{ fixed_lines | join(", ") }}. Every other remaining game is left
+      undecided and does not count yet.
+    </p>
+  {% else %}
+    <p class="form-hint">Nothing fixed yet. Set a game to see the standings shift.</p>
+  {% endif %}
+
+  <div class="table-wrap">
+    <table class="table">
+      <caption class="visually-hidden">
+        {{ week.label }} standings under this custom scenario, ranked by place.
+      </caption>
+      <thead>
+        <tr>
+          <th scope="col">Place</th>
+          <th scope="col">Player</th>
+          <th scope="col" class="num">Points</th>
+          <th scope="col" class="num">Correct</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for entry in rows %}
+          <tr>
+            <td data-label="Place">
+              <span class="rank-badge num{% if entry.row.place <= 3 %} is-{{ entry.row.place }}{% endif %}">{{ entry.row.place }}</span>
+            </td>
+            <td data-label="Player">
+              {{ entry.display_name }}
+              {% if entry.row.did_not_submit %}<span class="no-entry">No picks submitted</span>{% endif %}
+            </td>
+            <td class="num" data-label="Points">{{ entry.row.points }}</td>
+            <td class="num" data-label="Correct">{{ entry.row.correct }} of {{ entry.row.possible }}</td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
