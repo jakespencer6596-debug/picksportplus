@@ -10,13 +10,28 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 from starlette.concurrency import run_in_threadpool
 
-from app.auth import flash, get_active_pool, is_commissioner, require_user
+from app.auth import flash, get_active_pool, is_commissioner, membership_for, require_user
 from app.db import get_db
-from app.models import Game, Pick, Pool, User, Week, WeekEntry
+from app.models import Game, Pick, Pool, PoolMember, User, Week, WeekEntry
 from app.scoring import PickInput, validate_picks
 from app.templating import render
 
 router = APIRouter(tags=["picks"])
+
+
+def payment_gate_blocks(member: PoolMember | None, pool: Pool) -> bool:
+    """True when the Venmo entry gate (Phase 7) still stands between this member and a pick.
+
+    Off entirely when the pool does not require payment to pick. Otherwise blocks anyone with
+    no membership row at all (should not happen for a request that reached get_active_pool,
+    handled defensively) and anyone whose PoolMember.paid_at is still null. Shared by
+    picks_page (to render the blocking panel) and _save_picks/_lock_picks (the actual
+    server side enforcement, exactly as authoritative as validate_picks): both call this one
+    function so the page and the gate can never quietly disagree about who is blocked.
+    """
+    if not pool.payment_required_to_pick:
+        return False
+    return member is None or member.paid_at is None
 
 
 def current_week(db: Session, pool: Pool) -> Week | None:
@@ -110,6 +125,14 @@ def picks_page(
     player_locked = not locked and entry is not None and entry.locked_at is not None
     next_week = _next_unpublished_week(db, pool) if week is None else None
 
+    # Venmo entry gate (Phase 7): only relevant to the still-open, still-editable state. A
+    # week that is already time locked or already player locked shows exactly what it showed
+    # before this phase, paid or not, since there is nothing left to create or lock there;
+    # see payment_gate_blocks's own docstring and _save_picks/_lock_picks for the matching
+    # server side enforcement.
+    member = membership_for(db, user, pool)
+    payment_blocked = not locked and not player_locked and payment_gate_blocks(member, pool)
+
     return render(
         request,
         "picks.html",
@@ -119,6 +142,7 @@ def picks_page(
             "picks_by_game": picks_by_game,
             "locked": locked,
             "player_locked": player_locked,
+            "payment_blocked": payment_blocked,
             "locked_at": entry.locked_at if entry else None,
             # n is the target picks a player must submit, not the slate size (games can be
             # bigger, for example 20 games with 15 required). Never hard coded, always the
@@ -242,6 +266,15 @@ def _save_picks(request: Request, db: Session, user: User, pool: Pool, raw: dict
             status.HTTP_403_FORBIDDEN,
             "This week is locked. Picks closed at the first kickoff.",
         )
+    if payment_gate_blocks(membership_for(db, user, pool), pool):
+        # Exactly as authoritative as validate_picks below: a hand crafted POST from someone
+        # who never paid, or whose client is simply stale, must be refused here too, not only
+        # by the disabled controls picks_page renders. See payment_gate_blocks's docstring.
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN,
+            "Pay your entry fee before picks are accepted. See the panel on the picks page "
+            "for how, then ask your commissioner to mark you paid.",
+        )
 
     games = slate_games(db, week)
     slate_ids = [g.id for g in games]
@@ -300,6 +333,14 @@ def _lock_picks(request: Request, db: Session, user: User, pool: Pool, raw: dict
         raise HTTPException(
             status.HTTP_403_FORBIDDEN,
             "This week is locked. Picks closed at the first kickoff.",
+        )
+    if payment_gate_blocks(membership_for(db, user, pool), pool):
+        # The exact same gate and message _save_picks enforces: locking is just as much
+        # "creating a pick" as saving is, so it gets the identical, authoritative check.
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN,
+            "Pay your entry fee before picks are accepted. See the panel on the picks page "
+            "for how, then ask your commissioner to mark you paid.",
         )
 
     games = slate_games(db, week)
@@ -369,4 +410,4 @@ def _unlock_picks(request: Request, db: Session, user: User, pool: Pool):
     return RedirectResponse("/picks", status_code=303)
 
 
-__all__ = ["router", "week_is_locked", "current_week", "slate_games"]
+__all__ = ["router", "week_is_locked", "current_week", "slate_games", "payment_gate_blocks"]

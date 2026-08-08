@@ -14,6 +14,7 @@ from sqlalchemy import (
     ForeignKey,
     Integer,
     String,
+    Text,
     UniqueConstraint,
     func,
 )
@@ -40,6 +41,11 @@ SPREAD_SOURCES = ("espn", "espn_core", "odds_api", "cfbd", "manual")
 # real rule and the default. "standard": correct picks earn points, highest total wins,
 # kept switchable per pool. See app/scoring.py.
 SCORING_MODES = ("standard", "inverse")
+# Which leaderboard a PayoutRule's place/amount is matched against (Phase 7): "weekly" for
+# an ordinary week's WeeklyRow.rank, "bowl" for a week where Week.is_bowl_week is true
+# (routes there instead of "weekly" even when weekly rules also exist), "season" for
+# StandingRow.rank on the season standings panel. See app/services/payouts.py.
+PAYOUT_SCOPES = ("weekly", "bowl", "season")
 
 # The rivalry pairs (Phase 5) that auto-pin themselves onto every rebuilt slate no matter
 # how wide the spread runs: the two the commissioner group named directly (Ohio State vs
@@ -78,7 +84,9 @@ class User(Base):
     )
 
     memberships: Mapped[list[PoolMember]] = relationship(
-        back_populates="user", cascade="all, delete-orphan"
+        back_populates="user",
+        cascade="all, delete-orphan",
+        foreign_keys="PoolMember.user_id",
     )
     picks: Mapped[list[Pick]] = relationship(back_populates="user", cascade="all, delete-orphan")
 
@@ -136,6 +144,28 @@ class Pool(Base):
     # total wins. See app/scoring.py for the scoring functions both modes run through.
     scoring_mode: Mapped[str] = mapped_column(String(16), default="inverse", nullable=False)
     timezone: Mapped[str] = mapped_column(String(64), default="America/New_York", nullable=False)
+
+    # Venmo entry gate (Phase 7: "Will be Venmo only this year. No Venmo, no participation.").
+    # A plain float, the same convention app/slate.py's spread_home/closeness already use for
+    # a precision-sensitive number in this codebase, rather than introducing SQLAlchemy's
+    # Numeric type for one new area. Every tie split computation rounds to the cent in integer
+    # cents before converting back (see app/services/payouts.py), so float drift never reaches
+    # a stored or displayed amount. Nullable/None until the commissioner sets a real number by
+    # hand; the house rule is that no dollar figure is ever hard coded, including a fallback
+    # default here. See DECISIONS.md, Phase 7.
+    entry_fee: Mapped[float | None] = mapped_column(Float, nullable=True)
+    # The single collector's Venmo handle (no @), "1 person to pay, no multiple accounts" per
+    # the group. PoolMember.member_venmo_handle (below) is a different thing: an optional note
+    # for the commissioner's own reconciliation, never a second place to pay.
+    venmo_handle: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    # True (the default) means POST /picks and POST /picks/lock both refuse a member whose
+    # PoolMember.paid_at is null, and GET /picks shows the blocking Venmo panel. A commissioner
+    # who wants a free pool, or wants picks open before payment is settled, switches this off.
+    payment_required_to_pick: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    # Free text shown to players above the Venmo links, for example how to word the Venmo note
+    # or a Zelle fallback for anyone without Venmo. Never seeded with real instructions.
+    payment_note: Mapped[str | None] = mapped_column(Text, nullable=True)
+
     created_at: Mapped[dt.datetime] = mapped_column(
         DateTime(timezone=True), default=utcnow, server_default=func.now(), nullable=False
     )
@@ -144,6 +174,9 @@ class Pool(Base):
         back_populates="pool", cascade="all, delete-orphan"
     )
     weeks: Mapped[list[Week]] = relationship(back_populates="pool", cascade="all, delete-orphan")
+    payout_rules: Mapped[list[PayoutRule]] = relationship(
+        back_populates="pool", cascade="all, delete-orphan"
+    )
 
     @property
     def league_targets(self) -> dict[str, int]:
@@ -172,9 +205,29 @@ class PoolMember(Base):
     joined_at: Mapped[dt.datetime] = mapped_column(
         DateTime(timezone=True), default=utcnow, server_default=func.now(), nullable=False
     )
+    # Set the moment a commissioner marks this member paid (POST /admin/members/{id}/paid or
+    # the bulk action), cleared to unmark. Null means unpaid, the only state the Venmo gate
+    # (Pool.payment_required_to_pick) checks; there is no separate "confirmed by whom" table,
+    # paid_marked_by_user_id below is enough for accountability.
+    paid_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # Who clicked the toggle, for accountability if a payment is disputed later. Set alongside
+    # paid_at and cleared alongside it; never set on its own. SET NULL rather than CASCADE: a
+    # site admin account being deleted years later must not silently un-mark every payment
+    # they ever confirmed.
+    paid_marked_by_user_id: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    # Optional, for the commissioner's own bookkeeping only (spotting two members who share one
+    # Venmo account, which the group explicitly banned: "1 person to pay, no multiple
+    # accounts"). Never itself a place to pay; Pool.venmo_handle is the single collector.
+    member_venmo_handle: Mapped[str | None] = mapped_column(String(80), nullable=True)
 
     pool: Mapped[Pool] = relationship(back_populates="members")
-    user: Mapped[User] = relationship(back_populates="memberships")
+    # Two FKs onto users.id now (user_id, paid_marked_by_user_id), so both relationships name
+    # their own foreign_keys explicitly; SQLAlchemy cannot infer which FK belongs to which
+    # relationship once there is more than one path to the same target table.
+    user: Mapped[User] = relationship(back_populates="memberships", foreign_keys=[user_id])
+    paid_marked_by: Mapped[User | None] = relationship(foreign_keys=[paid_marked_by_user_id])
 
     @property
     def is_commissioner(self) -> bool:
@@ -371,6 +424,33 @@ class WeekEntry(Base):
 
     user: Mapped[User] = relationship()
     week: Mapped[Week] = relationship(back_populates="entries")
+
+
+class PayoutRule(Base):
+    """One place's dollar amount for one payout scope (Phase 7).
+
+    "There was a payout column that determined the amount due each user. In settings we
+    determined what #1, 2, 3, 4 received each week, for the special Bowl Week, and end of
+    season awards." Ships with zero rows for every pool, always: the commissioner enters every
+    real number by hand from /admin/settings, never a seeded or hard coded figure (see
+    DECISIONS.md, Phase 7, and the Phase 0 configuration note this restates). Matched against
+    rank at read time (app/services/payouts.py), never stored against a specific week or
+    player, so the same weekly structure applies to every week without re-entering it.
+    """
+
+    __tablename__ = "payout_rules"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    pool_id: Mapped[int] = mapped_column(
+        ForeignKey("pools.id", ondelete="CASCADE"), index=True, nullable=False
+    )
+    scope: Mapped[str] = mapped_column(String(16), nullable=False)  # PAYOUT_SCOPES
+    place: Mapped[int] = mapped_column(Integer, nullable=False)  # 1 based, 1 is first
+    # Same float convention as Pool.entry_fee, see its comment.
+    amount: Mapped[float] = mapped_column(Float, nullable=False)
+    label: Mapped[str | None] = mapped_column(String(120), nullable=True)  # "1st place", optional
+
+    pool: Mapped[Pool] = relationship(back_populates="payout_rules")
 
 
 class FeedCache(Base):

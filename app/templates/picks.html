@@ -4,17 +4,23 @@
 {#
   This Week. The core screen (Spec Section 8).
 
-  Six states, all handled below:
+  Seven states, all handled below:
     1. no week and no next week   season has not started
     2. no week, next week drafted the slate opens soon
     3. week open, not locked      the three stage ranking UI (Phase 4)
+    3a. week open, payment gated  Venmo entry gate blocks editing (Phase 7)
     3b. week open, player locked  read only for this player only, an "Unlock to edit" escape
     4. time locked                read only for everyone, saved picks and results are public
     5. week with an empty slate   the slate is still being built
 
-  State 4 (the real, pool wide lock_at) always wins over 3b: week_is_locked(week) is checked
-  first, so the moment it flips True this player's own locked_at stops mattering, even if it
-  is still set. See app/routers/picks.py picks_page for player_locked's exact definition.
+  State 4 (the real, pool wide lock_at) always wins over 3b and 3a:
+  week_is_locked(week) is checked first, so the moment it flips True neither this player's own
+  locked_at nor their payment status matters any more, even mid-season. 3b also wins over 3a:
+  a player who locked picks before the gate applied to them (or before they later became
+  unpaid again) still sees their own locked picks, not a payment wall; the gate only ever
+  blocks *creating or locking new* picks, never viewing ones already locked in, which
+  app/routers/picks.py's payment_blocked computation (`not locked and not player_locked and
+  ...`) encodes directly. See picks_page for the exact definitions.
 
   Neither number is ever hard coded. n is pool.picks_required, how many picks a player must
   submit (and the top confidence value they can stake); slate_size is the published slate,
@@ -278,6 +284,59 @@
     submit anything new, it just saves this exact set of picks and switches this page to
     read only for you until you unlock it or {{ week.label }} locks for good, whichever
     comes first.
+  </p>
+</section>
+
+
+{% elif payment_blocked %}
+{# ---------------------------------- 3a: Venmo entry gate blocks editing (Phase 7) #}
+<section class="section">
+  <div class="panel notice" role="status">
+    {{ ic.icon("dollar", 20) }}
+    <div class="notice-body">
+      <p class="notice-title">Pay your entry fee to pick</p>
+      <p>
+        {% if pool.entry_fee is not none %}
+          Entry is {{ pool.entry_fee | money }} dollars, sent to
+        {% else %}
+          Entry is sent to
+        {% endif %}
+        {% if pool.venmo_handle %}
+          <strong>@{{ pool.venmo_handle }}</strong> on Venmo, the pool's one collector.
+        {% else %}
+          the pool's one collector on Venmo. Your commissioner has not set up the handle here
+          yet, message them directly.
+        {% endif %}
+      </p>
+
+      {% if pool.payment_note %}
+        <p class="muted">{{ pool.payment_note }}</p>
+      {% endif %}
+
+      {% if pool.venmo_handle %}
+        {% set note_text = pool.payment_note or (pool.name ~ " entry fee") %}
+        <div class="row">
+          <a class="btn btn-primary"
+             href="venmo://paycharge?txn=pay&amp;recipients={{ pool.venmo_handle | urlencode }}{% if pool.entry_fee is not none %}&amp;amount={{ ('%.2f' | format(pool.entry_fee)) | urlencode }}{% endif %}&amp;note={{ note_text | urlencode }}">
+            {{ ic.icon("dollar", 18) }}<span>Open Venmo and pay</span>
+          </a>
+          <a class="form-hint" href="https://venmo.com/u/{{ pool.venmo_handle | urlencode }}">
+            Or use venmo.com/u/{{ pool.venmo_handle }} on the web
+          </a>
+        </div>
+      {% endif %}
+
+      <p class="form-hint">
+        The commissioner confirms payment manually. Message them once you have sent it.
+      </p>
+    </div>
+  </div>
+
+  <h2 class="section-title">{{ week.label }} slate</h2>
+  {{ readonly_list(games, picks_by_game, tz, week.label ~ " slate") }}
+  <p class="muted">
+    You can look, but saving and locking picks are both off until your commissioner marks you
+    paid.
   </p>
 </section>
 

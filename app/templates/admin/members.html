@@ -18,6 +18,7 @@
   <a class="subnav-link" href="/admin/slate">Slate</a>
   <a class="subnav-link is-active" href="/admin/members" aria-current="page">Members</a>
   <a class="subnav-link" href="/admin/settings">Settings</a>
+  <a class="subnav-link" href="/admin/payouts">Payouts</a>
 </nav>
 
 <section class="section" aria-labelledby="join-code-title">
@@ -71,13 +72,31 @@
   </div>
 
   {% if members %}
+    <div class="flash flash-info" role="status">
+      {{ ic.icon("dollar", 18) }}
+      <span>
+        {% if entry_fee is not none %}
+          {{ paid_count }} of {{ members | length }} paid. {{ (entry_fee * paid_count) | money }}
+          dollars collected of {{ (entry_fee * (members | length)) | money }} dollars.
+        {% else %}
+          {{ paid_count }} of {{ members | length }} paid. Set an entry fee in
+          <a href="/admin/settings">Settings</a> to see the pot total in dollars.
+        {% endif %}
+      </span>
+    </div>
+
+    <form id="bulk-paid-form" method="post" action="/admin/members/paid/bulk"></form>
+
     <div class="table-wrap">
       <table class="table">
         <thead>
           <tr>
+            <th scope="col"><span class="visually-hidden">Select</span></th>
             <th scope="col">Player</th>
             <th scope="col">Email</th>
             <th scope="col">Role</th>
+            <th scope="col">Paid</th>
+            <th scope="col">Venmo, for your reconciliation</th>
             <th scope="col">Joined</th>
             <th scope="col">Actions</th>
           </tr>
@@ -86,6 +105,13 @@
           {% for member, player in members %}
             {% set is_me = current_user and player.id == current_user.id %}
             <tr>
+              <td data-label="Select">
+                {% if member.paid_at is none %}
+                  <input type="checkbox" class="checkbox-input" name="member_ids"
+                         value="{{ member.id }}" form="bulk-paid-form"
+                         aria-label="Select {{ player.display_name }} to mark paid">
+                {% endif %}
+              </td>
               <td data-label="Player">
                 <span class="member-name">{{ player.display_name }}</span>
                 {% if is_me %}<span class="pill">You</span>{% endif %}
@@ -101,6 +127,32 @@
                   <span class="badge badge-member">Member</span>
                 {% endif %}
                 {% if player.role == "admin" %}<span class="pill">Site admin</span>{% endif %}
+              </td>
+              <td data-label="Paid">
+                {% if member.paid_at %}
+                  <span class="badge badge-final">Paid</span>
+                {% else %}
+                  <span class="badge badge-void">Unpaid</span>
+                {% endif %}
+                <form method="post" action="/admin/members/{{ member.id }}/paid" class="inline-form">
+                  <button class="btn btn-secondary btn-sm" type="submit">
+                    {% if member.paid_at %}Mark unpaid{% else %}Mark paid{% endif %}
+                    <span class="visually-hidden">, {{ player.display_name }}</span>
+                  </button>
+                </form>
+              </td>
+              <td data-label="Venmo, for your reconciliation">
+                <form method="post" action="/admin/members/{{ member.id }}/venmo-handle" class="inline-form">
+                  <input class="input" type="text" name="member_venmo_handle"
+                         value="{{ member.member_venmo_handle or '' }}" maxlength="80"
+                         autocomplete="off" spellcheck="false"
+                         aria-label="Venmo handle on file for {{ player.display_name }}"
+                         placeholder="Not on file">
+                  <button class="btn btn-secondary btn-sm" type="submit">Save</button>
+                </form>
+                {% if member.id in duplicate_venmo_member_ids %}
+                  <span class="badge badge-locked">Possible duplicate account</span>
+                {% endif %}
               </td>
               <td data-label="Joined">
                 {{ member.joined_at | shortdate(tz) }}, {{ (member.joined_at | localtime(tz)).year }}
@@ -131,6 +183,8 @@
         </tbody>
       </table>
     </div>
+
+    <button type="submit" form="bulk-paid-form" class="btn btn-primary">Mark selected paid</button>
 
     <p class="form-hint">
       A commissioner can build slates, edit them, and change every setting on this page. Promote

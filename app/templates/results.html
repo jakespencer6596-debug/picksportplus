@@ -152,6 +152,9 @@
                 {{ "Points against" if pool.scoring_mode == "inverse" else "Points" }}
               </th>
               <th scope="col" class="num" data-sortable-col data-sort-default-dir="desc" aria-sort="none">Correct</th>
+              {% if payout_rules_exist %}
+                <th scope="col" class="num">Payout</th>
+              {% endif %}
             </tr>
           </thead>
           <tbody>
@@ -176,6 +179,11 @@
                 <td class="num" data-label="Correct" data-sort-value="{{ row.correct }}">
                   {% if row.did_not_submit %}<span class="no-entry">.</span>{% else %}{{ row.correct }} of {{ row.possible }}{% endif %}
                 </td>
+                {% if payout_rules_exist %}
+                  <td class="num" data-label="Payout">
+                    {{ payouts_by_user.get(row.user_id, 0) | money }} dollars
+                  </td>
+                {% endif %}
               </tr>
             {% endfor %}
           </tbody>
@@ -184,6 +192,13 @@
       {% if pool.scoring_mode == "inverse" %}
         <p class="muted lb-note">
           Low score wins. You take the points you staked on any pick that loses.
+        </p>
+      {% endif %}
+      {% if payout_rules_exist %}
+        <p class="muted lb-note">
+          Payout column: {{ "bowl week" if payout_scope == "bowl" else "weekly" }} payout rules
+          from Settings. A tie splits the combined amount for those places evenly, to the cent;
+          any leftover cent goes to whoever submitted their picks earliest.
         </p>
       {% endif %}
     {% else %}

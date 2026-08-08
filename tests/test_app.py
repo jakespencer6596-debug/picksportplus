@@ -18,7 +18,7 @@ from sqlalchemy.pool import StaticPool
 from app.auth import hash_password
 from app.db import get_db
 from app.main import app
-from app.models import Base, Game, Pick, Pool, PoolMember, User, Week, WeekEntry
+from app.models import Base, Game, PayoutRule, Pick, Pool, PoolMember, User, Week, WeekEntry
 
 UTC = dt.UTC
 
@@ -64,10 +64,20 @@ def client(session_factory):
 # Fixtures that build a small but complete pool ------------------------------
 
 
-def _make_pool(db: Session, *, num_games: int = 4, picks_required: int | None = None) -> Pool:
+def _make_pool(
+    db: Session,
+    *,
+    num_games: int = 4,
+    picks_required: int | None = None,
+    payment_required_to_pick: bool = False,
+) -> Pool:
     # picks_required defaults to num_games so _valid_submission (which submits every game
     # in world["game_ids"]) stays a valid, complete entry unless a test deliberately wants
     # picks_required to be smaller than the slate, proving it is a real, honored setting.
+    # payment_required_to_pick defaults to False (the model's own real default is True, Phase
+    # 7) so every pre-existing test that posts picks through the world fixture keeps working
+    # unless a test deliberately wants the Venmo gate in play, the same reasoning
+    # picks_required's own default documents just above.
     pool = Pool(
         name="Test Pool",
         join_code="TESTCODE",
@@ -81,6 +91,7 @@ def _make_pool(db: Session, *, num_games: int = 4, picks_required: int | None = 
         open_registration=False,
         timezone="America/New_York",
         current_week=5,
+        payment_required_to_pick=payment_required_to_pick,
     )
     db.add(pool)
     db.flush()
@@ -1144,3 +1155,444 @@ def test_join_code_rotation_invalidates_the_old_code(client, world, session_fact
         },
     )
     assert rejected.status_code == 400
+
+
+# Venmo entry gate (Phase 7) ---------------------------------------------------
+
+
+def _member_row(session_factory, pool_id: int, user_id: int) -> PoolMember:
+    db = session_factory()
+    member = db.scalar(
+        select(PoolMember).where(PoolMember.pool_id == pool_id, PoolMember.user_id == user_id)
+    )
+    db.close()
+    return member
+
+
+def test_unpaid_member_cannot_save_picks_when_payment_required(client, world, session_factory):
+    db = session_factory()
+    pool = db.get(Pool, world["pool_id"])
+    pool.payment_required_to_pick = True
+    db.commit()
+    db.close()
+
+    _login(client, "player@example.com")
+    response = client.post("/picks", data=_valid_submission(world["game_ids"]))
+    assert response.status_code == 403
+    assert "pay your entry fee" in response.text.lower()
+
+    db = session_factory()
+    assert db.scalar(select(Pick).where(Pick.user_id == world["player_id"])) is None
+    db.close()
+
+
+def test_unpaid_member_cannot_lock_picks_when_payment_required(client, world, session_factory):
+    db = session_factory()
+    pool = db.get(Pool, world["pool_id"])
+    pool.payment_required_to_pick = True
+    db.commit()
+    db.close()
+
+    _login(client, "player@example.com")
+    response = client.post("/picks/lock", data=_valid_submission(world["game_ids"]))
+    assert response.status_code == 403
+    assert "pay your entry fee" in response.text.lower()
+
+    db = session_factory()
+    assert db.scalar(select(Pick).where(Pick.user_id == world["player_id"])) is None
+    entry = db.scalar(select(WeekEntry).where(WeekEntry.user_id == world["player_id"]))
+    assert entry is None or entry.locked_at is None
+    db.close()
+
+
+def test_paid_member_can_save_and_lock_picks_when_payment_required(client, world, session_factory):
+    db = session_factory()
+    pool = db.get(Pool, world["pool_id"])
+    pool.payment_required_to_pick = True
+    member = db.scalar(
+        select(PoolMember).where(
+            PoolMember.pool_id == world["pool_id"], PoolMember.user_id == world["player_id"]
+        )
+    )
+    member.paid_at = dt.datetime.now(UTC)
+    db.commit()
+    db.close()
+
+    _login(client, "player@example.com")
+    response = client.post("/picks", data=_valid_submission(world["game_ids"]))
+    assert response.status_code == 303
+
+    db = session_factory()
+    assert db.scalar(select(Pick).where(Pick.user_id == world["player_id"])) is not None
+    db.close()
+
+    lock_response = client.post("/picks/lock", data=_valid_submission(world["game_ids"]))
+    assert lock_response.status_code == 303
+
+    db = session_factory()
+    entry = db.scalar(select(WeekEntry).where(WeekEntry.user_id == world["player_id"]))
+    assert entry.locked_at is not None
+    db.close()
+
+
+def test_payment_not_required_lets_anyone_pick_regardless_of_paid_at(
+    client, world, session_factory
+):
+    db = session_factory()
+    pool = db.get(Pool, world["pool_id"])
+    pool.payment_required_to_pick = False
+    member = db.scalar(
+        select(PoolMember).where(
+            PoolMember.pool_id == world["pool_id"], PoolMember.user_id == world["player_id"]
+        )
+    )
+    assert member.paid_at is None  # still unpaid, and it must not matter
+    db.commit()
+    db.close()
+
+    _login(client, "player@example.com")
+    response = client.post("/picks", data=_valid_submission(world["game_ids"]))
+    assert response.status_code == 303
+
+    lock_response = client.post("/picks/lock", data=_valid_submission(world["game_ids"]))
+    assert lock_response.status_code == 303
+
+
+def test_picks_page_shows_the_venmo_panel_when_gated(client, world, session_factory):
+    db = session_factory()
+    pool = db.get(Pool, world["pool_id"])
+    pool.payment_required_to_pick = True
+    pool.entry_fee = 25.0
+    pool.venmo_handle = "poolcollector"
+    db.commit()
+    db.close()
+
+    _login(client, "player@example.com")
+    response = client.get("/picks")
+    assert response.status_code == 200
+    assert "Pay your entry fee to pick" in response.text
+    assert "poolcollector" in response.text
+    # The editable, save-and-lock form must not render while gated.
+    assert "data-sortable" not in response.text
+
+
+# Admin: paid toggle, bulk mark paid, duplicate Venmo handle warning ----------
+
+
+def test_member_paid_toggle_marks_and_unmarks(client, world, session_factory):
+    member = _member_row(session_factory, world["pool_id"], world["player_id"])
+    _login(client, "boss@example.com")
+
+    response = client.post(f"/admin/members/{member.id}/paid")
+    assert response.status_code == 303
+    db = session_factory()
+    refreshed = db.get(PoolMember, member.id)
+    assert refreshed.paid_at is not None
+    assert refreshed.paid_marked_by_user_id == world["boss_id"]
+    db.close()
+
+    client.post(f"/admin/members/{member.id}/paid")
+    db = session_factory()
+    refreshed = db.get(PoolMember, member.id)
+    assert refreshed.paid_at is None
+    assert refreshed.paid_marked_by_user_id is None
+    db.close()
+
+
+def test_members_paid_bulk_marks_only_the_selected_unpaid(client, world, session_factory):
+    db = session_factory()
+    third = _make_user(db, "third@example.com", "Third Player")
+    db.add(PoolMember(pool_id=world["pool_id"], user_id=third.id, role_in_pool="member"))
+    db.commit()
+
+    player_member = _member_row(session_factory, world["pool_id"], world["player_id"])
+    third_member = _member_row(session_factory, world["pool_id"], third.id)
+    boss_member = _member_row(session_factory, world["pool_id"], world["boss_id"])
+
+    boss_member = db.get(PoolMember, boss_member.id)
+    boss_member.paid_at = dt.datetime.now(UTC)  # already paid, must be left untouched
+    db.commit()
+    db.close()
+
+    # Read back through a fresh session, same as the bulk route itself will, so the
+    # "untouched" comparison below is not thrown off by SQLite handing datetimes back naive.
+    db = session_factory()
+    boss_paid_before = db.get(PoolMember, boss_member.id).paid_at
+    db.close()
+
+    _login(client, "boss@example.com")
+    response = client.post(
+        "/admin/members/paid/bulk",
+        data={"member_ids": [player_member.id, third_member.id, boss_member.id]},
+    )
+    assert response.status_code == 303
+
+    db = session_factory()
+    assert db.get(PoolMember, player_member.id).paid_at is not None
+    assert db.get(PoolMember, third_member.id).paid_at is not None
+    assert db.get(PoolMember, boss_member.id).paid_at == boss_paid_before
+    db.close()
+
+
+def test_duplicate_venmo_handle_warning_fires_for_shared_handle_not_for_different_or_empty(
+    client, world, session_factory
+):
+    player_member = _member_row(session_factory, world["pool_id"], world["player_id"])
+    boss_member = _member_row(session_factory, world["pool_id"], world["boss_id"])
+
+    _login(client, "boss@example.com")
+
+    # Different, non empty handles: no warning for either.
+    client.post(
+        f"/admin/members/{player_member.id}/venmo-handle",
+        data={"member_venmo_handle": "player-handle"},
+    )
+    client.post(
+        f"/admin/members/{boss_member.id}/venmo-handle",
+        data={"member_venmo_handle": "boss-handle"},
+    )
+    response = client.get("/admin/members")
+    assert "Possible duplicate account" not in response.text
+
+    # Both empty: no warning either (an empty handle is not a shared account).
+    client.post(f"/admin/members/{player_member.id}/venmo-handle", data={"member_venmo_handle": ""})
+    client.post(f"/admin/members/{boss_member.id}/venmo-handle", data={"member_venmo_handle": ""})
+    response = client.get("/admin/members")
+    assert "Possible duplicate account" not in response.text
+
+    # Same handle (case and whitespace variations): both rows flagged.
+    client.post(
+        f"/admin/members/{player_member.id}/venmo-handle",
+        data={"member_venmo_handle": "SharedHandle"},
+    )
+    client.post(
+        f"/admin/members/{boss_member.id}/venmo-handle",
+        data={"member_venmo_handle": " sharedhandle "},
+    )
+    response = client.get("/admin/members")
+    assert response.text.count("Possible duplicate account") == 2
+
+
+# Admin: settings save, payout rules, and the pot validator -------------------
+
+
+def test_settings_save_persists_venmo_and_payment_fields(client, world, session_factory):
+    _login(client, "boss@example.com")
+    response = client.post(
+        "/admin/settings",
+        data={
+            "name": "Test Pool",
+            "season_year": "2025",
+            "timezone": "America/New_York",
+            "num_games_per_week": "4",
+            "target_nfl": "2",
+            "target_ncaaf": "2",
+            "picks_required": "4",
+            "scoring_mode": "inverse",
+            "sports_nfl": "1",
+            "sports_ncaaf": "1",
+            "entry_fee": "25.50",
+            "venmo_handle": "the-collector",
+            "payment_required_to_pick": "1",
+            "payment_note": "Note as Week 1 in the Venmo app.",
+        },
+    )
+    assert response.status_code == 303
+
+    db = session_factory()
+    pool = db.get(Pool, world["pool_id"])
+    assert pool.entry_fee == 25.50
+    assert pool.venmo_handle == "the-collector"
+    assert pool.payment_required_to_pick is True
+    assert pool.payment_note == "Note as Week 1 in the Venmo app."
+    db.close()
+
+
+def test_settings_save_rejects_a_negative_entry_fee(client, world, session_factory):
+    _login(client, "boss@example.com")
+    response = client.post(
+        "/admin/settings",
+        data={
+            "name": "Test Pool",
+            "season_year": "2025",
+            "timezone": "America/New_York",
+            "num_games_per_week": "4",
+            "target_nfl": "2",
+            "target_ncaaf": "2",
+            "picks_required": "4",
+            "scoring_mode": "inverse",
+            "sports_nfl": "1",
+            "sports_ncaaf": "1",
+            "entry_fee": "-5",
+        },
+    )
+    assert response.status_code == 303
+    db = session_factory()
+    pool = db.get(Pool, world["pool_id"])
+    assert pool.entry_fee is None  # rejected, unchanged from the world fixture's default
+    db.close()
+
+
+def test_payout_rule_add_and_remove(client, world, session_factory):
+    _login(client, "boss@example.com")
+    response = client.post(
+        "/admin/payouts/rule",
+        data={"scope": "weekly", "place": "1", "amount": "100.00", "label": "1st place"},
+    )
+    assert response.status_code == 303
+
+    db = session_factory()
+    rule = db.scalar(select(PayoutRule).where(PayoutRule.pool_id == world["pool_id"]))
+    assert rule is not None
+    assert rule.scope == "weekly"
+    assert rule.place == 1
+    assert rule.amount == 100.0
+    assert rule.label == "1st place"
+    rule_id = rule.id
+    db.close()
+
+    settings_response = client.get("/admin/settings")
+    assert "100" in settings_response.text
+
+    remove_response = client.post(f"/admin/payouts/rule/{rule_id}/remove")
+    assert remove_response.status_code == 303
+
+    db = session_factory()
+    assert db.get(PayoutRule, rule_id) is None
+    db.close()
+
+
+def test_pot_validator_warns_on_mismatch_and_not_on_match(client, world, session_factory):
+    _login(client, "boss@example.com")
+
+    # Nobody paid, no rules: 0 collected, 0 allocated, balanced.
+    response = client.get("/admin/settings")
+    assert "does not match" not in response.text
+
+    # Set a fee, mark one member paid, but write no payout rules: now mismatched.
+    db = session_factory()
+    pool = db.get(Pool, world["pool_id"])
+    pool.entry_fee = 20.0
+    member = db.scalar(
+        select(PoolMember).where(
+            PoolMember.pool_id == world["pool_id"], PoolMember.user_id == world["player_id"]
+        )
+    )
+    member.paid_at = dt.datetime.now(UTC)
+    db.commit()
+    db.close()
+
+    mismatched = client.get("/admin/settings")
+    assert "does not match" in mismatched.text
+
+    # Write a payout rule for exactly the collected amount: balanced again. Saving settings
+    # is unaffected either way, matching every response above returning 200.
+    client.post(
+        "/admin/payouts/rule",
+        data={"scope": "weekly", "place": "1", "amount": "20.00", "label": ""},
+    )
+    matched = client.get("/admin/settings")
+    assert "does not match" not in matched.text
+
+
+# Results: the weekly payout column --------------------------------------------
+
+
+def _score_worlds_only_week(client, session_factory, world):
+    """Submit the player's picks, finalise every game, and score the week, matching the
+    exact fixture test_scoring_end_to_end uses (player's inverse points come out to 3)."""
+    from app.services.results import score_week_for_pool
+
+    _login(client, "player@example.com")
+    client.post("/picks", data=_valid_submission(world["game_ids"]))
+
+    db = session_factory()
+    pool = db.get(Pool, world["pool_id"])
+    week = db.get(Week, world["week_id"])
+    games = list(db.scalars(select(Game).where(Game.week_id == week.id).order_by(Game.slate_rank)))
+    outcomes = ["home", "away", "away", "home"]
+    for game, winner in zip(games, outcomes, strict=False):
+        game.status = "final"
+        game.winner = winner
+        game.home_score = 21 if winner == "home" else 17
+        game.away_score = 17 if winner == "home" else 21
+    db.commit()
+
+    score_week_for_pool(db, pool, week)
+    db.commit()
+    db.close()
+
+
+def test_results_no_payout_rules_means_no_payout_column(client, world, session_factory):
+    _score_worlds_only_week(client, session_factory, world)
+
+    _login(client, "boss@example.com")
+    response = client.get("/results")
+    assert response.status_code == 200
+    assert "Payout" not in response.text
+
+
+def test_results_weekly_payout_column_matches_ranks(client, world, session_factory):
+    """Under inverse mode the player (some wrong picks, 3 points against) outranks the boss
+    (a no show, the maximum penalty for a 4 game slate, 10 points against): the player is
+    rank 1, the boss is rank 2."""
+    _score_worlds_only_week(client, session_factory, world)
+
+    db = session_factory()
+    db.add(PayoutRule(pool_id=world["pool_id"], scope="weekly", place=1, amount=100.0))
+    db.add(PayoutRule(pool_id=world["pool_id"], scope="weekly", place=2, amount=40.0))
+    db.commit()
+    db.close()
+
+    _login(client, "boss@example.com")
+    response = client.get("/results")
+    assert response.status_code == 200
+    assert "Payout" in response.text
+    assert "100 dollars" in response.text
+    assert "40 dollars" in response.text
+
+
+def test_results_bowl_week_payout_uses_bowl_scope_not_weekly(client, world, session_factory):
+    _score_worlds_only_week(client, session_factory, world)
+
+    db = session_factory()
+    week = db.get(Week, world["week_id"])
+    week.is_bowl_week = True
+    db.add(PayoutRule(pool_id=world["pool_id"], scope="weekly", place=1, amount=999.0))
+    db.add(PayoutRule(pool_id=world["pool_id"], scope="bowl", place=1, amount=55.0))
+    db.commit()
+    db.close()
+
+    _login(client, "boss@example.com")
+    response = client.get("/results")
+    assert response.status_code == 200
+    assert "55 dollars" in response.text
+    assert "999 dollars" not in response.text
+
+
+# Season standings: the awards panel -------------------------------------------
+
+
+def test_season_awards_panel_absent_before_any_week_is_scored(client, world):
+    db_login = "boss@example.com"
+    _login(client, db_login)
+    response = client.get("/standings")
+    assert response.status_code == 200
+    assert "Season awards" not in response.text
+
+
+def test_season_awards_panel_shows_amounts_once_a_week_is_scored(client, world, session_factory):
+    _score_worlds_only_week(client, session_factory, world)
+
+    db = session_factory()
+    db.add(PayoutRule(pool_id=world["pool_id"], scope="season", place=1, amount=50.0))
+    db.add(PayoutRule(pool_id=world["pool_id"], scope="season", place=2, amount=20.0))
+    db.commit()
+    db.close()
+
+    _login(client, "boss@example.com")
+    response = client.get("/standings")
+    assert response.status_code == 200
+    assert "Season awards" in response.text
+    assert "50 dollars" in response.text
+    assert "20 dollars" in response.text

@@ -963,3 +963,163 @@ response). `ruff check .` and `black .` both clean. An em dash search across eve
 touched this phase finds nothing; no emoji were added anywhere; the sort caret is inline SVG
 built from the same path data as `components/icons.html`'s existing "up"/"down" chevrons, not
 a text glyph.
+
+## Phase 7
+
+Two pieces of direct feedback: "Will be Venmo only this year. No Venmo, no participation,"
+and "1 person to pay, no multiple accounts," plus a description of a payout column the group
+used on their old platform ("what #1, 2, 3, 4 received each week, for the special Bowl Week,
+and end of season awards"). This phase adds a Venmo entry gate in front of picking and a
+`PayoutRule` system that drives a payout column on Results, an awards panel on Standings, and
+a plain payout summary table, all fed by numbers a commissioner types in by hand. No payment
+processor was touched: Venmo is a deep link and manual commissioner reconciliation, exactly as
+scoped, so this phase needed zero new Python dependencies.
+
+### The numeric type for money: `Float`, matching `spread_home`/`closeness`, not `Numeric`
+
+`Pool.entry_fee`, `PayoutRule.amount` and every dollar figure downstream use SQLAlchemy
+`Float`, the same convention `app/slate.py`'s `spread_home` and `closeness` already established
+for a precision sensitive number in this codebase. Rejected `Numeric`: it buys exact decimal
+storage, but every place this phase actually needs exactness (splitting a tied payout to the
+cent, so the total reconciles exactly) is arithmetic that happens in Python, not a database
+comparison or aggregate that would benefit from `Numeric`'s guarantees, and introducing a
+second numeric convention alongside the one this codebase already has for money-adjacent
+figures would be an inconsistency with no real payoff. The actual precision guarantee lives in
+`app/services/payouts.py.allocate_payouts`: every dollar amount is converted to integer cents
+(`round(amount * 100)`) before any split or sum, divided with `divmod`, and converted back to
+dollars only at the very end, so a float's binary representation never has a chance to drift a
+stored or displayed figure. `payout_summary` and the weekly/season payout helpers all round to
+2 decimal places at the point a figure is finally added to a running total, for the same
+reason. Every place a dollar amount reaches a template goes through the new `money` Jinja
+filter (`app/templating.py`), which itself rounds through cents before deciding whether to
+show a trailing `.XX`, so a float artifact (`639.9999999999999`) can never leak into what a
+player or commissioner reads.
+
+### The tie split rounding rule, exact wording
+
+"Split the combined amount for the tied places evenly, rounded to the cent, with any remainder
+cent(s) going to whichever tied player submitted earliest." Implemented literally in
+`allocate_payouts`: a tied group at rank R with G members occupies places R through R+G-1
+(competition ranking, the same ranks `season_standings`/`weekly_leaderboard` already assign,
+never recomputed here); their amounts are summed in integer cents, divided by G with
+`divmod`, and the `remainder` leftover cents go one each to the first `remainder` entries in
+the caller's own ordering. For a single week that ordering is `WeekEntry.submitted_at`
+ascending (`app/services/payouts.py.weekly_payouts`); a player with no submission timestamp at
+all sorts last within their tied group, never first, since there is no real "earliest" to
+credit them with. Every test in `tests/test_payouts.py` that exercises a tie writes the cent
+arithmetic out in a comment and asserts the split reconciles to the combined total exactly, not
+just against a pinned magic number, per the brief's own instruction.
+
+Season awards have no per-player submission timestamp to break a tie with (there is no single
+instant "the season started" for a player the way there is for one week), so
+`season_payouts` reuses `season_standings`' own final tie-broken order (points, then correct,
+then weekly wins, then display name) as the remainder-cent tie break instead. This is not
+arbitrary: it is the exact order the season standings table itself already displays a tied
+group in, so "the leftover cent goes to whoever sits first in the tied group above" reads as
+the same rule players can already see on the page, not a second, invisible tiebreak.
+
+### Season awards panel gating: "at least one week has been scored," not a season-complete flag
+
+There is no field anywhere in this data model asserting a season is officially over (no
+`Pool.season_ended_at`, no explicit commissioner action that closes a season). The brief named
+this ambiguity directly and asked for a documented call. Chosen: the season awards panel on
+`/standings` shows whenever at least one member has `weeks_played > 0` in the current season
+standings, and its own heading and copy state plainly that it reflects the current standings,
+not a final result ("Season awards, as it stands... It will keep moving until the last week is
+scored").
+
+Rejected alternatives, and why:
+
+- **Gate on every week being scored.** There is no fixed, known week count anywhere in this
+  codebase (`Pool` has no `total_weeks` field, a college season and an NFL season do not even
+  share a week count under this pool's own per-league resolution from Phase 1), so "every week"
+  has nothing concrete to compare against. Inventing a week count just to gate this one panel
+  would be a second, parallel notion of "the season" that nothing else in the product uses.
+- **Add a new field, a real season-complete flag or date, and gate on that.** This would be a
+  reasonable long term feature, but it is out of this phase's actual scope (a payout gating
+  decision, not a new season lifecycle concept), and a flag nobody sets defaults to "never
+  complete," which would make the awards panel permanently invisible for every pool until a
+  commissioner discovers and flips a switch nothing else in the settings page currently asks
+  about. That is worse than showing a clearly labelled in-progress panel.
+- **Never show it until manually confirmed by the commissioner.** Same problem as above, plus
+  it adds a manual step for a panel whose whole value is to already tell a commissioner "here
+  is what everyone is owed" without extra clicking.
+
+"At least one week scored" is the cheapest signal that is actually true today (the standings
+themselves already read as more than a blank page once this is true), and pairing it with
+honest, prominent copy avoids the actual risk raised by not having a real "season is over"
+signal, which is a panel that reads as more final than it is.
+
+### `payment_required_to_pick` defaults to `True`, and what that meant for the existing test fixture
+
+`Pool.payment_required_to_pick` defaults to `True` at the model level, per the brief's literal
+architecture section, so a brand new pool requires payment before anyone can pick, exactly as
+written, with no fee or handle pre-filled (see the house rule against hard coded dollar
+figures). This meant every pre-existing router test that posts real picks through
+`tests/test_app.py`'s `world` fixture would otherwise start failing the moment this column
+existed, since the fixture's pool never explicitly requires or waives payment. Fixed the same
+way Phase 3 handled `picks_required`: `_make_pool` gained a `payment_required_to_pick`
+parameter defaulting to `False` (documented inline, mirroring `picks_required`'s own comment),
+so the fixture's default behavior is unchanged unless a test deliberately turns the gate on to
+prove it works. The model's own real default is untouched; only the test helper's default
+differs from it, which is exactly the same shape Phase 3 already established as acceptable for
+this codebase's test fixtures.
+
+### Where a member's own Venmo handle gets recorded: a new small route, not specified verbatim by the brief
+
+The brief names `PoolMember.member_venmo_handle` ("optional, for the commissioner's own
+reconciliation") but does not name a specific route or form for setting it. Added
+`POST /admin/members/{id}/venmo-handle`, a small per-row form on `/admin/members` next to the
+paid toggle, following the exact same resolve-verify-act-commit-flash-redirect shape
+`member_role`/`member_remove` already established. This is the natural place for it: it is
+where a commissioner is already looking at payment status row by row, and it is the same page
+the duplicate-handle warning badge renders on, so entering a handle and immediately seeing
+whether it collides with someone else's is a single visit, not a hunt across two pages.
+
+### The duplicate Venmo handle check: informational only, case and whitespace insensitive
+
+`_duplicate_venmo_member_ids` (`app/routers/admin.py`) compares `member_venmo_handle` values
+trimmed and lowercased, so "PatSmith" and " patsmith " still flag each other, and never treats
+an empty handle as a match (two members with nothing on file are not a duplicate account,
+they are just two members nobody has noted a handle for yet). Per the brief, this only ever
+adds a visible badge next to both flagged rows; it does not block marking either member paid,
+removing them, or anything else, since the group's "no multiple accounts" rule is a policy a
+commissioner enforces by talking to their players, not something this tool can safely
+adjudicate on its own (a family sharing one account legitimately, for example, is a real
+possibility this tool has no way to distinguish from a rule violation).
+
+### The payout rule editor: add and remove only, no in place edit
+
+Per the brief's own "keep it simple" steer, `/admin/settings`'s payout editor is a table of
+existing rows per scope plus one small add-a-row form; there is no edit-in-place action.
+Fixing a typo is a remove followed by a re-add. This keeps the feature to the two routes the
+brief actually asks for (`POST /admin/payouts/rule`, `POST /admin/payouts/rule/{id}/remove`)
+rather than a third PATCH-shaped route and a second form layout for the same three fields.
+
+### Pot validator: warn only, computed straight from real numbers, never blocking a save
+
+`_pot_totals` (`app/routers/admin.py`) computes collected as `pool.entry_fee (or 0) times the
+paid member count`, and allocated as the sum of every `PayoutRule.amount` for the pool across
+every scope, and renders a warning banner (`flash-error` styling, reusing the same conditional
+flash pattern the existing "league counts add up" banner on the same page already established)
+whenever the two disagree by more than half a cent. Settings save itself does not read these
+numbers at all, so there is no code path where a mismatch could block a save even
+accidentally; the brief was explicit that a commissioner may deliberately hold back a reserve
+or write payout rules before everyone has paid, both of which are honest reasons for the two
+totals to disagree.
+
+### Tests
+
+**704 passed**, 0 failed (668 at the Phase 6 baseline, 36 net new: 19 in the new
+`tests/test_payouts.py` for `allocate_payouts`'s tie-split arithmetic, `week_payout_scope`,
+`week_is_complete`, and the database backed helpers including the bowl-routes-to-bowl-not-
+weekly case and a full `payout_summary`; 17 in `tests/test_app.py` for the Venmo gate
+(unpaid-cannot-save, unpaid-cannot-lock, paid-can-do-both, payment-not-required-means-anyone,
+the blocking panel actually rendering), the admin member tools (paid toggle, bulk mark paid,
+the duplicate handle warning firing only for a real shared handle), settings persistence for
+the new fields, the payout rule add/remove routes, the pot validator banner appearing only on
+a real mismatch, the Results payout column (present with rules, absent without, and the named
+bowl-scope-not-weekly-scope case), and the Standings season awards panel appearing only once a
+week is scored). `ruff check .` and `black .` both clean. An em dash search across every file
+touched this phase finds nothing; no emoji were added anywhere; no dollar amount or Venmo
+handle is hard coded anywhere outside a test file.

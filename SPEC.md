@@ -278,6 +278,24 @@ Other tools:
 - Member management: view members, remove, promote to commissioner, and view or rotate the pool join code.
 - Void or un-void a game.
 
+### 10a. The Venmo entry gate
+
+Entry is Venmo only, paid to one collector, "no multiple accounts." `Pool.entry_fee` (dollars, unset until a commissioner types in a real number), `Pool.venmo_handle` (the single collector), `Pool.payment_required_to_pick` (boolean, true by default), and `Pool.payment_note` (free text shown to players) are all set from `/admin/settings`. Nothing here ships with a real number or handle in it; the payout editor and the entry fee field are both blank until a commissioner fills them in by hand.
+
+While `payment_required_to_pick` is on, `GET /picks` shows a blocking panel above the slate for any member whose `PoolMember.paid_at` is still null: the entry amount (when set), the collector's handle, a Venmo deep link (the mobile app link and a `venmo.com/u/...` web fallback, both URL encoded), and "The commissioner confirms payment manually. Message them once you have sent it." The panel blocks interaction the same way the pool wide lock already does (the slate stays visible, read only, no save or lock controls), and the same rule is enforced server side, not just in the template: `POST /picks` and `POST /picks/lock` both refuse an unpaid member with a clear error, exactly as authoritatively as the pick count and confidence validation already is.
+
+The Members page carries a paid/unpaid column, a one click toggle per member (`POST /admin/members/{id}/paid`), a bulk "mark selected paid" action, a note field for the commissioner's own Venmo handle reconciliation (`PoolMember.member_venmo_handle`, never a second place to pay), a duplicate handle warning when two members share one (the group's "no multiple accounts" rule, surfaced, not enforced), and a pot summary reading "N of M paid, X dollars collected of Y dollars," computed from the pool's real `entry_fee`, never a hard coded number.
+
+### 10b. Payout rules
+
+`PayoutRule` rows (`pool_id`, `scope` of `weekly`, `bowl`, or `season`, `place`, `amount`, an optional `label`) are entered by hand from `/admin/settings`, three sections matching the three scopes, add and remove only. Every pool ships with zero rows; there is no seeded structure anywhere in this build. A pot validator on the same page compares total collected (paid members times the entry fee) against total allocated (every rule's amount, every scope, summed) and warns, never blocks, when they disagree.
+
+Once every countable game in a week is final or void, the Results weekly leaderboard gains a Payout column, matched against each player's rank: `bowl` scope rules when the week resolved as a bowl week, `weekly` rules otherwise, even if `weekly` rules also exist for the pool. A tie splits the combined amount for the tied places evenly, rounded to the cent, with any remainder cent going to whoever submitted earliest; a small muted note next to the column states this. No rules configured for the relevant scope means no payout column at all, not an empty or zeroed one.
+
+The Season Standings page gains an awards panel, driven by `scope="season"` rules matched against the current season rank, shown once at least one week has been scored and labelled plainly as the current standings, not a final result, since nothing in this data model marks a season as officially over.
+
+A `/admin/payouts` view lists, per player, their weekly payouts total, bowl payout, season award, and total owed: a plain table a commissioner can select and paste into a spreadsheet.
+
 ## 11. CLI commands and cron
 
 All idempotent, all take `--year` and `--week` where relevant, defaulting to the pool's detected current week.

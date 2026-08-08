@@ -15,6 +15,7 @@ from app.db import get_db
 from app.models import Game, Pick, Pool, PoolMember, User, Week, WeekEntry
 from app.routers.picks import week_is_locked
 from app.scoring import GameOutcome, PickInput, score_pick
+from app.services import payouts as payout_service
 from app.services.standings import weekly_leaderboard
 from app.templating import render
 
@@ -79,6 +80,9 @@ def results_page(
     columns: list[PlayerColumn] = []
     revealed = False
     weekly = []
+    payouts_by_user: dict[int, float] = {}
+    payout_rules_exist = False
+    payout_scope: str | None = None
 
     if row is not None:
         games = list(
@@ -98,6 +102,18 @@ def results_page(
             # matches whichever week the switcher has selected, not always the latest.
             weekly, _ = weekly_leaderboard(db, pool, week=row, viewer_id=user.id)
 
+            # The payout column only shows once every countable game has stopped being
+            # playable (Phase 7), reusing the same "week is complete" notion
+            # score_week_for_pool already uses, and only when the pool actually wrote
+            # payout rules for the relevant scope: a bowl week always routes to "bowl"
+            # rules, never "weekly", even when weekly rules also exist for the pool.
+            if payout_service.week_is_complete(games):
+                payout_scope = payout_service.week_payout_scope(row)
+                rules = payout_service.rules_by_place(db, pool, payout_scope)
+                if rules:
+                    payout_rules_exist = True
+                    payouts_by_user = payout_service.weekly_payouts(db, row, weekly, rules)
+
     return render(
         request,
         "results.html",
@@ -109,6 +125,9 @@ def results_page(
             "revealed": revealed,
             "n": len(games),
             "weekly": weekly,
+            "payouts_by_user": payouts_by_user,
+            "payout_rules_exist": payout_rules_exist,
+            "payout_scope": payout_scope,
         },
         current_user=user,
         pool=pool,

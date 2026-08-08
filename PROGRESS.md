@@ -10,7 +10,7 @@ reasoning behind every judgment call made along the way.
 - [x] Phase 4. Two-step pick entry
 - [x] Phase 5. Admin-curated slate with pinned games
 - [x] Phase 6. Navigation, sortable tables, transposed results grid
-- [ ] Phase 7. Entry payment and payouts
+- [x] Phase 7. Entry payment and payouts
 - [ ] Phase 8. The scenarios engine
 - [ ] Phase 9. Demo data, deploy, and launch readiness
 
@@ -375,3 +375,60 @@ check .` and `black .` both clean. Full judgment calls (gating the weekly leader
 the same reveal rule as the grid, where the by-confidence lookup lives, and how the toggle
 avoids a JS-dependent flash of the wrong view) are recorded in `DECISIONS.md` under
 "Phase 6".
+
+## Phase 7 notes
+
+Two pieces of direct feedback: "Will be Venmo only this year. No Venmo, no participation," "1
+person to pay, no multiple accounts," and a description of the group's old payout column
+(what places 1 through 4 received each week, for Bowl Week, and for end of season awards).
+Added a Venmo entry gate in front of picking and a `PayoutRule` system feeding a weekly payout
+column, a season awards panel, and a payout summary table, all driven by numbers a
+commissioner types in by hand. Zero rows ship seeded anywhere; no dollar figure or Venmo
+handle is hard coded anywhere outside a test file. No new Python dependency: Venmo is a deep
+link plus manual commissioner reconciliation, not a payment integration.
+
+- `app/models.py`. `Pool` gained `entry_fee`, `venmo_handle`, `payment_required_to_pick`
+  (default `True`), `payment_note`. `PoolMember` gained `paid_at`, `paid_marked_by_user_id`,
+  `member_venmo_handle`. New `PayoutRule` model (`pool_id`, `scope` of `weekly`/`bowl`/`season`,
+  `place`, `amount`, an optional `label`), cascade deleted with its pool, never seeded.
+- `alembic/versions/8605b49060e6_add_venmo_entry_gate_and_payout_rules.py`. The migration for
+  every new column and the new table, reversible, verified upgrade and downgrade against a
+  fresh SQLite database.
+- `app/services/payouts.py` (new). `allocate_payouts`, the pure tie-splitting arithmetic
+  (integer cents throughout, so a split always reconciles to the combined total exactly).
+  `rules_by_place`, `week_payout_scope` (bowl routes to `"bowl"`, never `"weekly"`, even when
+  weekly rules also exist), `week_is_complete` (reusing the same "nothing left playable" notion
+  `score_week_for_pool` already uses), `weekly_payouts` (tie broken by earliest
+  `WeekEntry.submitted_at`), `season_payouts` (tie broken by `season_standings`' own final
+  order), and `payout_summary` (per player weekly/bowl/season totals for `/admin/payouts`).
+- `app/routers/picks.py`. `payment_gate_blocks(member, pool)` is the one function both
+  `picks_page` (rendering the blocking panel) and `_save_picks`/`_lock_picks` (the actual,
+  authoritative server side refusal) call, so the page and the enforcement can never disagree.
+  A new picks page state, 3a, sits between the player lock state and the open editing state:
+  the pool wide time lock and a player's own earlier lock both still win over it, per the
+  brief, since the gate only ever blocks *creating or locking new* picks.
+- `app/routers/admin.py`. `/admin/settings` gained an "Entry fee and Venmo" card on the main
+  settings form, plus a separate payout rules section (three scopes, add/remove only, ships
+  empty) and a pot validator banner (collected versus allocated, warn only, never blocks a
+  save). `/admin/members` gained a paid/unpaid column with a one click toggle
+  (`POST /admin/members/{id}/paid`), a bulk "mark selected paid" action, a per member Venmo
+  handle note field for the commissioner's own reconciliation, a duplicate handle warning, and
+  a pot summary line. New `/admin/payouts` view, a plain per player summary table.
+- `app/routers/results.py` / `app/templates/results.html`. A Payout column on the weekly
+  leaderboard, shown once every countable game in the week is final or void and the relevant
+  scope has rules configured, with a muted note stating the tie split rounding rule next to it.
+- `app/routers/leaderboard.py` / `app/templates/leaderboard.html`. A season awards panel driven
+  by `scope="season"` rules, shown once at least one week has been scored, labelled as the
+  current standings rather than a final result (see `DECISIONS.md` for why this gate was chosen
+  over the alternatives).
+- `app/templating.py`. New `money` Jinja filter: a plain number, no currency symbol, no
+  trailing `.00`, rounded through integer cents first so a float artifact never reaches the
+  page.
+- `SPEC.md`. Section 10 gained 10a (the Venmo entry gate) and 10b (payout rules), describing
+  the new commissioner surface.
+
+Test suite: **704 passed**, 0 failed (668 at the Phase 6 baseline, 36 net new: 19 in the new
+`tests/test_payouts.py`, 17 in `tests/test_app.py`). `ruff check .` and `black .` both clean.
+Full judgment calls (the `Float` versus `Numeric` choice, the exact tie split wording, and the
+season awards panel gating decision with its rejected alternatives) are recorded in
+`DECISIONS.md` under "Phase 7".
