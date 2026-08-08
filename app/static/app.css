@@ -2657,6 +2657,83 @@ button.team-btn:not([disabled]):not(.is-picked):hover {
   color: var(--ink);           /* 8.33:1 */
 }
 
+/* -- Sortable tables ------------------------------------------------------
+   app.js's sortTable() reads table[data-sortable] and th[data-sortable-col],
+   sorts tbody rows client side by each cell's data-sort-value (falling back
+   to the cell's own text), and keeps aria-sort and a caret in sync on the
+   active header. Below 768px there is no header row to click (see the
+   data-label reflow at the top of this section), so a .sort-select-wrap
+   <select> next to the table drives the exact same function; see results.html
+   and leaderboard.html for the markup. Reduced motion is respected in JS by
+   reusing the module level reduceMotion flag, not a second query here. */
+
+.sort-select-wrap { margin-bottom: var(--space-4); }
+
+.table th[data-sortable-col] {
+  cursor: pointer;
+  user-select: none;
+}
+
+.table th[data-sortable-col]:hover { color: var(--text); }
+
+.table th[data-sortable-col]:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: -2px;
+}
+
+.sort-caret {
+  display: inline-block;
+  margin-left: var(--space-1);
+  vertical-align: -2px;
+  color: var(--accent);
+}
+
+/* -- By player / by game toggle -------------------------------------------
+   Both pick grids are rendered server side (see results.html); this only
+   ever hides one of them. Segmented control, matching the week chip's pill
+   shape rather than the tab underline used elsewhere, since these two are
+   equally weighted alternatives, not a hierarchy. */
+
+.view-toggle {
+  display: inline-flex;
+  gap: 2px;
+  padding: 2px;
+  margin-bottom: var(--space-4);
+  background: var(--bg-surface-alt);
+  border: var(--hairline);
+  border-radius: var(--radius-pill);
+}
+
+.toggle-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: var(--tap-sm);
+  padding: var(--space-1) var(--space-4);
+  border: 0;
+  border-radius: var(--radius-pill);
+  background: none;
+  font-family: var(--font-display);
+  font-size: var(--fs-sm);
+  font-weight: 500;
+  letter-spacing: .02em;
+  color: var(--text-muted);    /* 6.95:1 on paper, this control sits on surface too */
+  cursor: pointer;
+  transition: background-color var(--dur) var(--ease), color var(--dur) var(--ease);
+}
+
+.toggle-btn:hover { color: var(--text); }
+
+.toggle-btn.is-active {
+  background: var(--accent);
+  color: var(--text-invert);   /* 11.03:1 */
+}
+
+.toggle-btn:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
 /* -- Winner pennant ------------------------------------------------------ */
 
 .ribbon {
@@ -3040,8 +3117,11 @@ button.team-btn:not([disabled]):not(.is-picked):hover {
 /* -- The grid itself ----------------------------------------------------- */
 
 /* Below 768px the first cell of every row is the card heading, not a cell,
-   so it drops the flex row and the data-label the reflow normally draws. */
-.picks-grid .pick-game {
+   so it drops the flex row and the data-label the reflow normally draws.
+   .pick-rowhead is the same idea for the by-player grid, where the row
+   heading is a player rather than a game. */
+.picks-grid .pick-game,
+.picks-grid .pick-rowhead {
   display: block;
   padding: 0 0 var(--space-2);
   margin-bottom: var(--space-1);
@@ -3049,7 +3129,8 @@ button.team-btn:not([disabled]):not(.is-picked):hover {
   text-align: left;
 }
 
-.picks-grid .pick-game::before {
+.picks-grid .pick-game::before,
+.picks-grid .pick-rowhead::before {
   content: none;
   display: none;
 }
@@ -3155,6 +3236,44 @@ button.team-btn:not([disabled]):not(.is-picked):hover {
   font-weight: 600;
   color: var(--text-muted);
 }
+
+/* -- The by-player grid ---------------------------------------------------
+   Rows are players, columns are confidence values. A cell shows the matchup
+   staked at that confidence, "GB over CHI", colour coded exactly like the
+   by-game grid's cells. A confidence value nobody on the slate maps to for a
+   player (an incomplete card) is .is-empty: no fill, no dash, nothing to
+   read as an error. */
+
+.picks-grid .pick-conf {
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.pick-matchup {
+  font-family: var(--font-body);
+  font-size: var(--fs-sm);
+}
+
+.pick-matchup strong {
+  font-family: var(--font-display);
+  font-weight: 600;
+  letter-spacing: var(--track-abbr);
+  text-transform: uppercase;
+}
+
+.pick-void-badge {
+  display: inline-block;
+  margin-left: var(--space-1);
+  font-family: var(--font-display);
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  letter-spacing: var(--track-eyebrow);
+  text-transform: uppercase;
+  color: var(--text-muted);    /* 7.47:1 on the void tint */
+}
+
+.picks-grid .pick-cell.is-empty { background: none; }
 
 
 /* ==========================================================================
@@ -3737,7 +3856,8 @@ button.team-btn:not([disabled]):not(.is-picked):hover {
      keeps the sticky first column to one opaque fill. */
   .picks-grid tbody tr:nth-child(even) { background: none; }
 
-  .picks-grid .pick-game {
+  .picks-grid .pick-game,
+  .picks-grid .pick-rowhead {
     display: table-cell;
     min-width: 180px;
     margin: 0;
@@ -3776,6 +3896,20 @@ button.team-btn:not([disabled]):not(.is-picked):hover {
     text-align: center;
     white-space: nowrap;
   }
+
+  /* -- The by-player grid's sticky header row -----------------------------
+     Confidence 15 down to 1 across the top, pinned the same way .is-sticky
+     pins the player column on the left; the corner cell needs both. */
+  .picks-grid-player thead th {
+    position: sticky;
+    top: 0;
+    z-index: 3;
+    background: var(--bg-surface-alt);
+  }
+
+  .picks-grid-player thead th.is-sticky { z-index: 4; }
+
+  .picks-grid-player .pick-conf { min-width: 64px; }
 
   /* Denser meta strip once there is room for it. */
   .game-meta { gap: var(--space-2) var(--space-4); }
@@ -3854,6 +3988,8 @@ button.team-btn:not([disabled]):not(.is-picked):hover {
   .subnav,
   .week-switch,
   .cell-actions,
+  .view-toggle,
+  .sort-select-wrap,
   .btn { display: none !important; }
 
   .card,

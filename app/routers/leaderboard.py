@@ -1,4 +1,5 @@
-"""Season standings and the weekly leaderboard."""
+"""Season standings. The weekly leaderboard lives on the Results page, see
+app/routers/results.py, so a single week is never shown redundantly on both pages."""
 
 from __future__ import annotations
 
@@ -20,14 +21,13 @@ def standings_page(
     user: User = Depends(require_user),
     pool: Pool = Depends(get_active_pool),
 ):
-    from app.services.standings import season_standings, weekly_leaderboard
+    from app.services.standings import season_standings
 
     season = season_standings(db, pool, viewer_id=user.id)
-    weekly, week = weekly_leaderboard(db, pool, viewer_id=user.id)
     return render(
         request,
         "leaderboard.html",
-        {"season": season, "weekly": weekly, "week": week},
+        {"season": season},
         current_user=user,
         pool=pool,
         is_commissioner=is_commissioner(db, user, pool),

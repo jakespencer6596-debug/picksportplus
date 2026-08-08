@@ -855,3 +855,111 @@ including that a commissioner's own later choice is not silently reset on a reru
 `seed_admin` is designed to run on every boot). `ruff check .`, `black .` and the full suite
 all clean. An em dash search across every file touched this phase finds nothing; no emoji
 were added anywhere.
+
+## Phase 6
+
+Three pieces of direct feedback from the group actually running the pool: Standings and
+Results both showed a weekly leaderboard, which read as the same page twice; there was no
+way to sort a table by anything other than the server's default order; and the results pick
+grid had rows and columns backwards versus the old platform they were used to (rows should
+be players, columns should be confidence 20 down to 1, cells the matchup).
+
+### The reveal rule had to be extended to the weekly leaderboard, not just the pick grid
+
+The brief's architecture section says to reuse `weekly_leaderboard(db, pool, week=row,
+viewer_id=user.id)` on `/results` and pass the page's own resolved `row`. Read literally and
+implemented without more thought, that call has no gate at all: `weekly_leaderboard` returns
+one `WeeklyRow` per pool member regardless of whether the week has locked, because a
+`WeekEntry` row is created the moment a player calls Save (`app/routers/picks.py`, `now`
+written to `submitted_at`), well before scoring or lock. Wiring the leaderboard section up
+unconditionally made `test_picks_stay_private_until_lock` fail: a player who saved (but had
+not locked) picks for an still-open week showed up by name in the weekly leaderboard table
+on another member's `/results` page, with 0 points and no "did not submit" flag, because
+`did_not_submit` itself is only set at scoring time. That is a real information leak the
+brief's "picks stay private until lock" rule was written to prevent, just via a side door
+("who has an entry at all this week") the pick grid itself never opens. Fixed by computing
+`weekly` only inside the same `if revealed:` branch that already gates `_build_columns`, so
+the weekly leaderboard section renders its empty state ("opens once this week locks") for
+exactly as long as the pick grid stays behind its own lock notice. This is the one place this
+phase's implementation deviated from a literal reading of the brief, and it is deviating
+toward the existing, tested privacy rule, not away from it.
+
+### Where the per-confidence lookup lives
+
+`PlayerColumn` gained `by_confidence: dict[int, tuple[Game, PlayerPick]]` (`app/routers/
+results.py`), built inside the same per-game loop in `_build_columns` that already builds
+the game-major `picks` dict keyed by `game_id`: every time that loop constructs a `PlayerPick`
+cell for a game the player actually picked (`pick is not None`), it now also writes
+`by_confidence[pick.confidence] = (game, cell)`. No second pass over `games` and no query
+against the whole slate, since a player's confidence values only exist for the games they
+actually picked, exactly as the brief specifies. A player who picked fewer than
+`picks_required` games (an incomplete card, still possible if `picks_required` was lowered
+after they saved, or they simply never finished) leaves the unused confidence values absent
+from the dict; the template's `col.by_confidence.get(c)` returning `None` is what renders the
+"genuinely empty cell" the brief asks for, not a sentinel or a placeholder dash (the by-game
+grid's "no pick for this game" dash, `.pick-none`, is a different situation, a real absence
+during a real game, and keeps its own marker unchanged).
+
+### Both pick grids render server side; the toggle is a pure visibility switch
+
+`results.html` renders the by-player table and the original by-game table in full, every
+time the week is revealed, inside two `[data-view-panel]` containers. `app.js`'s
+`initViewToggle` does nothing but set the native `hidden` attribute on whichever panel is not
+selected and flip `aria-pressed` on the two buttons; there is no conditional server side
+render based on a query param or session state. Two consequences worth being explicit about:
+a router test can assert the by-game table's markup exists in the response regardless of
+which view a real browser would show first (`test_results_grid_is_player_major_with_
+confidence_columns_and_game_major_toggle` checks for `data-view-panel="game"` and the
+by-game table's `pick-player` header class directly in the HTML), and there is no flash of
+the wrong view before JS attaches: the by-game panel ships with `hidden` already set in the
+template and the "By game" button already carries `aria-pressed="false"`, so the DOM's resting
+state matches what `initViewToggle` would set it to anyway. The cost is doubling the amount
+of grid markup in every revealed `/results` response; accepted deliberately, per the brief
+("Render both tables server side (simplest, no extra request)"), over a client side
+re-render from a JSON payload, which would have meant hand rolling the state/void/pending
+color logic twice, once in Jinja and once in JS.
+
+### The sortable table engine: one function, two triggers, and why aria-sort is seeded server side too
+
+`app.js`'s `initSortableTable` is the only place row order or `aria-sort` gets decided; both
+a header click and the mobile `<select>`'s change event call the same `render(true)` path, so
+there was never a second copy of the comparison or the DOM reorder to keep in sync. Numeric
+columns carry `data-sort-value` on every `<td>` precisely because this app's own tables print
+non numeric placeholders in numeric columns ("No entry", "."); rather than inventing a
+sentinel for those rows, `data-sort-value` is simply set to the same underlying number the
+row's rank already reflects (a "No entry" player's `points` is `0`, matching where they
+already sort under the server's own order), so no special casing was needed in the template
+or the JS.
+
+One thing beyond the brief's literal JS-only description: `aria-sort` and `data-sort-value`
+are seeded directly in the template on the default sort column, not left for JS to set on
+first paint. Two reasons. First, accessibility should not depend on JS having attached yet;
+a screen reader hitting the table before `app.js` runs (or if it fails to load) should still
+hear the correct current sort state, since the rows are, in fact, already in that order,
+courtesy of `season_standings`/`weekly_leaderboard`'s own server side sort. Second, the test
+brief explicitly asks for "the expected `data-sort-value`, `aria-sort` scaffolding" to be
+verifiable in server rendered HTML, which a JS-only `aria-sort` cannot satisfy since pytest
+never executes `app.js`. `initSortableTable`'s own initial `render(false)` call does not
+re-sort the DOM (the server's order already stands and carries tiebreakers, correct/weekly
+wins/name, the client's single-column comparator does not know about), it only re-derives the
+same `aria-sort`/caret state the template already wrote, which is deliberately redundant
+rather than a source of truth living in two places that could drift.
+
+### Tests
+
+**668 passed**, 0 failed (664 at the Phase 5 baseline, 4 net new, all in
+`tests/test_app.py`): `test_standings_page_has_no_weekly_leaderboard` (asserts the word
+"leaderboard" and the old section's heading id are both actually gone, not hidden);
+`test_results_weekly_leaderboard_matches_the_selected_week` (two weeks, two different
+`WeekEntry.points`, `?week=5` and `?week=6` each show only their own week's number via
+`data-sort-value`); `test_results_weekly_leaderboard_stays_private_until_lock` (the
+regression this phase almost introduced, see above); and
+`test_results_grid_is_player_major_with_confidence_columns_and_game_major_toggle` (a two
+player, four game fixture with a correct, a wrong, a void and a not-yet-final pick, checking
+the exact `<strong>H0</strong> over A0` matchup markup at the right confidence column, the
+`pick-void-badge` marker, an empty-cell "No pick at confidence 1" for a player who only
+picked three of four games, and that the by-game table's markup is still present in the same
+response). `ruff check .` and `black .` both clean. An em dash search across every file
+touched this phase finds nothing; no emoji were added anywhere; the sort caret is inline SVG
+built from the same path data as `components/icons.html`'s existing "up"/"down" chevrons, not
+a text glyph.

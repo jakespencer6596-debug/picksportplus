@@ -9,7 +9,7 @@ reasoning behind every judgment call made along the way.
 - [x] Phase 3. Pick 15 of 20
 - [x] Phase 4. Two-step pick entry
 - [x] Phase 5. Admin-curated slate with pinned games
-- [ ] Phase 6. Navigation, sortable tables, transposed results grid
+- [x] Phase 6. Navigation, sortable tables, transposed results grid
 - [ ] Phase 7. Entry payment and payouts
 - [ ] Phase 8. The scenarios engine
 - [ ] Phase 9. Demo data, deploy, and launch readiness
@@ -305,3 +305,73 @@ judgment calls (eligibility-requires-a-spread-even-for-pins, the rivalry auto-pi
 persistence choice, the exact seeded pairs and how they were derived, and why no schema
 migration was needed for `auto_publish` itself) are recorded in `DECISIONS.md` under
 "Phase 5".
+
+## Phase 6 notes
+
+Group feedback, three items: Standings and Results were redundant (both showed a weekly
+leaderboard), no way to sort a table column, and the results pick grid had rows and columns
+backwards versus the old platform (rows should be players, columns confidence 20 down to 1).
+
+- `app/routers/leaderboard.py` / `app/templates/leaderboard.html`. `/standings` is season
+  standings only now; the `weekly_leaderboard` call and the whole "weekly leaderboard"
+  section are gone, not just hidden. A "Weekly results" link in the section head points to
+  `/results`.
+- `app/routers/results.py` / `app/templates/results.html`. `/results` gained a weekly
+  leaderboard section between the scoreboard and the pick grid, built from the existing
+  `weekly_leaderboard(db, pool, week=row, viewer_id=user.id)`, passing the page's own
+  resolved `row` so it always matches whichever week the switcher has selected. It only
+  computes and renders once the week is `revealed` (locked): an entry existing at all before
+  lock is itself a "who has submitted" leak, the same reveal rule the pick grid already
+  enforced, now extended to the leaderboard too (a real regression a straightforward reading
+  of the brief would have introduced, caught by the existing `test_picks_stay_private_until_lock`
+  test).
+- `app/routers/results.py`. `PlayerColumn` gained `by_confidence: dict[int, tuple[Game,
+  PlayerPick]]`, keyed by confidence value, built in `_build_columns` from each player's own
+  `Pick` rows (reusing the same per-game loop that already builds the game-major `picks`
+  dict, no second scan of the slate) rather than by scanning every slate game, since a
+  player's confidence values only exist for the games they actually picked.
+- `app/templates/results.html`. The pick grid is rendered twice, once per view, both server
+  side: the new by-player grid (rows are players, columns are confidence `picks_required`
+  down to 1, each cell "GB over CHI" colour coded by outcome, a genuinely empty cell for a
+  confidence value nobody maps to) is the default, the original by-game grid (rows are
+  games, columns are players) is kept intact behind a "By player / By game" toggle for
+  anyone who preferred it. Both panels always render; `app.js`'s `initViewToggle` only ever
+  hides one with the native `hidden` attribute, so a router test can assert the by-game
+  table's markup is present regardless of which view JS shows on load, and the toggle keeps
+  working if JS is slow to attach (the by-game panel ships server side with `hidden` already
+  set, matching the buttons' server side `aria-pressed`, so there is no flash of the wrong
+  view).
+- `app/static/app.js`. One reusable sort engine, `initSortableTable`/`sortTableRows`, wired
+  to both the header click path and a `<select data-sort-select-for="...">` for the stacked
+  mobile view (no header row to click there), so neither path duplicates the other's
+  ordering logic. Numeric columns read `data-sort-value` off each `<td>` rather than the
+  rendered text, since the text can be a placeholder ("No entry", "."). A stable sort keeps
+  the server's own tiebreak order (correct, weekly wins, name) intact when a sort ties on the
+  clicked column. The caret is an inline SVG built from the same path data as
+  `components/icons.html`'s "up"/"down" chevrons, added and removed from the active header
+  only. Applied to the Season Standings table and the new weekly leaderboard table; the pick
+  grids were left unsorted, sorting a grid whose meaning depends on row/column position
+  (confidence order, game order) is not the same feature.
+- `app/services/standings.py`. `StandingRow` gained `accuracy_sort`, a numeric twin of the
+  existing `accuracy` display property (same rounding, so the two can never disagree), for
+  the sortable table's `data-sort-value`. No change to any actual sort or scoring logic.
+- `app/templates/base.html`. Desktop nav and the mobile tab bar (still four items) both
+  rename "Standings" to "Season"; "This Week", "Results" and "Admin" are unchanged. The
+  underlying routes and `active_nav` identifiers did not need to change, only the label.
+- `app/static/app.css`. New "Sortable tables" and "By player / by game toggle" rules in
+  section 10, a `.pick-rowhead`/`.pick-conf`/`.pick-matchup`/`.pick-void-badge` set in
+  section 11 alongside the existing picks grid rules (the by-player grid reuses the existing
+  `.picks-grid .pick-cell.is-*` state colours by sharing the `.picks-grid` class, so no
+  colour rule is duplicated), and a sticky top header row for `.picks-grid-player` alongside
+  the pattern's existing sticky-left first column. No new responsive mechanism: both new
+  tables use the same `table-wrap`/`data-label` reflow already documented at the top of
+  section 10.
+
+Test suite: **668 passed**, 0 failed (664 at the Phase 5 baseline, 4 net new:
+`test_standings_page_has_no_weekly_leaderboard`, `test_results_weekly_leaderboard_matches_the_selected_week`,
+`test_results_weekly_leaderboard_stays_private_until_lock`, and
+`test_results_grid_is_player_major_with_confidence_columns_and_game_major_toggle`). `ruff
+check .` and `black .` both clean. Full judgment calls (gating the weekly leaderboard behind
+the same reveal rule as the grid, where the by-confidence lookup lives, and how the toggle
+avoids a JS-dependent flash of the wrong view) are recorded in `DECISIONS.md` under
+"Phase 6".

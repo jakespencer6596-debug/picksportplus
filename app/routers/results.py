@@ -1,8 +1,10 @@
-"""Results: every game outcome for a week, and every player's picks once the week has locked."""
+"""Results: every game outcome for a week, that week's leaderboard, and every player's
+picks once the week has locked. Season standings live on their own page, see
+app/routers/leaderboard.py."""
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy import select
@@ -13,6 +15,7 @@ from app.db import get_db
 from app.models import Game, Pick, Pool, PoolMember, User, Week, WeekEntry
 from app.routers.picks import week_is_locked
 from app.scoring import GameOutcome, PickInput, score_pick
+from app.services.standings import weekly_leaderboard
 from app.templating import render
 
 router = APIRouter(tags=["results"])
@@ -35,7 +38,11 @@ class PlayerColumn:
     is_winner: bool
     submitted: bool
     did_not_submit: bool
-    picks: dict[int, PlayerPick]
+    picks: dict[int, PlayerPick]  # keyed by game_id, the game-major view
+    # keyed by confidence value (1..pool.picks_required), the player-major view. Built from
+    # this player's own Pick rows, not by scanning every slate game, since a player's
+    # confidence values only exist for the games they actually picked.
+    by_confidence: dict[int, tuple[Game, PlayerPick]] = field(default_factory=dict)
 
 
 def _week_or_404(db: Session, pool: Pool, week_number: int | None) -> Week | None:
@@ -71,6 +78,7 @@ def results_page(
     games: list[Game] = []
     columns: list[PlayerColumn] = []
     revealed = False
+    weekly = []
 
     if row is not None:
         games = list(
@@ -80,10 +88,15 @@ def results_page(
                 .order_by(Game.slate_rank)
             )
         )
-        # Picks stay private until the week locks, then everyone sees everything.
+        # Picks stay private until the week locks, then everyone sees everything. The
+        # weekly leaderboard follows the same rule, not just the pick grid: an entry
+        # existing at all is a signal someone already submitted, so it stays hidden too.
         revealed = week_is_locked(row)
         if revealed:
             columns = _build_columns(db, pool, row, games)
+            # Pass the page's own resolved week explicitly, so the leaderboard always
+            # matches whichever week the switcher has selected, not always the latest.
+            weekly, _ = weekly_leaderboard(db, pool, week=row, viewer_id=user.id)
 
     return render(
         request,
@@ -95,6 +108,7 @@ def results_page(
             "columns": columns,
             "revealed": revealed,
             "n": len(games),
+            "weekly": weekly,
         },
         current_user=user,
         pool=pool,
@@ -124,6 +138,7 @@ def _build_columns(db: Session, pool: Pool, week: Week, games: list[Game]) -> li
         entry = entries.get(member.id)
         user_picks = picks_by_user.get(member.id, {})
         cells: dict[int, PlayerPick] = {}
+        by_confidence: dict[int, tuple[Game, PlayerPick]] = {}
         for game in games:
             pick = user_picks.get(game.id)
             if pick is None:
@@ -146,7 +161,9 @@ def _build_columns(db: Session, pool: Pool, week: Week, games: list[Game]) -> li
                     GameOutcome(game_id=game.id, status=game.status, winner=game.winner),
                     mode=pool.scoring_mode,
                 )
-            cells[game.id] = PlayerPick(pick.picked_team, pick.confidence, earned, state)
+            cell = PlayerPick(pick.picked_team, pick.confidence, earned, state)
+            cells[game.id] = cell
+            by_confidence[pick.confidence] = (game, cell)
 
         columns.append(
             PlayerColumn(
@@ -158,6 +175,7 @@ def _build_columns(db: Session, pool: Pool, week: Week, games: list[Game]) -> li
                 submitted=bool(entry and entry.submitted_at),
                 did_not_submit=bool(entry.did_not_submit) if entry else True,
                 picks=cells,
+                by_confidence=by_confidence,
             )
         )
 

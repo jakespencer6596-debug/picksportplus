@@ -612,6 +612,215 @@ def test_picks_are_revealed_after_lock(client, world, session_factory):
     assert "Regular Player" in response.text
 
 
+# Season/Results split, sortable tables, and the player-major grid ----------
+
+
+def test_standings_page_has_no_weekly_leaderboard(client, world):
+    """Phase 6: /standings is season standings only. The word "leaderboard" and the old
+    weekly section's heading id must both be genuinely gone, not just visually hidden.
+    """
+    _login(client, "player@example.com")
+    response = client.get("/standings")
+    assert response.status_code == 200
+    assert "leaderboard" not in response.text.lower()
+    assert "weekly-heading" not in response.text
+    assert "Season standings" in response.text
+
+
+def test_results_weekly_leaderboard_matches_the_selected_week(client, world, session_factory):
+    """The weekly leaderboard on /results must reflect whichever week the switcher has
+    selected (?week=), not always the latest week in the pool.
+    """
+    db = session_factory()
+    pool = db.get(Pool, world["pool_id"])
+    week5 = db.get(Week, world["week_id"])
+    week5.status = "locked"
+    db.add(
+        WeekEntry(
+            user_id=world["player_id"],
+            pool_id=pool.id,
+            week_id=week5.id,
+            points=3,
+            correct=2,
+            possible=4,
+            is_winner=True,
+            submitted_at=dt.datetime.now(UTC),
+        )
+    )
+    week6 = Week(
+        pool_id=pool.id,
+        season_year=pool.season_year,
+        week_number=6,
+        label="Week 6",
+        status="locked",
+        lock_at=dt.datetime.now(UTC) - dt.timedelta(hours=1),
+    )
+    db.add(week6)
+    db.flush()
+    db.add(
+        WeekEntry(
+            user_id=world["player_id"],
+            pool_id=pool.id,
+            week_id=week6.id,
+            points=9,
+            correct=1,
+            possible=4,
+            is_winner=True,
+            submitted_at=dt.datetime.now(UTC),
+        )
+    )
+    db.commit()
+    db.close()
+
+    _login(client, "player@example.com")
+
+    resp5 = client.get("/results?week=5")
+    assert resp5.status_code == 200
+    assert "Week 5 leaderboard" in resp5.text
+    assert 'data-sort-value="3"' in resp5.text
+    assert 'data-sort-value="9"' not in resp5.text
+
+    resp6 = client.get("/results?week=6")
+    assert resp6.status_code == 200
+    assert "Week 6 leaderboard" in resp6.text
+    assert 'data-sort-value="9"' in resp6.text
+    assert 'data-sort-value="3"' not in resp6.text
+
+
+def test_results_weekly_leaderboard_stays_private_until_lock(client, world, session_factory):
+    """The weekly leaderboard follows the same reveal rule as the pick grid: an entry
+    existing at all before lock is itself a "who has submitted" leak.
+    """
+    _login(client, "player@example.com")
+    client.post("/picks", data=_valid_submission(world["game_ids"]))
+    client.post("/logout")
+
+    _login(client, "boss@example.com")
+    response = client.get("/results")
+    assert response.status_code == 200
+    assert "Regular Player" not in response.text
+
+
+def test_results_grid_is_player_major_with_confidence_columns_and_game_major_toggle(
+    client, session_factory
+):
+    """Rows are players, columns are confidence values, cells show the matchup, and the
+    old game-major table is still present in the response, behind the toggle.
+    """
+    db = session_factory()
+    pool = _make_pool(db, num_games=4, picks_required=4)
+    alpha = _make_user(db, "alpha@example.com", "Alpha Player")
+    beta = _make_user(db, "beta@example.com", "Beta Player")
+    db.add(PoolMember(pool_id=pool.id, user_id=alpha.id, role_in_pool="commissioner"))
+    db.add(PoolMember(pool_id=pool.id, user_id=beta.id, role_in_pool="member"))
+    week = _make_week(db, pool, status="locked")
+    games = _make_games(db, week, count=4)
+    db.commit()
+
+    games[0].status, games[0].winner = "final", "home"
+    games[0].home_score, games[0].away_score = 21, 14
+    games[1].status, games[1].winner = "final", "away"
+    games[1].home_score, games[1].away_score = 10, 17
+    games[2].status = "void"
+    games[3].status = "scheduled"
+    db.commit()
+
+    # Alpha picks all four games: game0 correct (home, confidence 4), game1 wrong (home,
+    # confidence 3), game2 void (away, confidence 2), game3 not yet final (home, confidence 1).
+    db.add(
+        Pick(
+            user_id=alpha.id,
+            pool_id=pool.id,
+            week_id=week.id,
+            game_id=games[0].id,
+            picked_team="home",
+            confidence=4,
+        )
+    )
+    db.add(
+        Pick(
+            user_id=alpha.id,
+            pool_id=pool.id,
+            week_id=week.id,
+            game_id=games[1].id,
+            picked_team="home",
+            confidence=3,
+        )
+    )
+    db.add(
+        Pick(
+            user_id=alpha.id,
+            pool_id=pool.id,
+            week_id=week.id,
+            game_id=games[2].id,
+            picked_team="away",
+            confidence=2,
+        )
+    )
+    db.add(
+        Pick(
+            user_id=alpha.id,
+            pool_id=pool.id,
+            week_id=week.id,
+            game_id=games[3].id,
+            picked_team="home",
+            confidence=1,
+        )
+    )
+    # Beta only picks three of the four games, so confidence 1 has nothing mapped to it.
+    db.add(
+        Pick(
+            user_id=beta.id,
+            pool_id=pool.id,
+            week_id=week.id,
+            game_id=games[0].id,
+            picked_team="away",
+            confidence=4,
+        )
+    )
+    db.add(
+        Pick(
+            user_id=beta.id,
+            pool_id=pool.id,
+            week_id=week.id,
+            game_id=games[1].id,
+            picked_team="away",
+            confidence=3,
+        )
+    )
+    db.add(
+        Pick(
+            user_id=beta.id,
+            pool_id=pool.id,
+            week_id=week.id,
+            game_id=games[2].id,
+            picked_team="home",
+            confidence=2,
+        )
+    )
+    db.commit()
+    db.close()
+
+    _login(client, "alpha@example.com")
+    response = client.get("/results")
+    assert response.status_code == 200
+    text = response.text
+
+    # Player-major: Alpha's confidence 4 column shows the matchup staked there, "H0 over A0",
+    # the home team Alpha picked (correct) followed by the opponent, regardless of outcome.
+    assert "<strong>H0</strong> over A0" in text
+    # Alpha's void pick (confidence 2) carries a clear void marker.
+    assert 'pick-void-badge">Void<' in text
+    # Beta did not pick a fourth game: confidence 1 renders empty for Beta, not an error.
+    assert "No pick at confidence 1" in text
+
+    # The game-major table (rows are games, columns are players) is still present in the
+    # response, behind the toggle, even though JS defaults to hiding it.
+    assert 'data-view-panel="game"' in text
+    assert 'class="pick-player' in text
+    assert 'data-view-btn="game"' in text
+
+
 def test_scoring_end_to_end(client, world, session_factory):
     """Save picks, finalise the games, score, and check the leaderboard math.
 

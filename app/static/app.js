@@ -310,6 +310,164 @@
     }
   }
 
+  /* ----------------------------------------------------------- sortable tables */
+
+  /* Season standings, the weekly leaderboard, and any other plain data table
+     marked table[data-sortable]. One click sorting engine reused for both the
+     header click path (desktop) and the <select data-sort-select-for> path
+     (the stacked mobile view has no header row to click, see app.css's
+     "Sortable tables" note), so there is exactly one place that decides row
+     order: neither path duplicates the other's logic, one calls the other.
+
+     A column is sortable by wrapping a <th scope="col"> in data-sortable-col,
+     with data-sort-default-dir on it for which way a first click on that
+     column goes. Numeric columns carry data-sort-value on every <td> in that
+     column (the server already knows the real number; rendered text can be
+     "No entry" or "." placeholders that are not numbers), text columns are
+     read straight from the cell's own text. */
+
+  var SORT_CARET_PATHS = {
+    asc: '<path d="m18 15-6-6-6 6"/>',
+    desc: '<path d="m6 9 6 6 6-6"/>'
+  };
+
+  function sortCaretSvg(dir) {
+    return '<svg class="icon sort-caret" width="14" height="14" viewBox="0 0 24 24" ' +
+      'fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" ' +
+      'stroke-linejoin="round" aria-hidden="true" focusable="false">' +
+      SORT_CARET_PATHS[dir] + "</svg>";
+  }
+
+  function sortCellValue(row, colIndex) {
+    var cell = row.cells[colIndex];
+    if (!cell) return "";
+    if (cell.hasAttribute("data-sort-value")) {
+      var num = parseFloat(cell.getAttribute("data-sort-value"));
+      if (!isNaN(num)) return num;
+    }
+    return cell.textContent.trim().toLowerCase();
+  }
+
+  /* A stable sort (every engine this app supports guarantees Array#sort is
+     stable) so rows tied on the sorted column keep the relative order the
+     server already gave them, which is itself a meaningful secondary sort
+     (see app/services/standings.py). */
+  function sortTableRows(table, colIndex, dir) {
+    var tbody = table.tBodies[0];
+    if (!tbody) return;
+    var mult = dir === "desc" ? -1 : 1;
+    var rows = Array.prototype.slice.call(tbody.rows);
+    rows.sort(function (a, b) {
+      var av = sortCellValue(a, colIndex);
+      var bv = sortCellValue(b, colIndex);
+      if (av < bv) return -1 * mult;
+      if (av > bv) return 1 * mult;
+      return 0;
+    });
+    rows.forEach(function (row) { tbody.appendChild(row); });
+  }
+
+  function initSortableTable(table) {
+    var headRow = table.tHead && table.tHead.rows[0];
+    if (!headRow) return;
+    var ths = Array.prototype.slice.call(headRow.cells).filter(function (th) {
+      return th.hasAttribute("data-sortable-col");
+    });
+    if (!ths.length) return;
+
+    var select = table.id
+      ? document.querySelector('[data-sort-select-for="' + table.id + '"]')
+      : null;
+
+    var state = {
+      col: parseInt(table.dataset.defaultSortCol, 10) || 0,
+      dir: table.dataset.defaultSortDir === "desc" ? "desc" : "asc"
+    };
+
+    function render(resort) {
+      if (resort) sortTableRows(table, state.col, state.dir);
+      ths.forEach(function (th) {
+        var caret = th.querySelector(".sort-caret");
+        if (caret) caret.remove();
+        if (th.cellIndex === state.col) {
+          th.setAttribute("aria-sort", state.dir === "desc" ? "descending" : "ascending");
+          th.insertAdjacentHTML("beforeend", sortCaretSvg(state.dir));
+        } else {
+          th.setAttribute("aria-sort", "none");
+        }
+      });
+      if (select) select.value = state.col + ":" + state.dir;
+    }
+
+    ths.forEach(function (th) {
+      th.tabIndex = 0;
+      th.setAttribute("role", "columnheader");
+      th.addEventListener("click", function () {
+        if (state.col === th.cellIndex) {
+          state.dir = state.dir === "asc" ? "desc" : "asc";
+        } else {
+          state.col = th.cellIndex;
+          state.dir = th.dataset.sortDefaultDir === "desc" ? "desc" : "asc";
+        }
+        render(true);
+      });
+      th.addEventListener("keydown", function (e) {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          th.click();
+        }
+      });
+    });
+
+    if (select) {
+      select.addEventListener("change", function () {
+        var parts = select.value.split(":");
+        state.col = parseInt(parts[0], 10);
+        state.dir = parts[1] === "desc" ? "desc" : "asc";
+        render(true);
+      });
+    }
+
+    /* The server already rendered the rows in this exact default order (see
+       season_standings/weekly_leaderboard's own sign-aware sort), so the
+       initial render only has to mark the caret and aria-sort, not re-sort
+       the DOM out from under a server order that may break ties (correct,
+       weekly wins, name) this client side sort does not know about. */
+    render(false);
+  }
+
+  function initSortableTables() {
+    document.querySelectorAll("table[data-sortable]").forEach(initSortableTable);
+  }
+
+  /* ------------------------------------------------------------- view toggle */
+
+  /* Results' "By player / By game" pick grid switch. Both grids are rendered
+     server side; this only ever shows one and hides the other, see
+     app.css's "By player / by game toggle" note. */
+  function initViewToggle() {
+    var buttons = document.querySelectorAll("[data-view-btn]");
+    if (!buttons.length) return;
+
+    function setView(view) {
+      document.querySelectorAll("[data-view-panel]").forEach(function (panel) {
+        panel.hidden = panel.dataset.viewPanel !== view;
+      });
+      buttons.forEach(function (btn) {
+        var active = btn.dataset.viewBtn === view;
+        btn.setAttribute("aria-pressed", active ? "true" : "false");
+        btn.classList.toggle("is-active", active);
+      });
+    }
+
+    buttons.forEach(function (btn) {
+      btn.addEventListener("click", function () { setView(btn.dataset.viewBtn); });
+    });
+
+    var initial = document.querySelector("[data-view-btn].is-active");
+    setView(initial ? initial.dataset.viewBtn : "player");
+  }
+
   /* --------------------------------------------------------------- countdown */
 
   function tickCountdowns() {
@@ -431,6 +589,8 @@
     }
     initReorderButton();
     initLockFlow();
+    initSortableTables();
+    initViewToggle();
     tickCountdowns();
     setInterval(tickCountdowns, 1000);
   }
@@ -491,6 +651,9 @@
     markSaved: markSaved,
     reorderToInputs: reorderToInputs,
     syncRowConfidence: syncRowConfidence,
-    regroupDivider: regroupDivider
+    regroupDivider: regroupDivider,
+    sortTableRows: sortTableRows,
+    initSortableTables: initSortableTables,
+    initViewToggle: initViewToggle
   };
 })();

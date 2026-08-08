@@ -33,6 +33,17 @@ class StandingRow:
             return "."
         return f"{round(100 * self.correct / self.possible)}%"
 
+    @property
+    def accuracy_sort(self) -> int:
+        """Numeric twin of accuracy, for the sortable table's data-sort-value.
+
+        Same rounding as accuracy so the two never disagree; -1 for "no possible picks yet"
+        so it sorts to the low end regardless of direction, since it is not a real accuracy.
+        """
+        if not self.possible:
+            return -1
+        return round(100 * self.correct / self.possible)
+
 
 @dataclass
 class WeeklyRow:

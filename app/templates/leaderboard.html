@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 {% import "components/icons.html" as ic %}
 
-{% block title %}Standings. {{ APP_NAME }}{% endblock %}
+{% block title %}Season standings. {{ APP_NAME }}{% endblock %}
 
 {% block content %}
 {# The router does not pass viewer_id into season_standings yet, so is_you can be
@@ -9,11 +9,12 @@
 {% set me = current_user.id if current_user else None %}
 {% set weeks_scored = (season | map(attribute="weeks_played") | max) if season else 0 %}
 {% set has_scores = season and weeks_scored > 0 %}
+{% set points_dir = "asc" if pool and pool.scoring_mode == "inverse" else "desc" %}
 
 <div class="page-head">
   <div>
     <p class="eyebrow">{{ pool.name if pool else "Season" }}</p>
-    <h1 class="page-title">Standings</h1>
+    <h1 class="page-title">Season standings</h1>
   </div>
   {% if pool %}
     <p class="muted num">{{ pool.season_year }} season</p>
@@ -43,22 +44,51 @@
 {% endif %}
 
 <section class="section" aria-labelledby="season-heading">
-  <h2 class="section-title" id="season-heading">Season standings</h2>
+  <div class="section-head">
+    <h2 class="section-title" id="season-heading">Season standings</h2>
+    <a class="btn btn-secondary btn-sm" href="/results">
+      {{ ic.icon("list", 16) }}<span>Weekly results</span>
+    </a>
+  </div>
 
   {% if has_scores %}
+    <div class="mobile-only sort-select-wrap">
+      <label class="field-label" for="season-sort-select">Sort by</label>
+      <select class="select select-sm" id="season-sort-select" data-sort-select-for="season-standings-table">
+        <option value="0:asc">Rank</option>
+        <option value="1:asc">Player, A to Z</option>
+        <option value="1:desc">Player, Z to A</option>
+        <option value="2:{{ points_dir }}">
+          {{ "Points against, low to high" if pool.scoring_mode == "inverse" else "Points, high to low" }}
+        </option>
+        <option value="2:{{ 'desc' if points_dir == 'asc' else 'asc' }}">
+          {{ "Points against, high to low" if pool.scoring_mode == "inverse" else "Points, low to high" }}
+        </option>
+        <option value="3:desc">Correct, most first</option>
+        <option value="3:asc">Correct, fewest first</option>
+        <option value="4:desc">Weekly wins, most first</option>
+        <option value="5:desc">Accuracy, highest first</option>
+      </select>
+    </div>
+
     <div class="table-wrap">
-      <table class="table">
+      <table class="table" id="season-standings-table" data-sortable
+             data-default-sort-col="2" data-default-sort-dir="{{ points_dir }}">
         <caption class="visually-hidden">
           Season standings{% if pool %}, {{ pool.season_year }} season{% endif %}. Ranked by total points.
+          Click a column heading to sort.
         </caption>
         <thead>
           <tr>
-            <th scope="col">Rank</th>
-            <th scope="col">Player</th>
-            <th scope="col" class="num">{{ "Points against" if pool.scoring_mode == "inverse" else "Points" }}</th>
-            <th scope="col" class="num">Correct</th>
-            <th scope="col" class="num">Weekly wins</th>
-            <th scope="col" class="num">Accuracy</th>
+            <th scope="col" data-sortable-col data-sort-default-dir="asc" aria-sort="none">Rank</th>
+            <th scope="col" data-sortable-col data-sort-default-dir="asc" aria-sort="none">Player</th>
+            <th scope="col" class="num" data-sortable-col data-sort-default-dir="{{ points_dir }}"
+                aria-sort="{{ 'ascending' if points_dir == 'asc' else 'descending' }}">
+              {{ "Points against" if pool.scoring_mode == "inverse" else "Points" }}
+            </th>
+            <th scope="col" class="num" data-sortable-col data-sort-default-dir="desc" aria-sort="none">Correct</th>
+            <th scope="col" class="num" data-sortable-col data-sort-default-dir="desc" aria-sort="none">Weekly wins</th>
+            <th scope="col" class="num" data-sortable-col data-sort-default-dir="desc" aria-sort="none">Accuracy</th>
           </tr>
         </thead>
         <tbody>
@@ -66,7 +96,7 @@
             {% set you = row.is_you or (me is not none and row.user_id == me) %}
             {% set played = row.weeks_played > 0 %}
             <tr class="lb-row{{ ' lb-leader' if row.rank == 1 }}{{ ' is-you' if you }}">
-              <td data-label="Rank">
+              <td data-label="Rank" data-sort-value="{{ row.rank }}">
                 <span class="rank-badge num{% if row.rank <= 3 %} is-{{ row.rank }}{% endif %}">{{ row.rank }}</span>
               </td>
               <td data-label="Player">
@@ -75,16 +105,16 @@
                   {% if you %}<span class="pill pill-you">You</span>{% endif %}
                 </span>
               </td>
-              <td class="num" data-label="Points">
+              <td class="num" data-label="Points" data-sort-value="{{ row.points }}">
                 {% if played %}{{ row.points }}{% else %}<span class="no-entry">No entry</span>{% endif %}
               </td>
-              <td class="num" data-label="Correct">
+              <td class="num" data-label="Correct" data-sort-value="{{ row.correct }}">
                 {% if played %}{{ row.correct }} of {{ row.possible }}{% else %}<span class="no-entry">.</span>{% endif %}
               </td>
-              <td class="num" data-label="Weekly wins">
+              <td class="num" data-label="Weekly wins" data-sort-value="{{ row.weekly_wins }}">
                 {% if played %}{{ row.weekly_wins }}{% else %}<span class="no-entry">.</span>{% endif %}
               </td>
-              <td class="num" data-label="Accuracy">
+              <td class="num" data-label="Accuracy" data-sort-value="{{ row.accuracy_sort }}">
                 {% if row.possible %}{{ row.accuracy }}{% else %}<span class="no-entry">{{ row.accuracy }}</span>{% endif %}
               </td>
             </tr>
@@ -106,72 +136,6 @@
         Saturday and Sunday, and the table fills itself.
       </p>
       <a class="btn btn-primary" href="/picks">Make your picks</a>
-    </div>
-  {% endif %}
-</section>
-
-<section class="section" aria-labelledby="weekly-heading">
-  {% if week and weekly %}
-    <div class="section-head">
-      <h2 class="section-title" id="weekly-heading">{{ week.label }} leaderboard</h2>
-      <a class="btn btn-secondary btn-sm" href="/results?week={{ week.week_number }}">
-        {{ ic.icon("list", 16) }}<span>See every pick</span>
-      </a>
-    </div>
-
-    {% if week.status != "scored" %}
-      <p class="muted lb-note">This week is still being scored. Points move as games go final.</p>
-    {% endif %}
-
-    <div class="table-wrap">
-      <table class="table">
-        <caption class="visually-hidden">{{ week.label }} leaderboard. Ranked by points for the week.</caption>
-        <thead>
-          <tr>
-            <th scope="col">Rank</th>
-            <th scope="col">Player</th>
-            <th scope="col" class="num">{{ "Points against" if pool.scoring_mode == "inverse" else "Points" }}</th>
-            <th scope="col" class="num">Correct</th>
-          </tr>
-        </thead>
-        <tbody>
-          {% for row in weekly %}
-            {% set you = row.is_you or (me is not none and row.user_id == me) %}
-            <tr class="lb-row{{ ' lb-leader' if row.is_winner }}{{ ' is-you' if you }}">
-              <td data-label="Rank">
-                <span class="rank-badge num{% if row.rank <= 3 %} is-{{ row.rank }}{% endif %}">{{ row.rank }}</span>
-              </td>
-              <td data-label="Player">
-                <span class="lb-name">
-                  <span class="lb-player">{{ row.display_name }}</span>
-                  {% if you %}<span class="pill pill-you">You</span>{% endif %}
-                  {% if row.is_winner %}
-                    <span class="ribbon">{{ ic.icon("flag", 13) }}Winner</span>
-                  {% endif %}
-                </span>
-              </td>
-              <td class="num" data-label="Points">
-                {% if row.did_not_submit %}<span class="no-entry">No picks submitted</span>{% else %}{{ row.points }}{% endif %}
-              </td>
-              <td class="num" data-label="Correct">
-                {% if row.did_not_submit %}<span class="no-entry">.</span>{% else %}{{ row.correct }} of {{ row.possible }}{% endif %}
-              </td>
-            </tr>
-          {% endfor %}
-        </tbody>
-      </table>
-    </div>
-    {% if pool.scoring_mode == "inverse" %}
-      <p class="muted lb-note">
-        Low score wins. You take the points you staked on any pick that loses.
-      </p>
-    {% endif %}
-  {% else %}
-    <h2 class="section-title" id="weekly-heading">Weekly leaderboard</h2>
-    <div class="empty-state">
-      {{ ic.icon("calendar", 28) }}
-      <p class="empty-state-title">No week to show</p>
-      <p>The weekly leaderboard opens once a week locks and the first scores come in.</p>
     </div>
   {% endif %}
 </section>
