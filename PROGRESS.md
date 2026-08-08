@@ -12,7 +12,7 @@ reasoning behind every judgment call made along the way.
 - [x] Phase 6. Navigation, sortable tables, transposed results grid
 - [x] Phase 7. Entry payment and payouts
 - [x] Phase 8. The scenarios engine
-- [ ] Phase 9. Demo data, deploy, and launch readiness
+- [x] Phase 9. Demo data, deploy, and launch readiness
 
 ## Phase 0 notes
 
@@ -56,9 +56,10 @@ Fixed the root bug: `fetch_candidates` sent the pool's own week number straight 
 the literal week number for both NFL and college, but the two leagues' week numbers are not
 aligned (college starts about three weeks before the NFL and has a bowl season the NFL has no
 equivalent of). This made a build fail outright the moment the two calendars drifted apart,
-including the real launch date: Saturday September 12, 2026 is NFL week 1 and college week 3,
-so the old code would have sent week 1 (or whatever number NFL detection produced) to college
-too and silently built the wrong college slate, or built nothing.
+including the real launch date, Saturday September 12, 2026, where the NFL and college week
+numbers do not align (confirmed later by live probe, see Phase 9b: NFL week 1, college week 2),
+so the old code would have sent one league's week number to the other league too and silently
+built the wrong college slate, or built nothing.
 
 The fix, in order:
 
@@ -87,7 +88,9 @@ The fix, in order:
 - `tests/fixtures/espn_cfb_2026_calendar.json` (new). See `DECISIONS.md` for how it was built
   from the real recorded 2025 college calendar.
 - `tests/test_calendar.py` (14 tests) and `tests/test_ingest.py` (17 tests), new. Cover the
-  concrete September 12, 2026 case (NFL week 1, college week 3), a league outside both its
+  concrete September 12, 2026 case against the synthetic fixture (NFL week 1, college week 3
+  in that fixture's own fabricated calendar, see DECISIONS.md for why that number is an
+  algorithm-test fixture value, not a claim about the real season), a league outside both its
   regular season and postseason resolving to `None` without raising, a December anchor putting
   college into the postseason and setting `is_bowl_week`, caching (one HTTP call per league per
   season across repeated resolutions), and the rewritten dead end message.
@@ -491,3 +494,273 @@ Test suite: **764 passed**, 0 failed (704 at the Phase 7 baseline, 60 net new: 2
 makes the 2 second cap achievable, the chunked Monte Carlo table, why sample count is decided
 up front instead of by watching the clock, the representative-scenario selection heuristic,
 and the cache eviction story) are recorded in `DECISIONS.md` under "Phase 8".
+
+## Phase 9 notes
+
+Three parts: rebuild `seed-demo` into a real three-week demo, wire the real pool up for the
+real Week 1 launch, and an honest acceptance pass against the 21 item checklist.
+
+- Corrected the one place this build had asserted "college week 3" as a fact about the real
+  2026 season (`DECISIONS.md`, `PROGRESS.md`, both under Phase 1): a live probe now on record
+  (see Phase 9b below) found college week 2, not week 3, for the real September 12, 2026
+  anchor date. `tests/fixtures/espn_cfb_2026_calendar.json`, the Phase 1 synthetic fixture
+  built by shifting the real 2025 calendar forward 364 days, is untouched: it is an algorithm
+  test against fixed input, not a claim about the real season, and its own week-3 window
+  number is now labelled as such in `DECISIONS.md`.
+- `app/services/demo.py` rebuilt around three real weeks instead of one: week 5 and week 6 of
+  the real 2025 NFL and FBS seasons (both fully scored by default), and week 7, an open week
+  with no picks and an artificially future `lock_at`. Eight named demo players (up from six),
+  each picking exactly `pool.picks_required` (15) of the published 20-game slate, not the
+  whole slate, with a deterministically varied subset per player. Week 5 carries a voided game
+  (the same `set_void` a commissioner would use on a real week, applied to a real final game
+  purely to make the rule visible on screen) and one real no-show (Casey Nolan). A
+  `--scenario-week` flag on `seed-demo` leaves week 6 partially played instead of fully scored
+  (`pool.scenarios_min_final_games` games final, the rest reverted to pending) so the
+  Scenarios panel has a real week to open against in the demo. Demo payout rules (weekly
+  1st/2nd/3rd, season 1st/2nd) and an entry fee/Venmo handle are seeded, every dollar figure
+  and label clearly marked `(demo)`; every demo member is marked paid so the demo itself never
+  hits its own Venmo gate. See `DECISIONS.md` for the second historical week's fixture choice,
+  the future-lock-time reasoning, and the `--scenario-week` mechanism.
+- New fixtures, captured live on 2026-08-08 (`tests/fixtures/espn_nfl_2025_w6.json`,
+  `espn_cfb_2025_w6.json`, `espn_core_odds_nfl_2025_w6.json`,
+  `espn_core_odds_cfb_2025_w6.json`): real NFL and FBS week 6 of the 2025 season, already
+  fully in the past. College spreads for this week come from ESPN's own core odds endpoint
+  (unmetered, keyless, confirmed live to carry a real spread for every one of that week's
+  recorded college games) rather than CFBD, since no `CFBD_API_KEY` was configured on the
+  build machine; see `DECISIONS.md`.
+- `app/cli.py`'s `seed-demo` command gained `--scenario-week`; `--reset` still rebuilds the
+  whole three-week demo.
+- `tests/test_demo.py` (new, 16 tests): the fixture-loading paths, the varied 15-of-20 subset,
+  the real no-show, the voided game, the open week's future lock and empty entry, the
+  `--scenario-week` partial state, the demo payout rules, `--reset` idempotency. All offline,
+  reading the same fixture files `seed-demo` reads, no network.
+- `app/config.py` gained `settings.week1_anchor_date` (default `2026-09-12`, the real,
+  confirmed anchor), following the exact pattern `season_year`/`default_join_code` already
+  use. `app/cli.py`'s `seed_admin` threads it onto a freshly created pool's
+  `Pool.week1_anchor_date`. Added to `.env.example` as `WEEK1_ANCHOR_DATE`. No other new
+  environment variable was needed anywhere in this phase; checked every `Settings` field
+  against `.env.example` directly rather than assuming.
+- `tests/test_ingest.py` gained
+  `test_the_build_fetch_score_pipeline_is_idempotent_across_three_runs`: the same
+  `build_slate` / `fetch_results` / `score_week_for_pool` calls `run_cron` makes per pool per
+  live week, run three times back to back against unchanged, fully cached ESPN and CFBD
+  fixture responses. Run 2 to run 3 is asserted to be a true no-op (identical `Game` and
+  `WeekEntry` rows, no duplicates of either, the same `Week` row every time).
+  `detect_week`/`sync_week`'s own wall-clock-dependent week detection is already covered
+  separately in this file and in `tests/test_calendar.py`; this test calls `build_slate`
+  directly with an explicit week number so its outcome does not depend on what day the suite
+  happens to run.
+- No `app/models.py` change and no new Alembic migration this phase: `Pool.week1_anchor_date`
+  already existed from Phase 1, and everything else added was a `Settings` field, demo data,
+  or tests.
+
+Test suite: **781 passed**, 0 failed (764 at the Phase 8 baseline, 17 net new: 16 in
+`tests/test_demo.py`, 1 in `tests/test_ingest.py`). `ruff check .` and `black .` both clean,
+and this run made zero live network calls (`app/services/demo.py` reads fixture files
+directly, the new idempotency test runs entirely against `FeedCache` rows seeded from
+fixtures, and `tests/conftest.py`'s autouse `force_offline_mode` fixture blocks the socket
+layer outright for the whole session regardless).
+
+## Phase 9b live verification
+
+Real, unedited terminal output. `settings.season_year` is `2026` by default; `seed-admin` was
+run with throwaway, non-production admin credentials passed inline on the command line
+(`ADMIN_EMAIL=verify@example.com ADMIN_PASSWORD=verify-only-not-real
+DEFAULT_JOIN_CODE=WEEK1VERIFY`, no `.env` file exists on this machine, none of this was
+committed) purely to stand up a real `Pool` row with `season_year=2026` and
+`week1_anchor_date=2026-09-12` to probe against, exactly as `settings.week1_anchor_date`'s new
+default would produce for a real deploy.
+
+```
+$ ADMIN_EMAIL=verify@example.com ADMIN_PASSWORD=verify-only-not-real DEFAULT_JOIN_CODE=WEEK1VERIFY python -m app.cli seed-admin
+Created admin user verify@example.com.
+Created pool PickSportPlus with join code WEEK1VERIFY.
+Added the admin as commissioner of the pool.
+
+Sign in at http://localhost:8000/login as verify@example.com
+Share the join code WEEK1VERIFY with your players.
+```
+
+```
+$ python -m app.cli doctor
+Database
+  dialect     : sqlite
+  url         : sqlite:///./picksportplus.db
+INFO    alembic.runtime.migration: Context impl SQLiteImpl.
+INFO    alembic.runtime.migration: Will assume non-transactional DDL.
+  migrations  : up to date
+
+OFFLINE_MODE  : False
+
+Provider keys (presence only, values are never printed)
+  ODDS_API_KEY : NOT SET
+  CFBD_API_KEY : NOT SET
+
+Pool: PickSportPlus (id 1)
+  season_year        : 2026
+  sports             : ['nfl', 'ncaaf']
+  num_games_per_week : 20
+  picks_required     : 15
+  target_nfl/ncaaf   : 8 / 12
+  auto_publish       : False
+  current_week       : 1
+  timezone           : America/New_York
+
+Live ESPN scoreboard probe (unmetered, no data written)
+  [nfl]
+    url    : https://site.api.espn.com/apis/site/v2/sports/football/nfl/scoreboard?seasontype=2&dates=2026
+INFO    httpx: HTTP Request: GET https://site.api.espn.com/apis/site/v2/sports/football/nfl/scoreboard?seasontype=2&dates=2026 "HTTP/1.1 200 OK"
+    status : HTTP 200
+    season year returned : None
+    week number returned : 18
+    game count           : 100
+    valid regular season range : week 1 (2026-09-09) to week 18 (2027-01-13)
+  [ncaaf]
+    url    : https://site.api.espn.com/apis/site/v2/sports/football/college-football/scoreboard?seasontype=2&dates=2026&groups=80
+INFO    httpx: HTTP Request: GET https://site.api.espn.com/apis/site/v2/sports/football/college-football/scoreboard?seasontype=2&dates=2026&groups=80 "HTTP/1.1 200 OK"
+    status : HTTP 200
+    season year returned : None
+    week number returned : 1
+    game count           : 200
+    valid regular season range : week 1 (2026-08-22) to week 15 (2026-12-13)
+```
+
+(`week number returned` above is whatever week the scoreboard defaults to on the day this ran,
+2026-08-08, not a resolution for any specific anchor date; the real per-anchor resolution is
+the direct `resolve_league_week` call below. NFL's own valid range already confirms week 1
+starts 2026-09-09, containing September 12.)
+
+Direct call, the same function `fetch_candidates` uses for every real build:
+
+```
+$ python -c "
+import datetime as dt
+from app.db import session_scope
+from app.services import calendar
+
+with session_scope() as db:
+    for league in ('nfl', 'ncaaf'):
+        print(league, calendar.resolve_league_week(db, league, 2026, dt.date(2026, 9, 12)))
+"
+nfl LeagueResolution(league='nfl', week=1, season_type=2, label='Week 1', start=datetime.datetime(2026, 9, 9, 7, 0, tzinfo=datetime.timezone.utc), end=datetime.datetime(2026, 9, 16, 6, 59, tzinfo=datetime.timezone.utc))
+ncaaf LeagueResolution(league='ncaaf', week=2, season_type=2, label='Week 2', start=datetime.datetime(2026, 9, 8, 7, 0, tzinfo=datetime.timezone.utc), end=datetime.datetime(2026, 9, 14, 6, 59, tzinfo=datetime.timezone.utc))
+```
+
+**Confirmed live, today: September 12, 2026 is NFL week 1 and college week 2** (not week 3,
+correcting the Phase 1 guess, see above). This is what is actually true right now; per the
+brief, this can legitimately read differently again by the time a human re-runs it closer to
+the real date, and that is exactly why the app resolves it live per pool week rather than
+hard coding a number anywhere.
+
+A full live `build-slate` for pool week 1 (this pool's `week1_anchor_date=2026-09-12`,
+`--no-metered` so nothing but ESPN's free, keyless feeds are touched) confirms a real
+candidate pool comes back for the anchor date, not just a calendar window:
+
+```
+$ python -m app.cli build-slate --week 1 --year 2026 --no-metered
+... (elided: dozens of identical "INFO httpx: HTTP Request: GET .../odds ... 200 OK" lines,
+     one per real ESPN core-odds lookup, all real, all HTTP 200)
+Week 1: 102 candidates, 23 with a spread, 20 on the slate. league mix: College 7, NFL 13.
+spread sources: espn 23.
+  note: Only 7 college games had a resolvable spread, 5 short of the target of 12.
+  note: The gap was filled with the next closest NFL games.
+  warning: Stopped ESPN core odds lookups at 60 games. Some spreads may be unresolved.
+  warning: 79 games have no ESPN spread and metered lookups were skipped.
+```
+
+102 real games came back across both leagues for the real September 12, 2026 window. Most do
+not have a posted spread yet, over a month before kickoff, which is expected and exactly why
+this is a genuine live pipeline result, not a canned one; the slate still filled to the full
+20 by borrowing NFL's deeper early spread coverage, precisely the cross-league fill behaviour
+`select_slate_by_targets` is designed to do. Closer to game day, real spreads will post for
+more of the 12 college target games and subsequent rebuilds will naturally shift the mix back
+toward 8 NFL / 12 college.
+
+This local database and its throwaway `verify@example.com` admin pool are gitignored and were
+not committed; they exist only to produce the output above.
+
+### render.yaml / run-cron: confirmed, with a real launch-readiness gap flagged
+
+Read both files directly rather than assuming:
+
+- `app/cli.py`'s `run_cron` does exactly what the brief describes: per pool, `sync_week`
+  (`detect_week` then `build_slate`, which only auto-publishes when `pool.auto_publish` is
+  true, default `False` since Phase 5), then for every week still `open` or `locked`,
+  `fetch_results` followed by `score_week_for_pool`. Confirmed by direct code read, and now
+  also by the idempotency test above running that exact sequence three times.
+- The committed `render.yaml` runs **no cron at all**, on purpose: it is documented, in the
+  file itself and in `README.md`, as the free-tier demo blueprint, and Render's free plan does
+  not offer scheduled jobs. `README.md`'s "Deploying the full app to Render (paid, with live
+  automation)" section already gives the exact `type: cron` block to add, or the alternative
+  of running `python -m app.cli run-cron` hourly from any external scheduler, both pre-dating
+  this phase.
+- **This is a real, unresolved launch-readiness item, not a bug this phase introduced or
+  silently accepted as fixed.** Before real players rely on Week 1 building and scoring
+  itself automatically, a human needs to either upgrade the Render plan and add the cron
+  service from `README.md`, or point an external scheduler at `python -m app.cli run-cron`
+  hourly against the same `DATABASE_URL`. Flagged again in the final report below.
+
+## Phase 9c acceptance pass
+
+Each line: pass (backed by a real automated test, named), or "requires manual verification"
+with the concrete reason a router-level test cannot stand in for it (no browser, no JS
+execution environment in this repo).
+
+1. pass. `tests/test_app.py::test_admin_pages_render_for_commissioner` (`/admin/slate` renders
+   for the commissioner), combined with the live Phase 9b verification above: the real
+   September 12, 2026 candidate pool (102 games) and a real 20-game slate were built live.
+2. pass. `tests/test_slate.py::test_a_pinned_candidate_survives_the_widest_spread_in_the_pool`,
+   `test_a_pinned_candidate_survives_a_trim_even_as_the_farthest_game`, and
+   `tests/test_ingest.py`'s rivalry auto-pin/rebuild persistence tests.
+3. pass. `lock_at` is `compute_lock_at`'s earliest kickoff, unit tested in
+   `tests/test_slate.py` (9 tests) and exercised by every `apply_slate` call in
+   `tests/test_ingest.py`; `publish_week` never recomputes it, `apply_slate` already has.
+4. pass. `tests/test_app.py::test_unpaid_member_cannot_save_picks_when_payment_required`,
+   `test_unpaid_member_cannot_lock_picks_when_payment_required`,
+   `test_picks_page_shows_the_venmo_panel_when_gated`,
+   `test_register_with_the_right_code_joins_the_pool`.
+5. pass. `tests/test_app.py::test_member_paid_toggle_marks_and_unmarks`,
+   `test_paid_member_can_save_and_lock_picks_when_payment_required`.
+6. requires manual verification. Typing a number, clicking "Reorder to inputs," and dragging
+   are all client-side JS (`app/static/app.js`); this repo has no browser automation or JS
+   test runner, only `TestClient` router tests, which never execute JavaScript.
+7. pass. `tests/test_app.py::test_an_incomplete_submission_is_rejected` (the specific count
+   error) and the full-slate Save tests prove a valid 15-pick submission saves.
+8. pass. `tests/test_app.py::test_picks_lock_with_a_valid_submission_saves_and_locks`,
+   `test_picks_unlock_clears_the_lock_while_the_week_is_still_open`,
+   `test_picks_page_renders_in_every_state` cover lock, the locked read-only summary state,
+   and unlock-and-edit before `lock_at`; the confirmation panel's own JS toggle is not
+   exercised, same reason as item 6.
+9. requires manual verification. A real or emulated 360px touch viewport needs a browser;
+   nothing in this repo can drive one.
+10. pass. `tests/test_app.py::test_results_grid_is_player_major_with_confidence_columns_and_game_major_toggle`.
+11. pass. `tests/test_scoring.py` and `tests/test_app.py::test_scoring_end_to_end` prove lowest
+    total wins under `scoring_mode="inverse"`.
+12. pass. `tests/test_scoring.py::test_inverse_no_show_takes_the_maximum_penalty_and_is_flagged`
+    (the real `sum(1..picks_required)`, never a literal 120) and the results page's
+    `did_not_submit`-driven "No picks submitted" copy; also on screen in the Phase 9a demo
+    (Casey Nolan, week 5).
+13. pass. `tests/test_app.py::test_scenarios_panel_visible_shows_placement_percentages` and
+    `test_commissioner_can_change_the_scenarios_panel_thresholds` (reads
+    `pool.scenarios_min_final_games`, never a hard coded 5); also on screen via
+    `seed-demo --scenario-week`.
+14. pass. `tests/test_app.py::test_scenarios_panel_moneyline_toggle_labels_estimated_from_betting_odds`
+    plus the even-model default coverage in `tests/test_scenarios.py`.
+15. pass. `tests/test_app.py::test_custom_scenario_endpoint_recomputes_standings_for_every_player`.
+16. pass. `tests/test_payouts.py` (tie-split reconciles to the cent) and
+    `tests/test_app.py::test_settings_save_persists_venmo_and_payment_fields` plus the payout
+    column tests; also on screen via the Phase 9a demo's labelled demo payout rules.
+17. requires manual verification. Sorting is triggered entirely by client-side JS
+    (`initSortableTable` in `app/static/app.js`, both the header click path and the mobile
+    `<select data-sort-select-for>` path); nothing in this repo can execute it.
+18. pass. `tests/test_app.py::test_standings_page_has_no_weekly_leaderboard`.
+19. pass. `grep -rn "—" app/ SPEC.md README.md` returns nothing (run directly, exit code 1,
+    zero matches).
+20. pass. Scanned every `.py`/`.html`/`.js`/`.css` file under `app/` for emoji code points
+    (the common emoji blocks plus symbol/dingbat ranges); zero matches.
+21. pass. `ruff check .`, `black --check .`, `pytest -q` all clean, 781 passed, 0 failed, zero
+    live network calls during the run (see Phase 9 notes above).
+
+**18 of 21 are real automated passes. 3 (items 6, 9, 17) require manual browser verification**
+because they are pure client-side JS/touch/viewport behavior with no browser automation tool
+available in this environment.

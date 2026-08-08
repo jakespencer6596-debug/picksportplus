@@ -11,7 +11,7 @@ PickSportPlus is a weekly confidence pick'em pool for NFL and college football (
 - Each week the app publishes a slate of games. The default is 20 games, split 8 NFL and 12 college (FBS). The total and the per league counts are commissioner settings.
 - The slate is chosen to be the closest games that week, meaning the games with the smallest betting point spread, so players pick genuinely competitive matchups instead of blowouts. Closest is judged within each league against that league's target count.
 - Each player picks the straight-up winner of exactly `picks_required` of the slate games (the default is 15, out of the default 20 game slate) and ranks their confidence across only the games they picked, as one combined ranking. A player assigns `picks_required` points to their most confident pick down to 1 point for their least confident pick, using each value from 1 to `picks_required` exactly once. A slate game a player does not pick is legal to leave alone; it simply scores nothing for that player. Both the slate size and `picks_required` are commissioner settings, read from the pool, never hard coded.
-- When a game goes final, a correct pick earns the points staked on it and a wrong pick earns 0.
+- When a game goes final, each pick is scored per the pool's `scoring_mode` (Section 9). The pool's real, default rule is `inverse`: a wrong pick counts its staked points against the player and a correct pick earns nothing, lowest total wins. `standard` (a correct pick earns its staked points, highest total wins) is kept switchable per pool.
 - The app maintains leaderboards all season: weekly points, season total points, games correct, and weekly wins.
 
 The point spread is used only to select the slate (pick the closest games). Scoring is straight-up, meaning did the player pick the team that actually won. Do not implement against-the-spread scoring.
@@ -246,7 +246,7 @@ For a week that is open and before `lock_at`:
 - Never hard code the slate size or `picks_required` in copy or validation. Always read both from the pool.
 - **Player lock, distinct from the pool wide `lock_at`.** After ranking, a player may deliberately lock their own picks in early: "Lock picks" opens a confirmation panel summarizing the `picks_required` picks in confidence order before anything is submitted, a second, separate tap from Save so locking cannot happen by accident. Locking saves the entry (the same validation Save runs) and sets `WeekEntry.locked_at`. While `locked_at` is set and the week itself has not reached `lock_at`, the page renders a read only confirmation view for that player alone, with an "Unlock to edit" action. The moment the pool wide `lock_at` passes, the normal read only state takes over for everyone regardless of `locked_at`, and unlocking is refused from then on; a player lock never grants or costs any extra time against the real lock.
 - Editable until `lock_at`, then read only for everyone. After lock, all players' picks become visible on the Results page for transparency.
-- A player who did not submit by `lock_at` scores 0 for that week.
+- A player who did not submit by `lock_at` is flagged `did_not_submit` and scored per the pool's `scoring_mode`: 0 under `standard`, the maximum possible penalty (`sum(1..picks_required)`) under `inverse` (the default), and never eligible to win the week either way. See Section 9.
 
 ## 9. Scoring and leaderboards
 
@@ -326,7 +326,7 @@ All idempotent, all take `--year` and `--week` where relevant, defaulting to the
 
 - `init-db` create schema or run migrations.
 - `seed-admin` create the initial admin user, the default pool, and the join code from env.
-- `seed-demo` create a demo pool, a few players, and a historical completed week (real past season and week) with picks, so the full UI and scoring can be exercised immediately.
+- `seed-demo` create a demo pool, eight players, two fully scored historical weeks (real past season and weeks) with picks, payouts and season standings, and one open current week (a reused real historical slate, no picks, an artificially future `lock_at`), so the full UI, scoring, payouts and scenarios can all be exercised immediately. `--reset` rebuilds it; `--scenario-week` leaves the second historical week partially played instead of fully scored, so the Scenarios panel has a real week to open against.
 - `sync-week` detect the current or upcoming week, build the slate, and auto publish it when `auto_publish` is true.
 - `build-slate --week` build a draft slate for a specific week.
 - `publish-week --week` open a drafted week.
@@ -350,7 +350,7 @@ See `app/models.py`. Season standings are aggregated from `week_entries` on read
 
 Feeds fail soft: timeouts, one or two retries, cache last good data, and clear admin visible warnings when a spread or score cannot be resolved, never a crashed page. Never commit secrets, ship `.env.example`. The README covers what it is, Windows setup, env vars, running a week end to end, the historical demo, and Render deploy with the cost note.
 
-Done when, with `.env` filled and `seed-demo` run, the owner can locally: log in as admin, see the closest spread slate across NFL and FBS auto published for the current week, log in as a player and submit winner plus confidence picks with the drag to rank UI on both a phone width and desktop width screen, lock the week, run fetch results and score week, and see correct weekly and season leaderboards. The same app deploys to Render from GitHub with the hourly `run-cron` handling slate publish, results, and scoring. The interface matches the collegiate design system in Section 3, is fully responsive, and contains no em dashes and no emoji.
+Done when, with `.env` filled and `seed-demo` run, the owner can locally: log in as admin, see the closest spread slate across NFL and FBS built and, once reviewed, published for the current week (`auto_publish` is off by default, Section 7; a commissioner who wants the old fully automatic behavior can switch it on), log in as a player and submit winner plus confidence picks with the drag to rank UI on both a phone width and desktop width screen, lock the week, run fetch results and score week, and see correct weekly and season leaderboards. The same app deploys to Render from GitHub, with the hourly `run-cron` handling slate build, results, and scoring once a cron schedule is actually wired up (a paid Render plan with the cron service from the README, or any external scheduler hitting `run-cron`; the committed `render.yaml` for the free demo intentionally has none, see the README). The interface matches the collegiate design system in Section 3, is fully responsive, and contains no em dashes and no emoji.
 
 ## 19. Optional future extensions (not in v1)
 

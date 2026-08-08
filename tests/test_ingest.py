@@ -15,11 +15,11 @@ import datetime as dt
 
 from sqlalchemy import select
 
-from app.models import Game, Pick, Pool, User, Week
+from app.models import Game, Pick, Pool, PoolMember, User, Week, WeekEntry
 from app.providers import espn
 from app.providers.http import cache_put
 from app.providers.teams import canonical_key
-from app.services import ingest
+from app.services import ingest, results
 
 UTC = dt.UTC
 
@@ -595,3 +595,98 @@ def test_a_new_rivalry_game_does_not_resize_a_frozen_slate(db, monkeypatch):
     assert new_row.pinned is True  # auto-pin still fires the moment the row is created
     assert new_row.in_slate is False  # but the live, frozen slate itself is untouched
     assert report.selected == 1  # the game count genuinely did not move
+
+
+# The cron path: build, fetch results, score, run three times in a row (Phase 9b) ------------
+
+
+def test_the_build_fetch_score_pipeline_is_idempotent_across_three_runs(db, load_fixture):
+    """The real functions app.cli.run_cron calls per pool per live week, run back to back
+    against unchanged upstream data.
+
+    run_cron does, per pool: sync_week (detect_week, then build_slate), then for every week
+    still open or locked, fetch_results followed by score_week_for_pool. detect_week itself
+    reads the real wall clock and is covered on its own in this file and in
+    tests/test_calendar.py, so this test calls build_slate directly with an explicit week
+    number (week1_anchor_date left unset, the documented pre-anchor fallback that sends the
+    week number straight to both leagues) rather than routing through sync_week, which is
+    what keeps this test's outcome independent of what day pytest happens to run.
+
+    Run 1 to run 2 may legitimately change something, this is the first time results are
+    fetched and scored. Run 2 to run 3, against the exact same cached ESPN and CFBD
+    responses, must be a true no-op: the same Week row, the same Game rows with the same
+    values, the same WeekEntry rows with the same values, nothing duplicated.
+    """
+    pool = _pool(
+        db,
+        week1_anchor_date=None,
+        num_games_per_week=20,
+        target_nfl=8,
+        target_ncaaf=12,
+    )
+    commissioner = User(
+        email="cron-idempotency@example.com",
+        password_hash="x",
+        display_name="Commissioner",
+        role="player",
+    )
+    db.add(commissioner)
+    db.flush()
+    db.add(PoolMember(pool_id=pool.id, user_id=commissioner.id, role_in_pool="commissioner"))
+    db.flush()
+
+    year, week_number = 2025, 5
+    _cache_week(db, load_fixture, "nfl", year, 2, week_number, "espn_nfl_2025_w5.json")
+    _cache_week(db, load_fixture, "ncaaf", year, 2, week_number, "espn_cfb_2025_w5.json")
+    for event_id, payload in load_fixture("espn_core_odds_nfl_2025_w5.json").items():
+        cache_put(db, f"espn:coreodds:nfl:{event_id}", payload)
+    cache_put(
+        db, f"cfbd:lines:{year}:regular:{week_number}", load_fixture("cfbd_lines_2025_w5.json")
+    )
+
+    def run_once() -> Week:
+        ingest.build_slate(db, pool, year, week_number, allow_metered=True, publish=True)
+        week = db.scalar(
+            select(Week).where(
+                Week.pool_id == pool.id,
+                Week.season_year == year,
+                Week.week_number == week_number,
+            )
+        )
+        if week.status == "draft":
+            ingest.publish_week(db, week)
+        results.fetch_results(db, pool, week)
+        results.score_week_for_pool(db, pool, week)
+        db.flush()
+        return week
+
+    def _snapshot(week: Week) -> tuple[dict, dict]:
+        games = {
+            g.id: (g.status, g.home_score, g.away_score, g.winner, g.in_slate, g.slate_rank)
+            for g in db.scalars(select(Game).where(Game.week_id == week.id))
+        }
+        entries = {
+            e.user_id: (e.points, e.correct, e.possible, e.did_not_submit, e.is_winner)
+            for e in db.scalars(select(WeekEntry).where(WeekEntry.week_id == week.id))
+        }
+        return games, entries
+
+    week_run1 = run_once()
+    games_1, entries_1 = _snapshot(week_run1)
+
+    week_run2 = run_once()
+    games_2, entries_2 = _snapshot(week_run2)
+
+    week_run3 = run_once()
+    games_3, entries_3 = _snapshot(week_run3)
+
+    # No duplicate Week row across three runs of the pipeline.
+    assert week_run1.id == week_run2.id == week_run3.id
+
+    # No duplicate Game or WeekEntry rows.
+    assert len(games_1) == len(games_2) == len(games_3) > 0
+    assert len(entries_1) == len(entries_2) == len(entries_3) > 0
+
+    # Run 2 to run 3, against unchanged upstream data, is a true no-op.
+    assert games_3 == games_2
+    assert entries_3 == entries_2

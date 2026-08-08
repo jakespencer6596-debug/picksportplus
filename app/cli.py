@@ -135,6 +135,11 @@ def seed_admin() -> None:
                 open_registration=settings.open_registration,
                 timezone=settings.timezone,
                 current_week=1,
+                # Real, confirmed anchor for the season (see DECISIONS.md, Phase 9b). Nullable,
+                # so leaving WEEK1_ANCHOR_DATE unset in the environment still seeds a working
+                # pool, just one that falls back to detect_week's pre-anchor behaviour until a
+                # commissioner sets it from /admin/settings.
+                week1_anchor_date=settings.week1_anchor_date,
             )
             db.add(pool)
             db.flush()
@@ -157,12 +162,21 @@ def seed_admin() -> None:
 @app.command("seed-demo")
 def seed_demo(
     reset: bool = typer.Option(False, "--reset", help="Delete and rebuild the demo pool."),
+    scenario_week: bool = typer.Option(
+        False,
+        "--scenario-week",
+        help=(
+            "Leave the second historical week (week 6) partially played, some games final "
+            "and the rest reverted to pending, instead of fully scored, so the Scenarios "
+            "panel has a real week to open against."
+        ),
+    ),
 ) -> None:
-    """Load a real completed week with real spreads, players and picks."""
+    """Load three real weeks (two scored, one open) with real spreads, players and picks."""
     from app.services.demo import seed_demo_pool
 
     with session_scope() as db:
-        report = seed_demo_pool(db, reset=reset)
+        report = seed_demo_pool(db, reset=reset, scenario_week=scenario_week)
     for line in report:
         _echo(line)
 

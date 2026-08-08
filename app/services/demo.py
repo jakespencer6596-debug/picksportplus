@@ -1,26 +1,45 @@
-"""seed-demo: a real completed week, loaded from recorded fixtures, with no network calls.
+"""seed-demo: a real three-week demo, loaded from recorded fixtures, with no network calls.
 
 Everything here is genuine. The games, kickoff times, final scores and point spreads are the
-real NFL and FBS week 5 of the 2025 season, recorded from ESPN and CollegeFootballData on
-2026-08-02 and committed to tests/fixtures.
+real NFL and FBS weeks 5 and 6 of the 2025 season, recorded from ESPN on 2026-08-02 (week 5)
+and 2026-08-08 (week 6) and committed to tests/fixtures. The only invented data is the eight
+players and their picks, generated from a fixed seed so the demo is identical on every machine
+and every run, and the payout dollar figures, which are clearly labelled as demo amounts.
 
-The only invented data is the players and their picks, which are generated from a fixed seed
-so the demo is identical on every machine and every run.
+Three weeks:
+
+  Week 5   Fully scored. Real NFL and college week 5 of 2025. One game is voided after the
+           fact (a real commissioner action, applied to a real completed game purely to make
+           the void scoring rule visible on screen) and one player submits no picks at all
+           (the no-show rule).
+  Week 6   Fully scored by default. Real NFL and college week 6 of 2025. Pass
+           scenario_week=True to instead leave it partially played (some games final, the
+           rest reverted to pending) so Phase 8's Scenarios panel has a real week to open
+           against. See _build_partial_week and DECISIONS.md, Phase 9.
+  Week 7   Open, no picks submitted, published from a reused real historical slate (week 6's
+           games again) with an artificially future lock_at so a tester can walk the live
+           pick flow between now and the real launch. See _build_open_week and DECISIONS.md.
+
+Every player picks exactly pool.picks_required of the published slate, not the whole slate
+(Phase 3's rule), and which games each one sits out is varied per player, deterministically,
+so the demo does not show everyone picking an identical subset.
 """
 
 from __future__ import annotations
 
+import datetime as dt
 import json
 import random
+from dataclasses import dataclass
 from pathlib import Path
 
 from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
 
 from app.auth import hash_password
-from app.models import Game, Pick, Pool, PoolMember, User, Week, WeekEntry, utcnow
+from app.models import Game, PayoutRule, Pick, Pool, PoolMember, User, Week, WeekEntry, utcnow
 from app.providers import cfbd, espn
-from app.services.ingest import apply_slate, publish_week
+from app.services.ingest import apply_slate, publish_week, set_void
 from app.services.results import score_week_for_pool
 
 FIXTURES = Path(__file__).resolve().parent.parent.parent / "tests" / "fixtures"
@@ -28,7 +47,6 @@ FIXTURES = Path(__file__).resolve().parent.parent.parent / "tests" / "fixtures"
 DEMO_POOL_NAME = "PickSportPlus Demo"
 DEMO_JOIN_CODE = "DEMO2025"
 DEMO_YEAR = 2025
-DEMO_WEEK = 5
 DEMO_PASSWORD = "demo-pass-2025"
 
 # (display name, email local part, skill, role_in_pool). Skill is the chance of picking the
@@ -36,7 +54,8 @@ DEMO_PASSWORD = "demo-pass-2025"
 #
 # The first entry is the demo commissioner. Anyone opening the demo link can sign in as
 # either that account to see the admin side, or as a player to see the ordinary side,
-# without having to set anything up. Both use DEMO_PASSWORD.
+# without having to set anything up. Both use DEMO_PASSWORD. Eight players, up from six in
+# the first version of this demo, so a full 15-of-20 slate has real variety in who picks what.
 DEMO_PLAYERS = [
     ("Riley Chen", "commissioner", 0.70, "commissioner"),
     ("Dana Whitfield", "player", 0.74, "member"),
@@ -44,10 +63,76 @@ DEMO_PLAYERS = [
     ("Priya Raman", "priya", 0.64, "member"),
     ("Tom Bexley", "tom", 0.58, "member"),
     ("Casey Nolan", "casey", 0.52, "member"),
+    ("Jordan Ellis", "jordan", 0.61, "member"),
+    ("Sam Okafor", "sam", 0.55, "member"),
 ]
 
 DEMO_COMMISSIONER_EMAIL = "commissioner@picksportplus.demo"
 DEMO_PLAYER_EMAIL = "player@picksportplus.demo"
+
+# Sits out week 5 entirely, so the no-show rule (max penalty, "No picks submitted") is
+# visible on screen for the demo, not just proven in a test.
+NO_SHOW_WEEK1_LOCAL = "casey"
+
+
+@dataclass(frozen=True)
+class WeekSpec:
+    """Which recorded fixtures back one demo week, and how its spreads were resolved."""
+
+    week_number: int
+    label: str
+    nfl_scoreboard: str
+    cfb_scoreboard: str
+    nfl_core_odds: str
+    cfb_spread_source: str  # "cfbd" or "espn_core"
+    cfb_odds_fixture: str
+
+
+WEEK1 = WeekSpec(
+    week_number=5,
+    label="Week 5",
+    nfl_scoreboard="espn_nfl_2025_w5.json",
+    cfb_scoreboard="espn_cfb_2025_w5.json",
+    nfl_core_odds="espn_core_odds_nfl_2025_w5.json",
+    cfb_spread_source="cfbd",
+    cfb_odds_fixture="cfbd_lines_2025_w5.json",
+)
+
+# Week 6 spreads, both leagues, come from ESPN's own core odds endpoint (unmetered, keyless),
+# not CFBD. The build machine that captured this fixture had no CFBD_API_KEY configured, and
+# a live check showed ESPN's core odds carried a real, resolvable spread for every one of
+# week 6's recorded college games too, so there was no need to reach for CFBD at all here.
+# See DECISIONS.md, Phase 9.
+WEEK2 = WeekSpec(
+    week_number=6,
+    label="Week 6",
+    nfl_scoreboard="espn_nfl_2025_w6.json",
+    cfb_scoreboard="espn_cfb_2025_w6.json",
+    nfl_core_odds="espn_core_odds_nfl_2025_w6.json",
+    cfb_spread_source="espn_core",
+    cfb_odds_fixture="espn_core_odds_cfb_2025_w6.json",
+)
+
+OPEN_WEEK_NUMBER = 7
+OPEN_WEEK_LABEL = "Week 7"
+# How many days ahead of "now" (whenever seed-demo actually runs) the open week's lock_at is
+# set. Real kickoff times on its (reused, historical) games are in the past; lock_at is the
+# only clock week_is_locked() actually reads, so this is what lets a tester walk the live
+# pick flow before the real launch without pretending a game is about to happen. See
+# DECISIONS.md, Phase 9.
+OPEN_WEEK_LOCK_DAYS_AHEAD = 7
+
+# Demo payout figures. Clearly labelled as demo amounts everywhere they render; no real money
+# changes hands in this pool. See DECISIONS.md, Phase 9, and app/models.py's PayoutRule
+# docstring for why the real production pool ships with none of these at all.
+DEMO_ENTRY_FEE = 20.0
+DEMO_VENMO_HANDLE = "picksportplus-demo"
+DEMO_PAYMENT_NOTE = (
+    "Demo pool: no real money changes hands. This entry fee and Venmo handle exist only to "
+    "demonstrate the payment gate and the payout column."
+)
+DEMO_WEEKLY_PAYOUTS = {1: 20.0, 2: 10.0, 3: 5.0}
+DEMO_SEASON_PAYOUTS = {1: 60.0, 2: 30.0}
 
 
 def _load(name: str):
@@ -55,8 +140,14 @@ def _load(name: str):
         return json.load(handle)
 
 
-def seed_demo_pool(db: Session, reset: bool = False) -> list[str]:
-    """Create the demo pool, its players, a real week, picks, and score it."""
+def seed_demo_pool(db: Session, reset: bool = False, scenario_week: bool = False) -> list[str]:
+    """Create the demo pool, its players, three real weeks, picks, and score what's scored.
+
+    scenario_week: when True, week 6 is left partially played (see _build_partial_week)
+    instead of fully scored, trading that week's own completeness for a real week the
+    Scenarios panel has something to open against. Off by default, so a plain `seed-demo`
+    still gives both historical weeks full standings and payouts.
+    """
     out: list[str] = []
 
     pool = db.scalar(select(Pool).where(Pool.join_code == DEMO_JOIN_CODE))
@@ -83,47 +174,28 @@ def seed_demo_pool(db: Session, reset: bool = False) -> list[str]:
         auto_publish=True,
         open_registration=False,
         timezone="America/New_York",
-        current_week=DEMO_WEEK,
+        current_week=OPEN_WEEK_NUMBER,
+        entry_fee=DEMO_ENTRY_FEE,
+        venmo_handle=DEMO_VENMO_HANDLE,
+        payment_note=DEMO_PAYMENT_NOTE,
     )
     db.add(pool)
     db.flush()
     out.append(f"Created pool {pool.name} with join code {pool.join_code}.")
 
     users = _ensure_players(db, pool, out)
+    _mark_everyone_paid(db, pool, users, out)
+    _seed_payout_rules(db, pool, out)
 
-    week = Week(
-        pool_id=pool.id,
-        season_year=DEMO_YEAR,
-        week_number=DEMO_WEEK,
-        label=f"Week {DEMO_WEEK}",
-        status="draft",
+    _build_scored_week(
+        db, pool, users, WEEK1, out, no_show_local=NO_SHOW_WEEK1_LOCAL, void_one_game=True
     )
-    db.add(week)
-    db.flush()
+    if scenario_week:
+        _build_partial_week(db, pool, users, WEEK2, out)
+    else:
+        _build_scored_week(db, pool, users, WEEK2, out, no_show_local=None, void_one_game=False)
 
-    games = _load_real_games(db, week, out)
-    if not games:
-        out.append("No fixture games could be loaded. The demo was not built.")
-        return out
-
-    result = apply_slate(db, pool, week, now=None)
-    out.append(
-        f"Built the slate: {len(result.selected)} games "
-        + ", ".join(f"{k} {v}" for k, v in sorted(result.per_league.items()))
-        + "."
-    )
-    for note in result.notes:
-        out.append(f"  note: {note}")
-
-    publish_week(db, week)
-    # The week is historical, so it is locked and scored the moment it is built.
-    week.status = "locked"
-    db.flush()
-
-    _generate_picks(db, pool, week, users, out)
-
-    report = score_week_for_pool(db, pool, week)
-    out.append(report.summary())
+    _build_open_week(db, pool, users, WEEK2, out)
 
     out.extend(demo_logins())
     return out
@@ -176,17 +248,69 @@ def _ensure_players(db: Session, pool: Pool, out: list[str]) -> list[User]:
     return users
 
 
-def _load_real_games(db: Session, week: Week, out: list[str]) -> list[Game]:
+def _mark_everyone_paid(db: Session, pool: Pool, users: list[User], out: list[str]) -> None:
+    """Every demo member is marked paid, by the demo commissioner, so the Venmo gate never
+    blocks a walkthrough of the demo pool itself. The gate's blocking behavior is proven
+    directly against a fresh, non-demo pool instead, see tests/test_app.py."""
+    commissioner = next(
+        (
+            u
+            for u, (_n, _l, _s, role) in zip(users, DEMO_PLAYERS, strict=False)
+            if role == "commissioner"
+        ),
+        users[0],
+    )
+    members = list(db.scalars(select(PoolMember).where(PoolMember.pool_id == pool.id)))
+    now = utcnow()
+    for member in members:
+        member.paid_at = now
+        member.paid_marked_by_user_id = commissioner.id
+    db.flush()
+    out.append(f"Marked all {len(members)} demo members paid (a demo figure, no real money).")
+
+
+def _seed_payout_rules(db: Session, pool: Pool, out: list[str]) -> None:
+    """A real, clearly-labelled-as-demo payout structure, so the payout column and the season
+    awards panel have something to show. The real production pool ships with zero rows here;
+    see app/models.py's PayoutRule docstring and DECISIONS.md, Phase 7 and Phase 9."""
+    rules = [
+        PayoutRule(
+            pool_id=pool.id, scope="weekly", place=place, amount=amount, label=f"{label} (demo)"
+        )
+        for place, amount, label in (
+            (1, DEMO_WEEKLY_PAYOUTS[1], "1st place"),
+            (2, DEMO_WEEKLY_PAYOUTS[2], "2nd place"),
+            (3, DEMO_WEEKLY_PAYOUTS[3], "3rd place"),
+        )
+    ] + [
+        PayoutRule(
+            pool_id=pool.id, scope="season", place=place, amount=amount, label=f"{label} (demo)"
+        )
+        for place, amount, label in (
+            (1, DEMO_SEASON_PAYOUTS[1], "Season champion"),
+            (2, DEMO_SEASON_PAYOUTS[2], "Season runner up"),
+        )
+    ]
+    db.add_all(rules)
+    db.flush()
+    out.append("Seeded demo payout rules: weekly 1st/2nd/3rd and season 1st/2nd, all demo figures.")
+
+
+def _load_real_games(db: Session, week: Week, spec: WeekSpec, out: list[str]) -> list[Game]:
     """Parse the recorded scoreboards and attach the recorded historical spreads."""
     parsed: list[espn.EspnGame] = []
-    parsed += espn.parse_scoreboard(_load("espn_nfl_2025_w5.json"), "nfl")
-    parsed += espn.parse_scoreboard(_load("espn_cfb_2025_w5.json"), "ncaaf")
+    parsed += espn.parse_scoreboard(_load(spec.nfl_scoreboard), "nfl")
+    parsed += espn.parse_scoreboard(_load(spec.cfb_scoreboard), "ncaaf")
 
-    # NFL spreads come from the ESPN core API recording, which is the only ESPN surface that
+    # NFL spreads always come from the ESPN core API recording, the only ESPN surface that
     # keeps odds after a game has finished.
-    core = _load("espn_core_odds_nfl_2025_w5.json")
-    # College spreads come from CFBD, whose row id is the ESPN event id.
-    college = cfbd.lines_by_event_id(cfbd.parse_lines(_load("cfbd_lines_2025_w5.json")))
+    nfl_core = _load(spec.nfl_core_odds)
+    college_lines: dict[str, cfbd.CfbdLine] = {}
+    college_core: dict = {}
+    if spec.cfb_spread_source == "cfbd":
+        college_lines = cfbd.lines_by_event_id(cfbd.parse_lines(_load(spec.cfb_odds_fixture)))
+    else:
+        college_core = _load(spec.cfb_odds_fixture)
 
     rows: list[Game] = []
     sources: dict[str, int] = {}
@@ -194,15 +318,20 @@ def _load_real_games(db: Session, week: Week, out: list[str]) -> list[Game]:
         spread = None
         source = None
         if game.league == "nfl":
-            payload = core.get(game.event_id)
+            payload = nfl_core.get(game.event_id)
             if payload:
                 spread = espn.parse_core_odds(payload, game.home.abbr, game.away.abbr)
                 source = "espn_core"
-        else:
-            line = college.get(game.event_id)
+        elif spec.cfb_spread_source == "cfbd":
+            line = college_lines.get(game.event_id)
             if line is not None:
                 spread = line.spread_home
                 source = "cfbd"
+        else:
+            payload = college_core.get(game.event_id)
+            if payload:
+                spread = espn.parse_core_odds(payload, game.home.abbr, game.away.abbr)
+                source = "espn_core"
 
         row = Game(
             week_id=week.id,
@@ -233,7 +362,7 @@ def _load_real_games(db: Session, week: Week, out: list[str]) -> list[Game]:
     db.flush()
     with_spread = sum(1 for r in rows if r.spread_home is not None)
     out.append(
-        f"Loaded {len(rows)} real games from the {DEMO_YEAR} week {DEMO_WEEK} recordings, "
+        f"Loaded {len(rows)} real games from the {DEMO_YEAR} {spec.label} recordings, "
         f"{with_spread} with a real closing line "
         + "("
         + ", ".join(f"{k} {v}" for k, v in sorted(sources.items()))
@@ -242,8 +371,22 @@ def _load_real_games(db: Session, week: Week, out: list[str]) -> list[Game]:
     return rows
 
 
-def _generate_picks(db: Session, pool: Pool, week: Week, users: list[User], out: list[str]) -> None:
-    """Deterministic picks. Each player has a skill level and stakes more on closer calls."""
+def _generate_picks(
+    db: Session,
+    pool: Pool,
+    week: Week,
+    users: list[User],
+    out: list[str],
+    *,
+    no_show_local: str | None,
+) -> None:
+    """Deterministic picks. Each player has a skill level and stakes more on closer calls.
+
+    Every player picks exactly pool.picks_required of the published slate, chosen as a
+    varied, deterministic subset per player (Phase 3: a player is never required to cover the
+    whole slate). no_show_local, when set, skips generating any picks at all for that one
+    player, so score_week_for_pool applies the real no-show rule to them.
+    """
     slate = list(
         db.scalars(
             select(Game)
@@ -252,13 +395,21 @@ def _generate_picks(db: Session, pool: Pool, week: Week, users: list[User], out:
         )
     )
     n = len(slate)
+    required = min(pool.picks_required, n)
 
-    for user, (_name, local, skill, _role) in zip(users, DEMO_PLAYERS, strict=False):
-        rng = random.Random(f"{local}-{DEMO_YEAR}-{DEMO_WEEK}")
+    entries = 0
+    no_show_name = None
+    for user, (name, local, skill, _role) in zip(users, DEMO_PLAYERS, strict=False):
+        if local == no_show_local:
+            no_show_name = name
+            continue
+
+        rng = random.Random(f"{local}-{DEMO_YEAR}-{week.week_number}")
+        chosen = slate if required >= n else rng.sample(slate, required)
 
         # Pick a side per game, weighted towards the team that actually won.
         choices: list[tuple[Game, str, float]] = []
-        for game in slate:
+        for game in chosen:
             truth = game.winner if game.winner in ("home", "away") else "home"
             other = "away" if truth == "home" else "home"
             side = truth if rng.random() < skill else other
@@ -266,7 +417,8 @@ def _generate_picks(db: Session, pool: Pool, week: Week, users: list[User], out:
             conviction = (game.closeness or 0.0) + rng.uniform(0, 3.5)
             choices.append((game, side, conviction))
 
-        # Highest conviction stakes the most points, so confidence is a clean 1..N permutation.
+        # Highest conviction stakes the most points, so confidence is a clean 1..required
+        # permutation, assigned only to the games this player actually picked.
         choices.sort(key=lambda item: -item[2])
         for index, (game, side, _conviction) in enumerate(choices):
             db.add(
@@ -276,7 +428,7 @@ def _generate_picks(db: Session, pool: Pool, week: Week, users: list[User], out:
                     week_id=week.id,
                     game_id=game.id,
                     picked_team=side,
-                    confidence=n - index,
+                    confidence=len(choices) - index,
                 )
             )
 
@@ -288,10 +440,175 @@ def _generate_picks(db: Session, pool: Pool, week: Week, users: list[User], out:
                 submitted_at=utcnow(),
             )
         )
+        entries += 1
 
     db.flush()
     total = db.scalar(select(func.count(Pick.id)).where(Pick.week_id == week.id)) or 0
-    out.append(f"Generated {total} picks across {len(users)} players ({n} games each).")
+    message = f"Generated {total} picks across {entries} players ({required} of {n} games each)."
+    if no_show_name:
+        message += f" {no_show_name} submitted no picks at all."
+    out.append(message)
+
+
+def _build_scored_week(
+    db: Session,
+    pool: Pool,
+    users: list[User],
+    spec: WeekSpec,
+    out: list[str],
+    *,
+    no_show_local: str | None,
+    void_one_game: bool,
+) -> None:
+    """A complete, historical, fully scored week: build, publish, pick, score."""
+    week = Week(
+        pool_id=pool.id,
+        season_year=DEMO_YEAR,
+        week_number=spec.week_number,
+        label=spec.label,
+        status="draft",
+    )
+    db.add(week)
+    db.flush()
+
+    games = _load_real_games(db, week, spec, out)
+    if not games:
+        out.append(f"No fixture games could be loaded for {spec.label}. That week was not built.")
+        return
+
+    result = apply_slate(db, pool, week, now=None)
+    out.append(
+        f"{spec.label}: built the slate, {len(result.selected)} games "
+        + ", ".join(f"{k} {v}" for k, v in sorted(result.per_league.items()))
+        + "."
+    )
+    for note in result.notes:
+        out.append(f"  note: {note}")
+
+    publish_week(db, week)
+    # The week is historical, so it is locked and scored the moment it is built.
+    week.status = "locked"
+    db.flush()
+
+    _generate_picks(db, pool, week, users, out, no_show_local=no_show_local)
+
+    if void_one_game:
+        slate = list(
+            db.scalars(
+                select(Game)
+                .where(Game.week_id == week.id, Game.in_slate.is_(True))
+                .order_by(Game.slate_rank)
+            )
+        )
+        target = slate[min(4, len(slate) - 1)]
+        set_void(db, week, target.id, True)
+        out.append(
+            f"  Voided {target.away_abbr} at {target.home_abbr} for the demo: the exact same "
+            "commissioner action available on any real week, applied here to a real, "
+            "already-final game purely so the void scoring rule is visible on screen, not "
+            "just in tests. See DECISIONS.md, Phase 9."
+        )
+
+    report = score_week_for_pool(db, pool, week)
+    out.append(f"{spec.label}: {report.summary()}")
+
+
+def _build_partial_week(
+    db: Session, pool: Pool, users: list[User], spec: WeekSpec, out: list[str]
+) -> None:
+    """Same real week as _build_scored_week, but left mid-play: pool.scenarios_min_final_games
+    games stay final, the rest are reverted to pending, so Phase 8's Scenarios panel has a
+    real week to open against (its own gate is final_count >= scenarios_min_final_games and
+    remaining_count >= scenarios_min_remaining_games, read from the pool, never hard coded).
+    Picks are still generated for everyone; the week itself is never marked scored, since a
+    week with games still pending is by definition not complete. See DECISIONS.md, Phase 9.
+    """
+    week = Week(
+        pool_id=pool.id,
+        season_year=DEMO_YEAR,
+        week_number=spec.week_number,
+        label=spec.label,
+        status="draft",
+    )
+    db.add(week)
+    db.flush()
+
+    games = _load_real_games(db, week, spec, out)
+    if not games:
+        out.append(f"No fixture games could be loaded for {spec.label}. That week was not built.")
+        return
+
+    result = apply_slate(db, pool, week, now=None)
+    out.append(
+        f"{spec.label} (scenario week): built the slate, {len(result.selected)} games "
+        + ", ".join(f"{k} {v}" for k, v in sorted(result.per_league.items()))
+        + "."
+    )
+
+    publish_week(db, week)
+    week.status = "locked"
+    db.flush()
+
+    _generate_picks(db, pool, week, users, out, no_show_local=None)
+
+    slate = list(
+        db.scalars(
+            select(Game)
+            .where(Game.week_id == week.id, Game.in_slate.is_(True))
+            .order_by(Game.slate_rank)
+        )
+    )
+    keep_final = min(pool.scenarios_min_final_games, len(slate))
+    reverted = 0
+    for game in slate[keep_final:]:
+        game.status = "scheduled"
+        game.home_score = None
+        game.away_score = None
+        game.winner = None
+        reverted += 1
+    db.flush()
+    out.append(
+        f"  Scenario week: kept {keep_final} games final, reverted {reverted} back to "
+        "pending, so the Scenarios panel opens against a real, partially played week."
+    )
+
+    report = score_week_for_pool(db, pool, week)
+    out.append(f"{spec.label}: {report.summary()}")
+
+
+def _build_open_week(
+    db: Session, pool: Pool, users: list[User], spec: WeekSpec, out: list[str]
+) -> None:
+    """The current, open week. Real teams and a real historical slate (spec's games, reused),
+    no picks, and an artificially future lock_at (see OPEN_WEEK_LOCK_DAYS_AHEAD) so a tester
+    can walk the live selection flow before the real launch. Documented in DECISIONS.md,
+    Phase 9, so nobody mistakes the reused historical kickoff times for a bug: lock_at is the
+    only clock week_is_locked() reads, not any one game's own kickoff.
+    """
+    del users  # no picks are generated for the open week, on purpose
+    week = Week(
+        pool_id=pool.id,
+        season_year=DEMO_YEAR,
+        week_number=OPEN_WEEK_NUMBER,
+        label=OPEN_WEEK_LABEL,
+        status="draft",
+    )
+    db.add(week)
+    db.flush()
+
+    _load_real_games(db, week, spec, out)
+    apply_slate(db, pool, week, now=None)
+    publish_week(db, week)
+
+    week.lock_at = utcnow() + dt.timedelta(days=OPEN_WEEK_LOCK_DAYS_AHEAD)
+    week.lock_at_override = True
+    db.flush()
+
+    out.append(
+        f"{OPEN_WEEK_LABEL} is open with no picks submitted, locking in "
+        f"{OPEN_WEEK_LOCK_DAYS_AHEAD} days (an artificial future lock time for the demo; the "
+        "games themselves are a reused real historical slate, see DECISIONS.md)."
+    )
 
 
 def clear_demo(db: Session) -> None:
