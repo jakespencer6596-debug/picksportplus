@@ -6,17 +6,21 @@ A weekly confidence pick'em pool for NFL and college football (FBS).
 
 Every week the app publishes a slate of the **closest games**, the ones with the smallest
 betting point spread, so you are picking genuine coin flips instead of blowouts. The default
-slate is 20 games, 8 NFL and 12 college. You pick the straight-up winner of every game and
-rank your confidence across the whole slate: your most confident pick stakes 20 points, your
-least confident stakes 1, using each value exactly once. Correct picks earn the points staked,
-wrong picks earn nothing.
+slate is 20 games, 8 NFL and 12 college. You pick the straight-up winner of exactly 15 of them
+(both numbers are commissioner settings) and rank your confidence across only the games you
+picked: your most confident pick stakes 15 points, your least confident stakes 1, using each
+value exactly once. The pool's real, default rule is **inverse scoring**: a wrong pick counts
+its staked points against you, a correct pick costs nothing, and the lowest weekly total wins.
+The older rule (correct picks earn their staked points, highest total wins) is still available
+per pool from Admin, Pool settings.
 
 The point spread only decides **which** games make the slate. Scoring is straight up: did you
 pick the team that won.
 
-The pool runs itself. An hourly job detects the current football week, builds the slate,
-opens it, pulls final scores, and scores the week. After first time setup a whole season needs
-zero manual steps.
+The pool mostly runs itself. An hourly job detects the current football week and builds a
+draft slate; a commissioner reviews and publishes it by hand by default (a pool can switch
+back to fully automatic publishing from Pool settings). Once published, the same job pulls
+final scores and scores the week with no further action needed.
 
 ---
 
@@ -47,20 +51,29 @@ If `python` opens the Microsoft Store instead of running, use `py` or the full v
 
 ### The demo
 
-`seed-demo` loads a **real completed week**: NFL and FBS week 5 of the 2025 season, with the
-real kickoff times, the real closing point spreads and the real final scores, all replayed from
-recordings committed under `tests/fixtures`. It needs no network and no API keys. It creates a
-separate demo pool with five players and a full set of picks, already scored, so you can see
-the slate, the picks screen, the results grid and both leaderboards straight away.
+`seed-demo` loads **three real weeks** into a separate demo pool: NFL and FBS weeks 5 and 6 of
+the 2025 season, real kickoff times, real closing point spreads and real final scores, all
+replayed from recordings committed under `tests/fixtures`, plus an open current week (week 7)
+with no picks yet, published from a reused real historical slate with an artificially future
+lock time so you can walk the live pick flow. It needs no network and no API keys. Eight demo
+players pick exactly 15 of the 20 published games each (not the whole slate), both historical
+weeks are fully scored by default with weekly winners, season standings and a labelled demo
+payout structure, one player sits out week 5 entirely (the no-show rule), and one week 5 game
+is voided (the void scoring rule), so those edge cases are visible on screen, not just in
+tests. Pass `--scenario-week` to leave week 6 partially played instead of fully scored, so the
+Scenarios panel (Weekly Results) has a real week to open against.
 
 Sign in as any demo player with password `demo-pass-2025`:
 
 ```
 dana@picksportplus.demo      marcus@picksportplus.demo    priya@picksportplus.demo
-tom@picksportplus.demo       casey@picksportplus.demo
+tom@picksportplus.demo       casey@picksportplus.demo     jordan@picksportplus.demo
+sam@picksportplus.demo
 ```
 
-Run `python -m app.cli seed-demo --reset` to rebuild it.
+Run `python -m app.cli seed-demo --reset` to rebuild it, or
+`python -m app.cli seed-demo --reset --scenario-week` for the partially played scenario-engine
+variant of week 6.
 
 ---
 
@@ -120,6 +133,7 @@ Every variable is documented in `.env.example`. The ones that matter most:
 | `SECRET_KEY` | none | Signs the session cookie. Use a long random string in production. |
 | `DATABASE_URL` | `sqlite:///./picksportplus.db` | SQLite locally, Postgres on Render. |
 | `SEASON_YEAR` | `2026` | The season the pool runs. ESPN uses the year the season starts. |
+| `WEEK1_ANCHOR_DATE` | `2026-09-12` | The Saturday pool week 1 anchors to. Each league resolves its own ESPN week from this date; see "How the slate is chosen." |
 | `OPEN_REGISTRATION` | `false` | `false` requires a join code to register. `true` lets anyone self register. |
 | `NUM_GAMES_PER_WEEK` | `20` | Seed slate size for a new pool. |
 | `NFL_GAMES_PER_WEEK` | `8` | Seed NFL target. |
@@ -139,9 +153,9 @@ commissioner owns those numbers from Admin, Pool settings.
 Every pool has a commissioner, the league admin. Players cannot change any of this. From
 `/admin` the commissioner controls:
 
-- League name, join code (view, set or rotate), season year, timezone.
-- Auto publish on or off, open registration on or off, the lock time.
-- The total games per week, and how many come from each league.
+- League name, join code (view, set or rotate), season year, week 1 anchor date, timezone.
+- Auto publish on or off (off by default), open registration on or off, the lock time.
+- The total games per week, how many come from each league, and the pinned rivalry list.
 
 ### How the slate is chosen
 
@@ -149,6 +163,13 @@ The tool takes the closest `target_nfl` NFL games and the closest `target_ncaaf`
 by absolute point spread, defaulting to 8 and 12. If one league is short of games with a usable
 line that week, the gap is filled with the next closest games from the other league so the
 total still lands, and the shortfall is reported on the admin page.
+
+A game can also be **pinned** so it always makes the slate regardless of its spread, because
+closest-spread selection alone tends to drop a rivalry game the moment either side is having a
+lopsided season. Pins are set by hand from the slate editor, or automatically the first time a
+game matching one of the pool's configured rivalry pairs (Admin, Pool settings) is created; an
+unpin sticks across later rebuilds. The slate editor always shows why a game is on the slate:
+pinned, a rivalry match, or the closest spread.
 
 ### Editing the slate
 
@@ -164,10 +185,10 @@ The tool always proposes a slate. The commissioner can override it from Admin, S
 
 Timing rules:
 
-- With **auto publish on** (the default) the tool builds and opens the slate by itself. The
-  commissioner can still change the size and the games at any time until the first player
-  submits a pick.
-- With **auto publish off** the tool builds a draft and waits for the commissioner to publish.
+- With **auto publish off** (the default) the tool builds a draft and waits for the
+  commissioner to review and publish it by hand.
+- With **auto publish on** the tool builds and opens the slate by itself. The commissioner can
+  still change the size and the games at any time until the first player submits a pick.
 - **Once any pick exists the game count is fixed for that week** and only voiding remains, so
   scoring stays consistent for everyone.
 
@@ -178,7 +199,7 @@ Timing rules:
 The hourly cron does all of this. These are the manual equivalents.
 
 ```
-python -m app.cli sync-week                  # detect the week, build it, publish it
+python -m app.cli sync-week                  # detect the week, build it, publish only if auto publish is on
 python -m app.cli build-slate --week 6       # rebuild one week
 python -m app.cli build-slate --week 6 --no-metered   # ESPN only, spends no credits
 python -m app.cli publish-week --week 6      # open a draft
@@ -189,8 +210,9 @@ python -m app.cli usage                      # metered API budget report
 ```
 
 Lock is enforced at request time by comparing the clock against `lock_at`, so a late or missed
-cron run can never hand anyone extra time to pick. A player who has not submitted by lock
-scores 0 for the week.
+cron run can never hand anyone extra time to pick. A player who has not submitted by lock is
+flagged as a no-show: 0 for the week under `standard` scoring, or the maximum possible penalty
+under `inverse` (the pool's real, default rule), and never eligible to win the week either way.
 
 Ties are voided: nobody scores them, and they leave both the correct and the possible counts.
 Season standings aggregate the weekly rows into total points, total games correct, and weekly
@@ -216,8 +238,8 @@ To make it permanent and still free, create a database at [Neon](https://neon.te
 of code needed, and Neon's free tier does not expire the way Render's 30 day free Postgres
 does.
 
-The demo runs entirely on the real 2025 week 5 recordings committed in `tests/fixtures`, and
-`OFFLINE_MODE` blocks outbound HTTP, so the deployed site never calls ESPN, The Odds API or
+The demo runs entirely on the real 2025 weeks 5 and 6 recordings committed in `tests/fixtures`,
+and `OFFLINE_MODE` blocks outbound HTTP, so the deployed site never calls ESPN, The Odds API or
 CollegeFootballData and never spends a metered credit.
 
 The start command migrates and seeds before serving, and every step is idempotent:

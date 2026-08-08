@@ -20,6 +20,7 @@
   <a class="subnav-link" href="/admin/slate">Slate</a>
   <a class="subnav-link" href="/admin/members">Members</a>
   <a class="subnav-link is-active" href="/admin/settings" aria-current="page">Settings</a>
+  <a class="subnav-link" href="/admin/payouts">Payouts</a>
 </nav>
 
 <form method="post" action="/admin/settings" class="stack settings-form">
@@ -42,6 +43,19 @@
           <input class="input num" type="number" id="season_year" name="season_year"
                  value="{{ pool.season_year }}" min="2000" max="2100" step="1" required>
           <p class="form-hint">The season the weeks belong to. Change it once a year, in the summer.</p>
+        </div>
+
+        <div class="field">
+          <label class="field-label" for="week1_anchor_date">Week 1 anchor date</label>
+          <input class="input" type="date" id="week1_anchor_date" name="week1_anchor_date"
+                 value="{{ pool.week1_anchor_date.isoformat() if pool.week1_anchor_date else '' }}">
+          <p class="form-hint">
+            The Saturday your pool's week 1 belongs to. Each later pool week anchors seven days
+            after the last. NFL and college resolve their own ESPN week from this date
+            independently, since the two seasons are not on the same week numbering. Leave this
+            blank and the tool falls back to asking ESPN what NFL's current week is, which is
+            wrong once the two seasons drift apart.
+          </p>
         </div>
 
         <div class="field">
@@ -73,8 +87,20 @@
                value="{{ pool.num_games_per_week }}" min="{{ min_slate }}" max="{{ max_slate }}"
                step="1" required>
         <p class="form-hint">
-          Between {{ min_slate }} and {{ max_slate }}. This is the total that lands on the slate,
-          and it is also the top confidence value a player can stake.
+          Between {{ min_slate }} and {{ max_slate }}. This is the total that lands on the slate.
+        </p>
+      </div>
+
+      <div class="field">
+        <label class="field-label" for="picks_required">Picks required</label>
+        <input class="input num" type="number" id="picks_required" name="picks_required"
+               value="{{ pool.picks_required }}" min="1" max="{{ pool.num_games_per_week }}"
+               step="1" required>
+        <p class="form-hint">
+          How many of the games per week a player must pick, exactly. This is also the top
+          confidence value a player can stake, from this number down to 1. Must be between 1
+          and games per week; set it equal to games per week if every player should pick the
+          whole slate.
         </p>
       </div>
 
@@ -143,6 +169,96 @@
     </div>
   </section>
 
+  <section class="card" aria-labelledby="rivalries-title">
+    <div class="card-head">
+      <h2 id="rivalries-title">Pinned rivalry games</h2>
+    </div>
+    <div class="card-body">
+      <div class="field">
+        <label class="field-label" for="rivalries">Always include these matchups</label>
+        <textarea class="input" id="rivalries" name="rivalries" rows="8" spellcheck="false"
+                  placeholder="Ohio State vs Michigan">{{ rivalries_text }}</textarea>
+        <p class="form-hint">
+          One matchup per line, "Team A vs Team B", college teams only. The first time either
+          side of one of these matchups shows up on the schedule, the game is pinned onto the
+          slate automatically, no matter how wide the spread runs, since closest-spread alone
+          would routinely leave out a game like Ohio State vs Michigan the moment either team
+          is having a blowout season. Pinning is a proposal, not a lock: the commissioner can
+          still unpin any single game from the slate editor without losing this list, and that
+          choice sticks across later rebuilds of the same game.
+        </p>
+      </div>
+    </div>
+  </section>
+
+  <section class="card" aria-labelledby="scoring-title">
+    <div class="card-head">
+      <h2 id="scoring-title">Scoring</h2>
+    </div>
+    <div class="card-body">
+      <fieldset class="field-group">
+        <legend class="field-label">How points run</legend>
+        <label class="checkbox" for="scoring_mode_inverse">
+          <input type="radio" id="scoring_mode_inverse" name="scoring_mode" value="inverse"
+                 {% if pool.scoring_mode == "inverse" %}checked{% endif %}>
+          <span>Inverse: low score wins</span>
+        </label>
+        <p class="form-hint">
+          A wrong pick counts its staked confidence against the player. A correct pick earns
+          nothing. Lowest total for the week wins. A player who submits no picks takes the
+          maximum possible penalty for that week, so sitting a week out is never the safe play.
+        </p>
+
+        <label class="checkbox" for="scoring_mode_standard">
+          <input type="radio" id="scoring_mode_standard" name="scoring_mode" value="standard"
+                 {% if pool.scoring_mode == "standard" %}checked{% endif %}>
+          <span>Standard: high score wins</span>
+        </label>
+        <p class="form-hint">
+          A correct pick earns its staked confidence. A wrong pick earns nothing. Highest total
+          for the week wins. A player who submits no picks scores 0 for that week.
+        </p>
+      </fieldset>
+
+      <p class="form-hint">
+        This pool's real rule is inverse. Standard is here for a pool that wants the older,
+        familiar scoring instead. Changing this only affects weeks scored after you save it,
+        weeks already scored keep the points they were scored with until you rescore them.
+      </p>
+    </div>
+  </section>
+
+  <section class="card" aria-labelledby="scenarios-title">
+    <div class="card-head">
+      <h2 id="scenarios-title">Scenarios panel</h2>
+    </div>
+    <div class="card-body">
+      <p class="form-hint">
+        On Weekly Results, the scenarios panel shows each player their percent chance at
+        1st, 2nd and 3rd for the week, and which of the remaining games they need to go
+        which way. It only opens once a week has enough of the picture in: enough final
+        games to be interesting, and at least one game still to play.
+      </p>
+      <div class="form-row">
+        <div class="field">
+          <label class="field-label" for="scenarios_min_final_games">Minimum final games</label>
+          <input class="input num" type="number" id="scenarios_min_final_games"
+                 name="scenarios_min_final_games" value="{{ pool.scenarios_min_final_games }}"
+                 min="0" step="1" required>
+          <p class="form-hint">How many countable games must be final before the panel opens.</p>
+        </div>
+
+        <div class="field">
+          <label class="field-label" for="scenarios_min_remaining_games">Minimum remaining games</label>
+          <input class="input num" type="number" id="scenarios_min_remaining_games"
+                 name="scenarios_min_remaining_games" value="{{ pool.scenarios_min_remaining_games }}"
+                 min="1" step="1" required>
+          <p class="form-hint">How many games must still be left to play for there to be a scenario to show.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
   <section class="card" aria-labelledby="automation-title">
     <div class="card-head">
       <h2 id="automation-title">Automation and access</h2>
@@ -176,6 +292,64 @@
     </div>
   </section>
 
+  <section class="card" aria-labelledby="venmo-title">
+    <div class="card-head">
+      <h2 id="venmo-title">Entry fee and Venmo</h2>
+    </div>
+    <div class="card-body">
+      <p class="form-hint">
+        "Venmo only this year. No Venmo, no participation," and one collector, no multiple
+        accounts. Nothing here is filled in for you; every figure and handle below is blank
+        until you type it in.
+      </p>
+
+      <div class="form-row">
+        <div class="field">
+          <label class="field-label" for="entry_fee">Entry fee</label>
+          <input class="input num" type="number" id="entry_fee" name="entry_fee"
+                 value="{{ pool.entry_fee if pool.entry_fee is not none else '' }}"
+                 min="0" step="0.01" placeholder="Not set">
+          <p class="form-hint">Dollars. Leave blank until you have a real number.</p>
+        </div>
+
+        <div class="field">
+          <label class="field-label" for="venmo_handle">Collector's Venmo handle</label>
+          <input class="input" type="text" id="venmo_handle" name="venmo_handle"
+                 value="{{ pool.venmo_handle or '' }}" maxlength="80" autocomplete="off"
+                 spellcheck="false" placeholder="No @, just the handle">
+          <p class="form-hint">
+            The one person everyone pays. Shown to players as a tap-to-pay Venmo link.
+          </p>
+        </div>
+      </div>
+
+      <div class="field">
+        <label class="checkbox" for="payment_required_to_pick">
+          <input type="checkbox" id="payment_required_to_pick" name="payment_required_to_pick"
+                 value="1" {% if pool.payment_required_to_pick %}checked{% endif %}>
+          <span>Require payment before a player can pick</span>
+        </label>
+        <p class="form-hint">
+          On (the default) blocks saving or locking picks for anyone not yet marked paid on the
+          Members page, and shows them the Venmo panel instead. Off lets everyone pick
+          regardless of payment status.
+        </p>
+      </div>
+
+      <div class="field">
+        <label class="field-label" for="payment_note">Payment note for players</label>
+        <textarea class="input" id="payment_note" name="payment_note" rows="3" spellcheck="true"
+                  placeholder="For example, how to word the Venmo note, or a Zelle fallback."
+                  >{{ pool.payment_note or '' }}</textarea>
+        <p class="form-hint">
+          Shown above the Venmo links on the picks page while a player is gated, and used as
+          the pre-filled note on the Venmo app link if you leave it blank in your Venmo app
+          itself.
+        </p>
+      </div>
+    </div>
+  </section>
+
   <div class="form-actions">
     <button class="btn btn-primary" type="submit">Save settings</button>
     <p class="muted">
@@ -184,4 +358,97 @@
     </p>
   </div>
 </form>
+
+<section class="section" aria-labelledby="payout-rules-title">
+  <h2 class="section-title" id="payout-rules-title">Payout rules</h2>
+  <p class="muted">
+    Ships empty. Add a row for every place you pay, per scope. Weekly rules apply to an
+    ordinary week's leaderboard; Bowl week rules take over automatically for a week the
+    schedule resolved as a bowl week, even if weekly rules also exist; Season rules drive the
+    season standings awards panel.
+  </p>
+
+  <div class="flash {{ 'flash-ok' if pot.balanced else 'flash-error' }}" role="status">
+    {{ ic.icon("check" if pot.balanced else "alert", 18) }}
+    <span>
+      {{ pot.paid_count }} of {{ pot.member_count }} members paid, {{ pot.collected | money }}
+      dollars collected.
+      {% if pot.balanced %}
+        That matches the {{ pot.allocated | money }} dollars allocated across every payout rule
+        below.
+      {% else %}
+        The rules below allocate {{ pot.allocated | money }} dollars, which does not match. This
+        is only a check, not a block: a reserve held back, or rules written before everyone has
+        paid, are both normal.
+      {% endif %}
+    </span>
+  </div>
+
+  {% for scope in payout_scopes %}
+    {% set rules = payout_rules_by_scope.get(scope, []) %}
+    <div class="card" aria-labelledby="payout-{{ scope }}-title">
+      <div class="card-head">
+        <h3 id="payout-{{ scope }}-title">{{ payout_scope_labels.get(scope, scope) }}</h3>
+      </div>
+      <div class="card-body">
+        {% if rules %}
+          <div class="table-wrap">
+            <table class="table">
+              <caption class="visually-hidden">
+                {{ payout_scope_labels.get(scope, scope) }} payout rules, place, amount, label.
+              </caption>
+              <thead>
+                <tr>
+                  <th scope="col" class="num">Place</th>
+                  <th scope="col" class="num">Amount</th>
+                  <th scope="col">Label</th>
+                  <th scope="col">Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {% for rule in rules %}
+                  <tr>
+                    <td class="num" data-label="Place">{{ rule.place | ordinal }}</td>
+                    <td class="num" data-label="Amount">{{ rule.amount | money }} dollars</td>
+                    <td data-label="Label">{{ rule.label or "" }}</td>
+                    <td data-label="Actions">
+                      <form method="post" action="/admin/payouts/rule/{{ rule.id }}/remove" class="inline-form">
+                        <button class="btn btn-danger btn-sm" type="submit">
+                          Remove<span class="visually-hidden">, {{ payout_scope_labels.get(scope, scope) }}
+                            {{ rule.place | ordinal }}</span>
+                        </button>
+                      </form>
+                    </td>
+                  </tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
+        {% else %}
+          <p class="muted">No {{ payout_scope_labels.get(scope, scope).lower() }} rules yet.</p>
+        {% endif %}
+
+        <form method="post" action="/admin/payouts/rule" class="form-row">
+          <input type="hidden" name="scope" value="{{ scope }}">
+          <div class="field">
+            <label class="field-label" for="{{ scope }}_place">Place</label>
+            <input class="input num" type="number" id="{{ scope }}_place" name="place"
+                   min="1" step="1" required>
+          </div>
+          <div class="field">
+            <label class="field-label" for="{{ scope }}_amount">Amount</label>
+            <input class="input num" type="number" id="{{ scope }}_amount" name="amount"
+                   min="0" step="0.01" required>
+          </div>
+          <div class="field">
+            <label class="field-label" for="{{ scope }}_label">Label</label>
+            <input class="input" type="text" id="{{ scope }}_label" name="label"
+                   maxlength="120" placeholder="Optional, for example 1st place">
+          </div>
+          <button class="btn btn-secondary" type="submit">Add row</button>
+        </form>
+      </div>
+    </div>
+  {% endfor %}
+</section>
 {% endblock %}

@@ -1,0 +1,70 @@
+{% extends "base.html" %}
+{% import "components/icons.html" as ic %}
+{% block title %}Payout summary. {{ APP_NAME }}{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <div>
+    <p class="eyebrow">Commissioner</p>
+    <h1 class="page-title">Payout summary</h1>
+  </div>
+  <p class="muted">{{ pool.name }}, {{ pool.season_year }} season</p>
+</div>
+
+<nav class="subnav" aria-label="Commissioner tools">
+  <a class="subnav-link" href="/admin">Overview</a>
+  <a class="subnav-link" href="/admin/slate">Slate</a>
+  <a class="subnav-link" href="/admin/members">Members</a>
+  <a class="subnav-link" href="/admin/settings">Settings</a>
+  <a class="subnav-link is-active" href="/admin/payouts" aria-current="page">Payouts</a>
+</nav>
+
+<section class="section" aria-labelledby="payout-summary-title">
+  <h2 class="section-title" id="payout-summary-title">What everyone is owed</h2>
+  <p class="muted">
+    Weekly payouts total every scored week that has weekly payout rules; bowl and season columns
+    follow the same rules from Settings. A plain table, select and paste it into a spreadsheet.
+  </p>
+
+  {% if summary %}
+    <div class="table-wrap">
+      <table class="table">
+        <caption class="visually-hidden">
+          Payout summary, one row per player: weekly payouts total, bowl payout, season award,
+          and the total owed.
+        </caption>
+        <thead>
+          <tr>
+            <th scope="col">Player</th>
+            <th scope="col" class="num">Weekly total</th>
+            <th scope="col" class="num">Bowl</th>
+            <th scope="col" class="num">Season award</th>
+            <th scope="col" class="num">Total owed</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for row in summary %}
+            <tr>
+              <td data-label="Player">{{ row.display_name }}</td>
+              <td class="num" data-label="Weekly total">{{ row.weekly_total | money }}</td>
+              <td class="num" data-label="Bowl">{{ row.bowl_total | money }}</td>
+              <td class="num" data-label="Season award">{{ row.season_award | money }}</td>
+              <td class="num" data-label="Total owed"><strong>{{ row.total_owed | money }}</strong></td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    <p class="form-hint">
+      Every figure is dollars. A row of zeroes means no payout rule paid that player yet, not
+      an error.
+    </p>
+  {% else %}
+    <div class="empty-state">
+      {{ ic.icon("dollar", 28) }}
+      <h3 class="empty-state-title">No players yet</h3>
+      <p>Once players join {{ pool.name }}, they show up here, paid out or not.</p>
+    </div>
+  {% endif %}
+</section>
+{% endblock %}

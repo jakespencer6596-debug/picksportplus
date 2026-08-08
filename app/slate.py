@@ -19,6 +19,19 @@ Vocabulary used throughout:
 - spread_home is home relative. Negative means the home team is favoured.
 - closeness is abs(spread_home). A pick em at 0.0 is the closest possible game.
 - slate_rank counts from 1, where 1 is the closest game on the slate.
+
+Pinned games (spec Section 6a, the rivalry feedback): a candidate can carry
+pinned=True, which guarantees it survives selection regardless of how wide its
+spread is. Pins are seeded into the first pass before the ordinary per league
+fill runs, so a pin already counts against its own league's target; the
+existing over/under total balancing (drop the farthest, fill from the other
+league) does the rest exactly as it already did for an ordinary shortfall. A
+pin still needs a resolvable spread and, when exclude_started is true, to not
+have already kicked off, the same as any other candidate: this function never
+invents a rank for a game with nothing to rank it by. Pinning itself (by a
+commissioner or by rivalry auto-pin) happens upstream, in
+app.services.ingest; this module only ever guarantees a pin already set on
+the input survives.
 """
 
 from __future__ import annotations
@@ -64,6 +77,14 @@ class Candidate:
     spread_home: float | None
     """Home relative. Negative means home favoured. None means unresolved."""
 
+    pinned: bool = False
+    """True to force this game onto the slate regardless of closeness.
+
+    Set upstream (a commissioner's manual pin, or a rivalry auto-pin), never
+    invented here. A default of False keeps every caller that pre-dates pins,
+    including every existing test, constructing a Candidate unchanged.
+    """
+
 
 @dataclass(frozen=True)
 class Selected:
@@ -74,6 +95,10 @@ class Selected:
     """1 is the closest game."""
 
     closeness: float
+
+    pinned: bool = False
+    """True when this game made the slate because it was pinned, not (only)
+    because it was among the closest. See Candidate.pinned."""
 
 
 @dataclass(frozen=True)
@@ -328,23 +353,50 @@ def select_slate_by_targets(
     for candidate in ordered:
         by_league.setdefault(candidate.league, []).append(candidate)
 
-    # First pass: each targeted league takes its own closest games. A league not
-    # named in targets takes nothing here but stays eligible for the fill.
-    chosen_keys: set[str] = set()
+    # Pins are seeded into the first pass before the ordinary per league fill
+    # runs, so a pin already counts against its own league's target. A pin
+    # with no resolvable spread, or one that has already kicked off, was
+    # already dropped by the eligibility filter above and so never reaches
+    # here; see the module docstring.
+    pinned_candidates = [candidate for candidate in ordered if candidate.pinned]
+    if len(pinned_candidates) > total:
+        raise ValueError(
+            f"{len(pinned_candidates)} games are pinned, more than the slate " f"total of {total}."
+        )
+
+    chosen_keys: set[str] = {candidate.key for candidate in pinned_candidates}
     first_pass: dict[str, int] = {}
+    for candidate in pinned_candidates:
+        first_pass[candidate.league] = first_pass.get(candidate.league, 0) + 1
+
+    # First pass: each targeted league takes its own closest games, on top of
+    # whatever pins already claimed a spot. A league not named in targets
+    # takes nothing here but stays eligible for the fill. A league whose pins
+    # already meet or exceed its target contributes nothing more here, which
+    # is what lets its pins expand that league's effective count: the total
+    # is then brought back to total by the ordinary over/under balancing
+    # below, exactly as it already handles any other shortfall or overflow.
     for league, target in parsed_targets.items():
-        taken = by_league.get(league, [])[:target]
+        remaining = max(0, target - first_pass.get(league, 0))
+        taken = [
+            candidate for candidate in by_league.get(league, []) if candidate.key not in chosen_keys
+        ][:remaining]
         chosen_keys.update(candidate.key for candidate in taken)
-        first_pass[league] = len(taken)
+        first_pass[league] = first_pass.get(league, 0) + len(taken)
 
     chosen = [candidate for candidate in ordered if candidate.key in chosen_keys]
 
     dropped = 0
     filled = 0
     if len(chosen) > total:
-        # chosen is already closest first, so the tail is the farthest games.
-        dropped = len(chosen) - total
-        chosen = chosen[:total]
+        # chosen is already closest first, so the tail is the farthest games,
+        # but a pinned game must survive no matter how far it sits. Pins are
+        # never more than total (checked above), so there is always enough
+        # unpinned tail to drop.
+        excess = len(chosen) - total
+        drop_keys = {candidate.key for candidate in [c for c in chosen if not c.pinned][-excess:]}
+        chosen = [candidate for candidate in chosen if candidate.key not in drop_keys]
+        dropped = excess
     elif len(chosen) < total:
         for candidate in ordered:
             if len(chosen) >= total:
@@ -357,7 +409,12 @@ def select_slate_by_targets(
         chosen.sort(key=_sort_key)
 
     selected = [
-        Selected(key=candidate.key, slate_rank=rank, closeness=_sort_key(candidate)[0])
+        Selected(
+            key=candidate.key,
+            slate_rank=rank,
+            closeness=_sort_key(candidate)[0],
+            pinned=candidate.pinned,
+        )
         for rank, candidate in enumerate(chosen, start=1)
     ]
 

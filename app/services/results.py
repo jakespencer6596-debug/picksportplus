@@ -78,9 +78,17 @@ def fetch_results(db: Session, pool: Pool, week: Week) -> ResultsReport:
     leagues = sorted({g.league for g in rows})
 
     for league in leagues:
+        resolved = (week.resolved_weeks or {}).get(league)
+        espn_week = resolved["week"] if resolved else week.week_number
+        season_type = resolved["season_type"] if resolved else espn.SEASON_TYPE_REGULAR
         try:
             payload = espn.fetch_scoreboard(
-                db, league, week.season_year, week.week_number, ttl_minutes=5
+                db,
+                league,
+                week.season_year,
+                espn_week,
+                season_type=season_type,
+                ttl_minutes=5,
             )
         except ProviderError as exc:
             report.warnings.append(
@@ -152,6 +160,8 @@ def score_week_for_pool(db: Session, pool: Pool, week: Week) -> ScoreReport:
         e.user_id: e for e in db.scalars(select(WeekEntry).where(WeekEntry.week_id == week.id))
     }
 
+    picks_required = pool.picks_required
+
     results = {}
     for member in members:
         picks = picks_by_user.get(member.user_id, [])
@@ -161,6 +171,8 @@ def score_week_for_pool(db: Session, pool: Pool, week: Week) -> ScoreReport:
                 for p in picks
             ],
             outcomes,
+            mode=pool.scoring_mode,
+            picks_required=picks_required,
         )
         results[member.user_id] = result
 
@@ -171,14 +183,17 @@ def score_week_for_pool(db: Session, pool: Pool, week: Week) -> ScoreReport:
         entry.points = result.points
         entry.correct = result.correct
         entry.possible = result.possible
-        # A player who never submitted keeps a null submitted_at and scores zero.
+        entry.did_not_submit = result.did_not_submit
+        # A player who never submitted keeps a null submitted_at. did_not_submit above is
+        # the flag the UI checks; under scoring_mode "inverse" their points are the maximum
+        # penalty, not zero, so submitted_at is not a safe stand in for that any more.
         if picks:
             entry.submitted_at = entry.submitted_at or min(
                 (_aware(p.created_at) for p in picks), default=utcnow()
             )
         report.players += 1
 
-    winners = weekly_winner_ids(results)
+    winners = weekly_winner_ids(results, mode=pool.scoring_mode)
     for member in members:
         entry = existing.get(member.user_id) or db.scalar(
             select(WeekEntry).where(

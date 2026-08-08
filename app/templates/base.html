@@ -32,7 +32,7 @@
         <a class="nav-link {{ 'is-active' if active_nav == 'picks' }}" href="/picks"
            {{ 'aria-current=page' if active_nav == 'picks' }}>This Week</a>
         <a class="nav-link {{ 'is-active' if active_nav == 'standings' }}" href="/standings"
-           {{ 'aria-current=page' if active_nav == 'standings' }}>Standings</a>
+           {{ 'aria-current=page' if active_nav == 'standings' }}>Season</a>
         <a class="nav-link {{ 'is-active' if active_nav == 'results' }}" href="/results"
            {{ 'aria-current=page' if active_nav == 'results' }}>Results</a>
         {% if is_commissioner %}
@@ -84,7 +84,7 @@
       {{ ic.icon("calendar", 20) }}<span>This Week</span>
     </a>
     <a class="tabbar-link {{ 'is-active' if active_nav == 'standings' }}" href="/standings">
-      {{ ic.icon("trophy", 20) }}<span>Standings</span>
+      {{ ic.icon("trophy", 20) }}<span>Season</span>
     </a>
     <a class="tabbar-link {{ 'is-active' if active_nav == 'results' }}" href="/results">
       {{ ic.icon("list", 20) }}<span>Results</span>

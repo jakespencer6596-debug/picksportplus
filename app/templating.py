@@ -131,6 +131,21 @@ def pluralize(n: int, singular: str, plural: str | None = None) -> str:
     return singular if n == 1 else (plural or singular + "s")
 
 
+def fmt_money(value: float | int | None) -> str:
+    """A plain number, no currency symbol: "480" or "27.50". Never "480.00": a whole dollar
+    figure drops its trailing zeroes, since the group's own phrasing ("480 dollars collected
+    of 640 dollars") reads the amount as a bare number with "dollars" spelled out beside it,
+    not a currency-formatted string. None (a pool with no entry fee set yet) reads as "0"."""
+    if value is None:
+        return "0"
+    # Round through cents first so a float artifact (639.9999999999999) never leaks into the
+    # displayed figure or into the whole-vs-fractional check just below.
+    cents = round(float(value) * 100)
+    if cents % 100 == 0:
+        return str(cents // 100)
+    return f"{cents / 100:.2f}"
+
+
 templates.env.filters.update(
     {
         "kickoff": fmt_kickoff,
@@ -142,6 +157,7 @@ templates.env.filters.update(
         "ordinal": ordinal,
         "pluralize": pluralize,
         "localtime": to_local,
+        "money": fmt_money,
     }
 )
 

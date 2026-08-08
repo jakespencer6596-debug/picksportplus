@@ -6,6 +6,7 @@
 {% block content %}
 {% set me = current_user.id if current_user else None %}
 {% set status_words = {"scored": "Scored", "locked": "Locked", "open": "Picks open", "draft": "Draft"} %}
+{% set points_dir = "asc" if pool and pool.scoring_mode == "inverse" else "desc" %}
 
 <div class="page-head">
   <div>
@@ -111,6 +112,104 @@
     {% endif %}
   </section>
 
+  <section class="section" aria-labelledby="weekly-heading">
+    <h2 class="section-title" id="weekly-heading">{{ week.label }} leaderboard</h2>
+
+    {% if weekly %}
+      {% if week.status != "scored" %}
+        <p class="muted lb-note">This week is still being scored. Points move as games go final.</p>
+      {% endif %}
+
+      <div class="mobile-only sort-select-wrap">
+        <label class="field-label" for="weekly-sort-select">Sort by</label>
+        <select class="select select-sm" id="weekly-sort-select" data-sort-select-for="weekly-leaderboard-table">
+          <option value="0:asc">Rank</option>
+          <option value="1:asc">Player, A to Z</option>
+          <option value="1:desc">Player, Z to A</option>
+          <option value="2:{{ points_dir }}">
+            {{ "Points against, low to high" if pool.scoring_mode == "inverse" else "Points, high to low" }}
+          </option>
+          <option value="2:{{ 'desc' if points_dir == 'asc' else 'asc' }}">
+            {{ "Points against, high to low" if pool.scoring_mode == "inverse" else "Points, low to high" }}
+          </option>
+          <option value="3:desc">Correct, most first</option>
+          <option value="3:asc">Correct, fewest first</option>
+        </select>
+      </div>
+
+      <div class="table-wrap">
+        <table class="table" id="weekly-leaderboard-table" data-sortable
+               data-default-sort-col="2" data-default-sort-dir="{{ points_dir }}">
+          <caption class="visually-hidden">
+            {{ week.label }} leaderboard. Ranked by points for the week. Click a column heading to sort.
+          </caption>
+          <thead>
+            <tr>
+              <th scope="col" data-sortable-col data-sort-default-dir="asc" aria-sort="none">Rank</th>
+              <th scope="col" data-sortable-col data-sort-default-dir="asc" aria-sort="none">Player</th>
+              <th scope="col" class="num" data-sortable-col data-sort-default-dir="{{ points_dir }}"
+                  aria-sort="{{ 'ascending' if points_dir == 'asc' else 'descending' }}">
+                {{ "Points against" if pool.scoring_mode == "inverse" else "Points" }}
+              </th>
+              <th scope="col" class="num" data-sortable-col data-sort-default-dir="desc" aria-sort="none">Correct</th>
+              {% if payout_rules_exist %}
+                <th scope="col" class="num">Payout</th>
+              {% endif %}
+            </tr>
+          </thead>
+          <tbody>
+            {% for row in weekly %}
+              {% set you = row.is_you or (me is not none and row.user_id == me) %}
+              <tr class="lb-row{{ ' lb-leader' if row.is_winner }}{{ ' is-you' if you }}">
+                <td data-label="Rank" data-sort-value="{{ row.rank }}">
+                  <span class="rank-badge num{% if row.rank <= 3 %} is-{{ row.rank }}{% endif %}">{{ row.rank }}</span>
+                </td>
+                <td data-label="Player">
+                  <span class="lb-name">
+                    <span class="lb-player">{{ row.display_name }}</span>
+                    {% if you %}<span class="pill pill-you">You</span>{% endif %}
+                    {% if row.is_winner %}
+                      <span class="ribbon">{{ ic.icon("flag", 13) }}Winner</span>
+                    {% endif %}
+                  </span>
+                </td>
+                <td class="num" data-label="Points" data-sort-value="{{ row.points }}">
+                  {% if row.did_not_submit %}<span class="no-entry">No picks submitted</span>{% else %}{{ row.points }}{% endif %}
+                </td>
+                <td class="num" data-label="Correct" data-sort-value="{{ row.correct }}">
+                  {% if row.did_not_submit %}<span class="no-entry">.</span>{% else %}{{ row.correct }} of {{ row.possible }}{% endif %}
+                </td>
+                {% if payout_rules_exist %}
+                  <td class="num" data-label="Payout">
+                    {{ payouts_by_user.get(row.user_id, 0) | money }} dollars
+                  </td>
+                {% endif %}
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      {% if pool.scoring_mode == "inverse" %}
+        <p class="muted lb-note">
+          Low score wins. You take the points you staked on any pick that loses.
+        </p>
+      {% endif %}
+      {% if payout_rules_exist %}
+        <p class="muted lb-note">
+          Payout column: {{ "bowl week" if payout_scope == "bowl" else "weekly" }} payout rules
+          from Settings. A tie splits the combined amount for those places evenly, to the cent;
+          any leftover cent goes to whoever submitted their picks earliest.
+        </p>
+      {% endif %}
+    {% else %}
+      <div class="empty-state">
+        {{ ic.icon("calendar", 28) }}
+        <p class="empty-state-title">No leaderboard yet</p>
+        <p>The weekly leaderboard opens once this week locks and the first scores come in.</p>
+      </div>
+    {% endif %}
+  </section>
+
   <section class="section" aria-labelledby="picks-heading">
     <h2 class="section-title" id="picks-heading">Every pick</h2>
 
@@ -137,93 +236,73 @@
         <li><span class="pick-key is-void" aria-hidden="true"></span>Void</li>
       </ul>
 
-      {# Below 768px the grid stacks into one card per game, so the player header row
-         disappears. This carries the totals and the winner mark on phones. #}
-      <ul class="pick-summary mobile-only">
-        {% for col in columns %}
-          {% set you = me is not none and col.user_id == me %}
-          <li class="pick-summary-row{{ ' is-you' if you }}">
-            <span class="lb-name">
-              <span class="lb-player">{{ col.display_name }}</span>
-              {% if you %}<span class="pill pill-you">You</span>{% endif %}
-              {% if col.is_winner %}<span class="ribbon">{{ ic.icon("flag", 13) }}Winner</span>{% endif %}
-            </span>
-            {% if col.submitted %}
-              <span class="num">{{ col.points }} pts, {{ col.correct }} correct</span>
-            {% else %}
-              <span class="no-entry">No entry</span>
-            {% endif %}
-          </li>
-        {% endfor %}
-      </ul>
+      <div class="view-toggle" role="group" aria-label="Pick grid view">
+        <button type="button" class="toggle-btn is-active" data-view-btn="player" aria-pressed="true">
+          By player
+        </button>
+        <button type="button" class="toggle-btn" data-view-btn="game" aria-pressed="false">
+          By game
+        </button>
+      </div>
 
-      <div class="table-wrap">
-        <table class="table picks-grid">
+      {# By player: rows are players, columns are confidence values descending from
+         pool.picks_required down to 1, one column per confidence, not one per game. A cell
+         shows the matchup the player staked that confidence value on, "GB over CHI",
+         regardless of right or wrong; colour still carries the outcome. A confidence value
+         nobody on the slate maps to for that player renders as a genuinely empty cell, not
+         an error, since a player who did not submit a full card has blank columns. #}
+      <div class="table-wrap" data-view-panel="player">
+        <table class="table picks-grid picks-grid-player">
           <caption class="visually-hidden">
-            Every player's pick for {{ week.label }}. Each cell shows the side taken and the points staked.
+            Every player's picks for {{ week.label }}, one row per player, one column per
+            confidence value from {{ pool.picks_required }} down to 1. Each cell shows the
+            matchup staked at that confidence.
           </caption>
           <thead>
             <tr>
-              <th scope="col" class="pick-game is-sticky">Game</th>
-              {% for col in columns %}
-                {% set you = me is not none and col.user_id == me %}
-                <th scope="col" class="pick-player{{ ' is-winner' if col.is_winner }}{{ ' is-you' if you }}">
-                  {% if col.is_winner %}
-                    <span class="ribbon">{{ ic.icon("flag", 13) }}Winner</span>
-                  {% endif %}
-                  <span class="pick-player-name">{{ col.display_name }}{% if you %} <span class="pill pill-you">You</span>{% endif %}</span>
-                  {% if col.submitted %}
-                    <span class="pick-player-stats num">{{ col.points }} pts, {{ col.correct }} correct</span>
-                  {% else %}
-                    <span class="no-entry">No entry</span>
-                  {% endif %}
-                </th>
+              <th scope="col" class="pick-rowhead is-sticky">Player</th>
+              {% for c in range(pool.picks_required, 0, -1) %}
+                <th scope="col" class="pick-conf">{{ c }}</th>
               {% endfor %}
             </tr>
           </thead>
           <tbody>
-            {% for game in games %}
-              {% set decided = game.is_final and game.winner in ("home", "away") %}
+            {% for col in columns %}
+              {% set you = me is not none and col.user_id == me %}
               <tr>
-                <th scope="row" class="pick-game is-sticky">
-                  <span class="pick-game-name">{{ game.matchup }}</span>
-                  <span class="pick-game-note">
-                    {%- if game.is_void -%}
-                      Void
-                    {%- elif game.winner == "tie" -%}
-                      Tie, void
-                    {%- elif decided -%}
-                      {% set won = game.winner == "home" -%}
-                      {{ game.home_abbr if won else game.away_abbr }} won
-                      {{ game.home_score if won else game.away_score }}-{{ game.away_score if won else game.home_score }}
-                    {%- else -%}
-                      {{ game.start_time | kickoff(tz) }}
-                    {%- endif -%}
-                  </span>
+                <th scope="row" class="pick-rowhead is-sticky{{ ' is-you' if you }}">
+                  {% if col.is_winner %}
+                    <span class="ribbon">{{ ic.icon("flag", 13) }}Winner</span>
+                  {% endif %}
+                  <span class="pick-game-name">{{ col.display_name }}{% if you %} <span class="pill pill-you">You</span>{% endif %}</span>
+                  {% if col.did_not_submit %}
+                    <span class="no-entry">No picks submitted</span>
+                  {% elif pool.scoring_mode == "inverse" %}
+                    <span class="pick-game-note num">{{ col.points }} against, {{ col.correct }} correct</span>
+                  {% else %}
+                    <span class="pick-game-note num">{{ col.points }} pts, {{ col.correct }} correct</span>
+                  {% endif %}
                 </th>
 
-                {% for col in columns %}
-                  {% set pick = col.picks.get(game.id) %}
-                  {% if pick is none or pick.state == "missing" %}
-                    <td class="pick-cell is-missing" data-label="{{ col.display_name }}" title="No pick">
-                      <span class="pick-mark">
-                        <span class="pick-none" aria-hidden="true">-</span>
-                        <span class="visually-hidden">No pick</span>
+                {% for c in range(pool.picks_required, 0, -1) %}
+                  {% set entry = col.by_confidence.get(c) %}
+                  {% if entry %}
+                    {% set game, pick = entry %}
+                    {% set side = game.home_abbr if pick.picked_team == "home" else game.away_abbr %}
+                    {% set opp = game.away_abbr if pick.picked_team == "home" else game.home_abbr %}
+                    <td class="pick-cell is-{{ pick.state }}" data-label="Confidence {{ c }}">
+                      <span class="pick-matchup"><strong>{{ side }}</strong> over {{ opp }}</span>
+                      {% if pick.state == "void" %}<span class="pick-void-badge">Void</span>{% endif %}
+                      <span class="visually-hidden">
+                        {%- if pick.state == "correct" %}, correct
+                        {%- elif pick.state == "wrong" %}, wrong
+                        {%- elif pick.state == "void" %}, void, no points
+                        {%- else %}, not final yet{% endif -%}
                       </span>
                     </td>
                   {% else %}
-                    {% set side = game.home_abbr if pick.picked_team == "home" else game.away_abbr %}
-                    <td class="pick-cell is-{{ pick.state }}" data-label="{{ col.display_name }}">
-                      <span class="pick-mark">
-                        <span class="pick-side">{{ side }}</span>
-                        <span class="pick-points num">{{ pick.confidence }}</span>
-                        <span class="visually-hidden">
-                          {%- if pick.state == "correct" %}Correct, {{ pick.earned }} {{ pick.earned | pluralize("point") }}
-                          {%- elif pick.state == "wrong" %}Wrong, no points
-                          {%- elif pick.state == "void" %}Void, no points
-                          {%- else %}Not final yet{% endif -%}
-                        </span>
-                      </span>
+                    <td class="pick-cell is-empty" data-label="Confidence {{ c }}">
+                      <span class="visually-hidden">No pick at confidence {{ c }}</span>
                     </td>
                   {% endif %}
                 {% endfor %}
@@ -232,13 +311,279 @@
           </tbody>
         </table>
       </div>
+
+      {# By game: the original layout, rows are games, columns are players. Kept behind the
+         toggle for anyone who preferred it. #}
+      <div data-view-panel="game" hidden>
+        {# Below 768px the grid stacks into one card per game, so the player header row
+           disappears. This carries the totals and the winner mark on phones. #}
+        <ul class="pick-summary mobile-only">
+          {% for col in columns %}
+            {% set you = me is not none and col.user_id == me %}
+            <li class="pick-summary-row{{ ' is-you' if you }}">
+              <span class="lb-name">
+                <span class="lb-player">{{ col.display_name }}</span>
+                {% if you %}<span class="pill pill-you">You</span>{% endif %}
+                {% if col.is_winner %}<span class="ribbon">{{ ic.icon("flag", 13) }}Winner</span>{% endif %}
+              </span>
+              {% if col.did_not_submit %}
+                <span class="no-entry">No picks submitted</span>
+              {% elif pool.scoring_mode == "inverse" %}
+                <span class="num">{{ col.points }} against, {{ col.correct }} correct</span>
+              {% else %}
+                <span class="num">{{ col.points }} pts, {{ col.correct }} correct</span>
+              {% endif %}
+            </li>
+          {% endfor %}
+        </ul>
+
+        <div class="table-wrap">
+          <table class="table picks-grid">
+            <caption class="visually-hidden">
+              Every player's pick for {{ week.label }}. Each cell shows the side taken and the points staked.
+            </caption>
+            <thead>
+              <tr>
+                <th scope="col" class="pick-game is-sticky">Game</th>
+                {% for col in columns %}
+                  {% set you = me is not none and col.user_id == me %}
+                  <th scope="col" class="pick-player{{ ' is-winner' if col.is_winner }}{{ ' is-you' if you }}">
+                    {% if col.is_winner %}
+                      <span class="ribbon">{{ ic.icon("flag", 13) }}Winner</span>
+                    {% endif %}
+                    <span class="pick-player-name">{{ col.display_name }}{% if you %} <span class="pill pill-you">You</span>{% endif %}</span>
+                    {% if col.did_not_submit %}
+                      <span class="no-entry">No picks submitted</span>
+                    {% elif pool.scoring_mode == "inverse" %}
+                      <span class="pick-player-stats num">{{ col.points }} against, {{ col.correct }} correct</span>
+                    {% else %}
+                      <span class="pick-player-stats num">{{ col.points }} pts, {{ col.correct }} correct</span>
+                    {% endif %}
+                  </th>
+                {% endfor %}
+              </tr>
+            </thead>
+            <tbody>
+              {% for game in games %}
+                {% set decided = game.is_final and game.winner in ("home", "away") %}
+                <tr>
+                  <th scope="row" class="pick-game is-sticky">
+                    <span class="pick-game-name">{{ game.matchup }}</span>
+                    <span class="pick-game-note">
+                      {%- if game.is_void -%}
+                        Void
+                      {%- elif game.winner == "tie" -%}
+                        Tie, void
+                      {%- elif decided -%}
+                        {% set won = game.winner == "home" -%}
+                        {{ game.home_abbr if won else game.away_abbr }} won
+                        {{ game.home_score if won else game.away_score }}-{{ game.away_score if won else game.home_score }}
+                      {%- else -%}
+                        {{ game.start_time | kickoff(tz) }}
+                      {%- endif -%}
+                    </span>
+                  </th>
+
+                  {% for col in columns %}
+                    {% set pick = col.picks.get(game.id) %}
+                    {% if pick is none or pick.state == "missing" %}
+                      <td class="pick-cell is-missing" data-label="{{ col.display_name }}" title="No pick">
+                        <span class="pick-mark">
+                          <span class="pick-none" aria-hidden="true">-</span>
+                          <span class="visually-hidden">No pick</span>
+                        </span>
+                      </td>
+                    {% else %}
+                      {% set side = game.home_abbr if pick.picked_team == "home" else game.away_abbr %}
+                      <td class="pick-cell is-{{ pick.state }}" data-label="{{ col.display_name }}">
+                        <span class="pick-mark">
+                          <span class="pick-side">{{ side }}</span>
+                          <span class="pick-points num">{{ pick.confidence }}</span>
+                          <span class="visually-hidden">
+                            {#- earned is read straight from scoring, so this is correct in
+                               either mode without checking scoring_mode directly: a wrong
+                               pick with a nonzero earned value is a penalty under inverse,
+                               a correct pick with a nonzero earned value is points under
+                               standard, and 0 always reads as no points either way. -#}
+                            {%- if pick.state == "correct" %}
+                              Correct{% if pick.earned %}, {{ pick.earned }} {{ pick.earned | pluralize("point") }}{% else %}, no points{% endif %}
+                            {%- elif pick.state == "wrong" %}
+                              Wrong{% if pick.earned %}, {{ pick.earned }} {{ pick.earned | pluralize("point") }} against you{% else %}, no points{% endif %}
+                            {%- elif pick.state == "void" %}Void, no points
+                            {%- else %}Not final yet{% endif -%}
+                          </span>
+                        </span>
+                      </td>
+                    {% endif %}
+                  {% endfor %}
+                </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      </div>
     {% else %}
       <div class="empty-state">
         {{ ic.icon("users", 28) }}
         <p class="empty-state-title">No cards to show</p>
-        <p>Nobody in this pool submitted picks for {{ week.label }}. A blank week scores zero.</p>
+        <p>
+          Nobody in this pool submitted picks for {{ week.label }}.
+          {% if pool.scoring_mode == "inverse" %}
+            A blank week charges everyone the same maximum penalty, so nobody gains an edge.
+          {% else %}
+            A blank week scores zero for everyone.
+          {% endif %}
+        </p>
       </div>
     {% endif %}
   </section>
+
+  {% if revealed %}
+  <section class="section" aria-labelledby="scenarios-heading">
+    <h2 class="section-title" id="scenarios-heading">Scenarios</h2>
+
+    {% if scenario_panel and scenario_panel.visible %}
+      {% set report = scenario_panel.report %}
+      <div class="row scenario-toolbar">
+        <p class="muted">
+          {% if report.method == "monte_carlo" %}
+            Estimated from {{ "{:,}".format(report.scenario_count) }} sampled scenarios
+            (too many remaining games to check every one exactly).
+          {% else %}
+            Exact, every one of the {{ "{:,}".format(report.scenario_count) }} possible
+            scenarios for the {{ scenario_panel.remaining_count }} remaining
+            {{ scenario_panel.remaining_count | pluralize("game") }} checked.
+          {% endif %}
+          {% if probability_model == "moneyline" %}
+            <strong>Estimated from betting odds.</strong>
+          {% endif %}
+        </p>
+        <div class="view-toggle" role="group" aria-label="Probability model">
+          <a class="toggle-btn{{ ' is-active' if probability_model == 'even' }}"
+             href="/results?week={{ week.week_number }}&amp;model=even" aria-pressed="{{ 'true' if probability_model == 'even' else 'false' }}">
+            Even odds
+          </a>
+          <a class="toggle-btn{{ ' is-active' if probability_model == 'moneyline' }}"
+             href="/results?week={{ week.week_number }}&amp;model=moneyline" aria-pressed="{{ 'true' if probability_model == 'moneyline' else 'false' }}">
+            Betting odds
+          </a>
+        </div>
+      </div>
+
+      <div class="table-wrap">
+        <table class="table">
+          <caption class="visually-hidden">
+            Every player's chance at 1st, 2nd and 3rd place for {{ week.label }}.
+          </caption>
+          <thead>
+            <tr>
+              <th scope="col">Player</th>
+              <th scope="col" class="num">1st</th>
+              <th scope="col" class="num">2nd</th>
+              <th scope="col" class="num">3rd</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for col in columns %}
+              {% set outlook = report.players.get(col.user_id) %}
+              {% if outlook %}
+                {% set you = me is not none and col.user_id == me %}
+                <tr class="{{ 'is-you' if you }}">
+                  <td data-label="Player">
+                    {{ col.display_name }}{% if you %} <span class="pill pill-you">You</span>{% endif %}
+                  </td>
+                  {% for place in (1, 2, 3) %}
+                    <td class="num" data-label="Place {{ place }}">
+                      {% if outlook.clinched[place] %}
+                        <span class="badge badge-final">Clinched</span>
+                      {% elif outlook.eliminated[place] %}
+                        <span class="no-entry">Eliminated</span>
+                      {% else %}
+                        {{ (outlook.pct_at_place[place] * 100) | round | int }}%
+                      {% endif %}
+                    </td>
+                  {% endfor %}
+                </tr>
+              {% endif %}
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+
+      {% if leverage_lines %}
+        <div class="panel scenario-leverage">
+          <p class="notice-title">What you need</p>
+          <ul class="leverage-list">
+            {% for line in leverage_lines %}
+              <li>{{ line.sentence }}</li>
+            {% endfor %}
+          </ul>
+        </div>
+      {% endif %}
+
+      {% if representative_lines %}
+        <details class="scenario-representative">
+          <summary>See {{ representative_lines | length }} example winning
+            {{ representative_lines | length | pluralize("scenario") }}</summary>
+          <ul class="representative-list">
+            {% for rep in representative_lines %}
+              <li>{{ rep.picks | join(", ") }}</li>
+            {% endfor %}
+          </ul>
+        </details>
+      {% endif %}
+    {% else %}
+      <div class="empty-state">
+        {{ ic.icon("list", 28) }}
+        <p class="empty-state-title">Scenarios open once {{ pool.scenarios_min_final_games }} {{ pool.scenarios_min_final_games | pluralize("game") }} {{ "are" if pool.scenarios_min_final_games != 1 else "is" }} final.</p>
+        <p class="muted">
+          {% if scenario_panel %}
+            {{ scenario_panel.final_count }} of {{ pool.scenarios_min_final_games }} final so far.
+          {% endif %}
+        </p>
+      </div>
+    {% endif %}
+  </section>
+
+  {% if scenario_panel and scenario_panel.visible and remaining_games_by_id %}
+    <section class="section" aria-labelledby="custom-scenario-heading">
+      <h2 class="section-title" id="custom-scenario-heading">Build your own scenario</h2>
+      <p class="muted lb-note">
+        Set any remaining game to a winner and see how the standings shift, for every
+        player. Leave a game undecided to keep it out of the count.
+      </p>
+
+      <form hx-post="/results/custom-scenario" hx-target="[data-custom-scenario-target]"
+            hx-swap="innerHTML">
+        <input type="hidden" name="week" value="{{ week.week_number }}">
+        <div class="custom-scenario-games">
+          {% for game in remaining_games_by_id.values() %}
+            <fieldset class="field-group custom-scenario-game">
+              <legend class="field-label">{{ game.matchup }}</legend>
+              <label class="checkbox" for="game_{{ game.id }}_away">
+                <input type="radio" id="game_{{ game.id }}_away" name="game_{{ game.id }}"
+                       value="away">
+                <span>{{ game.away_abbr }} wins</span>
+              </label>
+              <label class="checkbox" for="game_{{ game.id }}_undecided">
+                <input type="radio" id="game_{{ game.id }}_undecided" name="game_{{ game.id }}"
+                       value="undecided" checked>
+                <span>Undecided</span>
+              </label>
+              <label class="checkbox" for="game_{{ game.id }}_home">
+                <input type="radio" id="game_{{ game.id }}_home" name="game_{{ game.id }}"
+                       value="home">
+                <span>{{ game.home_abbr }} wins</span>
+              </label>
+            </fieldset>
+          {% endfor %}
+        </div>
+        <button class="btn btn-primary" type="submit">Recompute standings</button>
+      </form>
+
+      <div data-custom-scenario-target></div>
+    </section>
+  {% endif %}
+  {% endif %}
 {% endif %}
 {% endblock %}

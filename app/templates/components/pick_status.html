@@ -10,7 +10,8 @@
     {% for e in errors %}<li>{{ e }}</li>{% endfor %}
   </ul>
   <p class="form-hint">
-    Every game needs a winner, and each point value from 1 to {{ n }} is used exactly once.
+    Pick exactly {{ n }} {{ n | pluralize("game") }}, and use each point value from 1 to
+    {{ n }} exactly once.
   </p>
 </div>
 {% elif saved %}
@@ -21,6 +22,6 @@
 {% endif %}
 <div class="flash flash-ok" role="status" data-saved-at="{{ stamp }}">
   {{ ic.icon("check", 18) }}
-  <span>Picks are in. All {{ n }} {{ n | pluralize("game") }} ranked. {{ stamp }}.</span>
+  <span>Picks are in. {{ n }} {{ n | pluralize("game") }} ranked. {{ stamp }}.</span>
 </div>
 {% endif %}

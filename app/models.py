@@ -8,15 +8,19 @@ from typing import Any
 from sqlalchemy import (
     JSON,
     Boolean,
+    Date,
     DateTime,
     Float,
     ForeignKey,
     Integer,
     String,
+    Text,
     UniqueConstraint,
     func,
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
+
+from app.providers.teams import canonical_key
 
 
 class Base(DeclarativeBase):
@@ -33,6 +37,36 @@ WEEK_STATUSES = ("draft", "open", "locked", "scored")
 GAME_STATUSES = ("scheduled", "in_progress", "final", "void")
 LEAGUES = ("nfl", "ncaaf")
 SPREAD_SOURCES = ("espn", "espn_core", "odds_api", "cfbd", "manual")
+# "inverse": wrong picks count against the player, lowest total wins. This is the pool's
+# real rule and the default. "standard": correct picks earn points, highest total wins,
+# kept switchable per pool. See app/scoring.py.
+SCORING_MODES = ("standard", "inverse")
+# Which leaderboard a PayoutRule's place/amount is matched against (Phase 7): "weekly" for
+# an ordinary week's WeeklyRow.rank, "bowl" for a week where Week.is_bowl_week is true
+# (routes there instead of "weekly" even when weekly rules also exist), "season" for
+# StandingRow.rank on the season standings panel. See app/services/payouts.py.
+PAYOUT_SCOPES = ("weekly", "bowl", "season")
+
+# The rivalry pairs (Phase 5) that auto-pin themselves onto every rebuilt slate no matter
+# how wide the spread runs: the two the commissioner group named directly (Ohio State vs
+# Michigan, Auburn vs Alabama) plus the rest of the obviously-same-shape rivalries. Every
+# key comes from a real canonical_key(...) call, never a hand typed slug, so a change to
+# app/providers/teams.py's alias tables cannot silently drift this list out of sync with
+# what upsert_games actually matches against. See DECISIONS.md, Phase 5.
+DEFAULT_RIVALRIES: tuple[tuple[str, str], ...] = (
+    (canonical_key("Ohio State", "ncaaf"), canonical_key("Michigan", "ncaaf")),
+    (canonical_key("Auburn", "ncaaf"), canonical_key("Alabama", "ncaaf")),
+    (canonical_key("Army", "ncaaf"), canonical_key("Navy", "ncaaf")),
+    (canonical_key("Michigan", "ncaaf"), canonical_key("Michigan State", "ncaaf")),
+    (canonical_key("Florida", "ncaaf"), canonical_key("Georgia", "ncaaf")),
+    (canonical_key("Texas", "ncaaf"), canonical_key("Oklahoma", "ncaaf")),
+    (canonical_key("USC", "ncaaf"), canonical_key("Notre Dame", "ncaaf")),
+)
+
+
+def _default_rivalries() -> list[list[str]]:
+    """A fresh, mutable copy, so no two Pool rows ever share the same list object."""
+    return [list(pair) for pair in DEFAULT_RIVALRIES]
 
 
 class User(Base):
@@ -50,7 +84,9 @@ class User(Base):
     )
 
     memberships: Mapped[list[PoolMember]] = relationship(
-        back_populates="user", cascade="all, delete-orphan"
+        back_populates="user",
+        cascade="all, delete-orphan",
+        foreign_keys="PoolMember.user_id",
     )
     picks: Mapped[list[Pick]] = relationship(back_populates="user", cascade="all, delete-orphan")
 
@@ -74,15 +110,71 @@ class Pool(Base):
     num_games_per_week: Mapped[int] = mapped_column(Integer, default=20, nullable=False)
     target_nfl: Mapped[int] = mapped_column(Integer, default=8, nullable=False)
     target_ncaaf: Mapped[int] = mapped_column(Integer, default=12, nullable=False)
+    # How many of the num_games_per_week slate games a player must pick, exactly, confidence
+    # 1..picks_required. Must stay between 1 and num_games_per_week (settings_save enforces
+    # this); a pool that wants to require the whole slate just sets this equal to
+    # num_games_per_week. See app/scoring.py for how this feeds validate_picks and score_week.
+    picks_required: Mapped[int] = mapped_column(Integer, default=15, nullable=False)
 
     sports: Mapped[list[str]] = mapped_column(
         JSON, default=lambda: ["nfl", "ncaaf"], nullable=False
     )
-    auto_publish: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    # Off by default (Phase 5): the tool always proposes a slate, but a fresh pool waits for
+    # the commissioner to review and publish it by hand rather than opening automatically.
+    # See DECISIONS.md, Phase 5, for why the default flipped.
+    auto_publish: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    # Rivalry pairs that auto-pin themselves onto every rebuilt slate, regardless of spread
+    # width (Phase 5: "certain games with wider spreads are almost always included"). A list
+    # of two element lists of canonical team keys, either order, for example
+    # [["ncaaf:ohio-state", "ncaaf:michigan"]]. See app/providers/teams.canonical_key for the
+    # key format and app/services/ingest.py for where a match is applied to a new Game row.
+    rivalries: Mapped[list[list[str]]] = mapped_column(
+        JSON, default=_default_rivalries, nullable=False
+    )
     # Per pool override of the OPEN_REGISTRATION env default, owned by the commissioner.
     open_registration: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     current_week: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+    # The commissioner-set Saturday that pool week 1 anchors to for the season. Pool week N's
+    # own anchor is week1_anchor_date + (N - 1) weeks. Nullable because a pool created before
+    # this feature, or one nobody has configured yet, has none: see app/services/ingest.py
+    # detect_week for the fallback that keeps such a pool working without it.
+    week1_anchor_date: Mapped[dt.date | None] = mapped_column(Date, nullable=True)
+    # "inverse" (default): wrong picks count their staked confidence against the player,
+    # lowest total wins. "standard": correct picks earn their staked confidence, highest
+    # total wins. See app/scoring.py for the scoring functions both modes run through.
+    scoring_mode: Mapped[str] = mapped_column(String(16), default="inverse", nullable=False)
     timezone: Mapped[str] = mapped_column(String(64), default="America/New_York", nullable=False)
+
+    # Venmo entry gate (Phase 7: "Will be Venmo only this year. No Venmo, no participation.").
+    # A plain float, the same convention app/slate.py's spread_home/closeness already use for
+    # a precision-sensitive number in this codebase, rather than introducing SQLAlchemy's
+    # Numeric type for one new area. Every tie split computation rounds to the cent in integer
+    # cents before converting back (see app/services/payouts.py), so float drift never reaches
+    # a stored or displayed amount. Nullable/None until the commissioner sets a real number by
+    # hand; the house rule is that no dollar figure is ever hard coded, including a fallback
+    # default here. See DECISIONS.md, Phase 7.
+    entry_fee: Mapped[float | None] = mapped_column(Float, nullable=True)
+    # The single collector's Venmo handle (no @), "1 person to pay, no multiple accounts" per
+    # the group. PoolMember.member_venmo_handle (below) is a different thing: an optional note
+    # for the commissioner's own reconciliation, never a second place to pay.
+    venmo_handle: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    # True (the default) means POST /picks and POST /picks/lock both refuse a member whose
+    # PoolMember.paid_at is null, and GET /picks shows the blocking Venmo panel. A commissioner
+    # who wants a free pool, or wants picks open before payment is settled, switches this off.
+    payment_required_to_pick: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    # Free text shown to players above the Venmo links, for example how to word the Venmo note
+    # or a Zelle fallback for anyone without Venmo. Never seeded with real instructions.
+    payment_note: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    # Scenarios panel visibility (Phase 8: "Once 5 games were completed, you could see how
+    # many different scenarios got you placed for the week"). The panel on Weekly Results
+    # only renders once a week has at least this many final countable games AND at least
+    # this many still-remaining countable games; below that it shows a pending state
+    # instead. Both are commissioner settings, read at render time, never hard coded, so a
+    # smaller or larger pool can tune when the panel is worth showing.
+    scenarios_min_final_games: Mapped[int] = mapped_column(Integer, default=5, nullable=False)
+    scenarios_min_remaining_games: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+
     created_at: Mapped[dt.datetime] = mapped_column(
         DateTime(timezone=True), default=utcnow, server_default=func.now(), nullable=False
     )
@@ -91,6 +183,9 @@ class Pool(Base):
         back_populates="pool", cascade="all, delete-orphan"
     )
     weeks: Mapped[list[Week]] = relationship(back_populates="pool", cascade="all, delete-orphan")
+    payout_rules: Mapped[list[PayoutRule]] = relationship(
+        back_populates="pool", cascade="all, delete-orphan"
+    )
 
     @property
     def league_targets(self) -> dict[str, int]:
@@ -119,9 +214,29 @@ class PoolMember(Base):
     joined_at: Mapped[dt.datetime] = mapped_column(
         DateTime(timezone=True), default=utcnow, server_default=func.now(), nullable=False
     )
+    # Set the moment a commissioner marks this member paid (POST /admin/members/{id}/paid or
+    # the bulk action), cleared to unmark. Null means unpaid, the only state the Venmo gate
+    # (Pool.payment_required_to_pick) checks; there is no separate "confirmed by whom" table,
+    # paid_marked_by_user_id below is enough for accountability.
+    paid_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # Who clicked the toggle, for accountability if a payment is disputed later. Set alongside
+    # paid_at and cleared alongside it; never set on its own. SET NULL rather than CASCADE: a
+    # site admin account being deleted years later must not silently un-mark every payment
+    # they ever confirmed.
+    paid_marked_by_user_id: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    # Optional, for the commissioner's own bookkeeping only (spotting two members who share one
+    # Venmo account, which the group explicitly banned: "1 person to pay, no multiple
+    # accounts"). Never itself a place to pay; Pool.venmo_handle is the single collector.
+    member_venmo_handle: Mapped[str | None] = mapped_column(String(80), nullable=True)
 
     pool: Mapped[Pool] = relationship(back_populates="members")
-    user: Mapped[User] = relationship(back_populates="memberships")
+    # Two FKs onto users.id now (user_id, paid_marked_by_user_id), so both relationships name
+    # their own foreign_keys explicitly; SQLAlchemy cannot infer which FK belongs to which
+    # relationship once there is more than one path to the same target table.
+    user: Mapped[User] = relationship(back_populates="memberships", foreign_keys=[user_id])
+    paid_marked_by: Mapped[User | None] = relationship(foreign_keys=[paid_marked_by_user_id])
 
     @property
     def is_commissioner(self) -> bool:
@@ -139,7 +254,21 @@ class Week(Base):
         ForeignKey("pools.id", ondelete="CASCADE"), index=True, nullable=False
     )
     season_year: Mapped[int] = mapped_column(Integer, nullable=False)
+    # The pool's own 1, 2, 3... sequence number. Never sent to ESPN directly: each enabled
+    # league resolves its own ESPN week number and season type from anchor_date, see
+    # app/services/calendar.py. resolved_weeks records what each league actually resolved to.
     week_number: Mapped[int] = mapped_column(Integer, nullable=False)
+    # The Saturday this pool week is anchored to: pool.week1_anchor_date + (week_number - 1)
+    # weeks. Nullable because a week created while the pool has no week1_anchor_date configured
+    # gets none, and fetch_candidates falls back to sending week_number to ESPN directly.
+    anchor_date: Mapped[dt.date | None] = mapped_column(Date, nullable=True)
+    # What each enabled league actually resolved to when the candidate pool was last fetched,
+    # for example {"nfl": {"week": 1, "season_type": 2}, "ncaaf": {"week": 3, "season_type": 2}}.
+    # A league that had no games for anchor_date (regular season or postseason) maps to None.
+    resolved_weeks: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict, nullable=False)
+    # True when any enabled league needed season_type=3 (postseason/bowl season) to find a
+    # calendar window containing anchor_date.
+    is_bowl_week: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     label: Mapped[str] = mapped_column(String(60), nullable=False)
     status: Mapped[str] = mapped_column(String(12), default="draft", nullable=False)
     lock_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
@@ -192,8 +321,23 @@ class Game(Base):
     closeness: Mapped[float | None] = mapped_column(Float, nullable=True)
     spread_source: Mapped[str | None] = mapped_column(String(16), nullable=True)
 
+    # American odds (Phase 8, the scenario engine's moneyline probability model). Populated
+    # opportunistically wherever app/providers/espn.py already parses odds, when a moneyline
+    # shaped key is present in the payload. None of this codebase's recorded ESPN fixtures
+    # carry one (checked directly against tests/fixtures, see DECISIONS.md, Phase 8), so on
+    # live traffic these are commonly null and app.scenarios.win_probability falls back to
+    # the spread derived normal CDF model, which is expected and documented, not a bug.
+    home_moneyline: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    away_moneyline: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
     in_slate: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     slate_rank: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # True means this game always makes the slate on the next rebuild, regardless of its
+    # spread (Phase 5). Set either by a commissioner action or by a rivalry auto-pin on
+    # first creation (see upsert_games in app/services/ingest.py). No separate "why pinned"
+    # column: whether it is a rivalry match against pool.rivalries or a manual pin is worked
+    # out at render/report time from canonical_home_key/canonical_away_key, not stored here.
+    pinned: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
 
     status: Mapped[str] = mapped_column(String(16), default="scheduled", nullable=False)
     home_score: Mapped[int | None] = mapped_column(Integer, nullable=True)
@@ -276,9 +420,21 @@ class WeekEntry(Base):
         ForeignKey("weeks.id", ondelete="CASCADE"), index=True, nullable=False
     )
     submitted_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # Set when the player deliberately locks their own picks for the week, ahead of the
+    # pool-wide lock_at (Phase 4). Distinct from submitted_at: a save touches submitted_at
+    # and never this column, only POST /picks/lock does. Cleared by POST /picks/unlock, which
+    # is only permitted while week_is_locked(week) is still False; once the real lock_at
+    # passes, the player can never unlock again and this column is frozen at whatever it was.
+    locked_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     points: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     correct: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     possible: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    # Set from app.scoring.WeekResult.did_not_submit. The explicit flag the UI checks to
+    # show "no picks submitted" instead of a bare score, rather than inferring it from
+    # submitted_at is None. Under scoring_mode "inverse" a no-show still carries a real,
+    # nonzero points value (the maximum penalty), so this flag is what tells the UI and
+    # weekly_winner_ids that the number on the row is a penalty, not a real result.
+    did_not_submit: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     is_winner: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     created_at: Mapped[dt.datetime] = mapped_column(
         DateTime(timezone=True), default=utcnow, server_default=func.now(), nullable=False
@@ -286,6 +442,33 @@ class WeekEntry(Base):
 
     user: Mapped[User] = relationship()
     week: Mapped[Week] = relationship(back_populates="entries")
+
+
+class PayoutRule(Base):
+    """One place's dollar amount for one payout scope (Phase 7).
+
+    "There was a payout column that determined the amount due each user. In settings we
+    determined what #1, 2, 3, 4 received each week, for the special Bowl Week, and end of
+    season awards." Ships with zero rows for every pool, always: the commissioner enters every
+    real number by hand from /admin/settings, never a seeded or hard coded figure (see
+    DECISIONS.md, Phase 7, and the Phase 0 configuration note this restates). Matched against
+    rank at read time (app/services/payouts.py), never stored against a specific week or
+    player, so the same weekly structure applies to every week without re-entering it.
+    """
+
+    __tablename__ = "payout_rules"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    pool_id: Mapped[int] = mapped_column(
+        ForeignKey("pools.id", ondelete="CASCADE"), index=True, nullable=False
+    )
+    scope: Mapped[str] = mapped_column(String(16), nullable=False)  # PAYOUT_SCOPES
+    place: Mapped[int] = mapped_column(Integer, nullable=False)  # 1 based, 1 is first
+    # Same float convention as Pool.entry_fee, see its comment.
+    amount: Mapped[float] = mapped_column(Float, nullable=False)
+    label: Mapped[str | None] = mapped_column(String(120), nullable=True)  # "1st place", optional
+
+    pool: Mapped[Pool] = relationship(back_populates="payout_rules")
 
 
 class FeedCache(Base):
