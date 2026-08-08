@@ -8,7 +8,7 @@ reasoning behind every judgment call made along the way.
 - [x] Phase 2. Invert scoring, lowest total wins
 - [x] Phase 3. Pick 15 of 20
 - [x] Phase 4. Two-step pick entry
-- [ ] Phase 5. Admin-curated slate with pinned games
+- [x] Phase 5. Admin-curated slate with pinned games
 - [ ] Phase 6. Navigation, sortable tables, transposed results grid
 - [ ] Phase 7. Entry payment and payouts
 - [ ] Phase 8. The scenarios engine
@@ -252,3 +252,56 @@ genuinely partial entry (written directly, since a real Save can never leave one
 check .` and `black .` both clean. Full judgment calls, especially the two-writer confidence
 model (typed vs. dragged) and the "Not picked" divider's drag behavior, are recorded in
 `DECISIONS.md` under "Phase 4".
+
+## Phase 5 notes
+
+Two changes the group running the pool asked for directly: closest-spread selection alone
+was routinely dropping rivalry games (Ohio State vs Michigan, Auburn vs Alabama) the moment
+either side was having a lopsided season, and automation building *and opening* a week by
+itself was more automatic than the group wanted.
+
+- `app/slate.py`. `Candidate` and `Selected` both gained a `pinned: bool = False` field.
+  `select_slate_by_targets` seeds pinned candidates into the first pass before the ordinary
+  per league fill runs, so a pin already counts against its own league's target; the
+  existing over/under total balancing (drop the farthest, fill from the other league) does
+  the rest unchanged. A pinned game is never dropped by the "over total" trim, even as the
+  widest spread in the pool. More pins than `num_games_per_week` raises a clear `ValueError`
+  rather than silently truncating them. A pin still needs a resolvable spread and to not
+  have already kicked off, the same eligibility rule every other candidate follows.
+- `app/models.py`. `Pool.auto_publish` default flips to `False`. New `Game.pinned` (Boolean,
+  default `False`) and `Pool.rivalries` (JSON, default the curated list below) columns. No
+  separate `pin_reason` column: why a game is pinned is computed at render time.
+- `alembic/versions/6b6eab096a56_add_pinned_games_and_rivalries.py`. The migration for the
+  two new columns, reversible, verified upgrade and downgrade against both a fresh and the
+  repo's existing local database. `auto_publish`'s own default flip needed no schema change,
+  since the column never carried a database level default; see `DECISIONS.md`.
+- `app/cli.py`. `seed_admin`'s `Pool(...)` call no longer hard codes `auto_publish=True`, so
+  a freshly seeded pool actually gets the new default.
+- `app/services/ingest.py`. `upsert_games` auto-pins a brand new game the moment its two
+  teams match one of `pool.rivalries`'s pairs, in either home/away order, but only on
+  creation: a commissioner's deliberate un-pin survives every later rebuild of the same
+  game. New `set_pinned` (always allowed, including once picks exist, since a pin never
+  resizes or reorders the slate that is already live) and `slate_reason` (the "Pinned" /
+  "Rivalry" / "Closest (spread X, source Y)" explanation the slate editor shows).
+- `app/routers/admin.py` / `app/templates/admin/slate.html`. A pin/unpin control per game,
+  on the existing `POST /admin/slate/game` route (`action=pin`/`unpin`), same error handling
+  and flash style as `add`/`remove`/`swap`/`void`. A "why it's here" column on the slate
+  table, and pinned/missing-spread counts added to the week status summary. `slate_build`
+  now catches the new `ValueError` (pins over the total) and flashes it instead of a 500.
+- `app/routers/admin.py` / `app/templates/admin/settings.html`. A "Pinned rivalry games"
+  card: a plain "Team A vs Team B" per line textarea, parsed through `canonical_key` on
+  save, rendered back through `display_name` on load. College matchups only for now.
+- Seeded rivalry pairs, every key a real `canonical_key(...)` call, never hand typed: Ohio
+  State vs Michigan, Auburn vs Alabama, Army vs Navy, Michigan vs Michigan State, Florida vs
+  Georgia, Texas vs Oklahoma, USC vs Notre Dame.
+- `SPEC.md`. Section 6 and 6a rewritten for pinned/rivalry games; Section 7 rewritten for
+  the new `auto_publish` default and what changes (and does not) when a commissioner turns
+  automatic opening back on.
+
+Test suite: **664 passed**, 0 failed (642 at the Phase 4 baseline, 22 net new: 12 in
+`tests/test_slate.py`, 8 in `tests/test_ingest.py`, 2 in the new `tests/test_cli.py` for
+`seed_admin`'s `auto_publish` default). `ruff check .` and `black .` both clean. Full
+judgment calls (eligibility-requires-a-spread-even-for-pins, the rivalry auto-pin
+persistence choice, the exact seeded pairs and how they were derived, and why no schema
+migration was needed for `auto_publish` itself) are recorded in `DECISIONS.md` under
+"Phase 5".

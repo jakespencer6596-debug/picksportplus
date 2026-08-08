@@ -6,6 +6,7 @@ Everything here sits behind require_commissioner. A regular player cannot reach 
 from __future__ import annotations
 
 import datetime as dt
+import re
 
 from fastapi import APIRouter, Depends, Form, HTTPException, Request, status
 from fastapi.responses import RedirectResponse
@@ -24,6 +25,7 @@ from app.config import Settings, settings
 from app.db import get_db
 from app.models import SCORING_MODES, Game, Pick, PoolMember, User, Week
 from app.providers.http import provider_warnings, usage_report
+from app.providers.teams import canonical_key, display_name
 from app.services import ingest
 from app.templating import get_zone, render
 
@@ -47,6 +49,50 @@ def _week_or_none(db: Session, pool: Pool, week_number: int | None) -> Week | No
 
 def _base(db: Session, user: User, pool: Pool) -> dict:
     return {"current_user": user, "pool": pool, "is_commissioner": True, "active_nav": "admin"}
+
+
+# Rivalries --------------------------------------------------------------------
+
+# Splits "Ohio State vs Michigan" (case insensitive, "vs" or "vs.") into its two names.
+_VS_RE = re.compile(r"\s+vs\.?\s+", re.IGNORECASE)
+
+
+def _parse_rivalries(text: str) -> list[list[str]]:
+    """One "Team A vs Team B" matchup per line into canonical key pairs.
+
+    Blank lines and lines with no recognisable "vs" separator are skipped rather than
+    rejected, since a rivalry list is a low stakes convenience setting, not a place the
+    commissioner needs a form error blocking the rest of their save over one typo. Every
+    name is resolved via canonical_key(name, "ncaaf"): every rivalry named in the brief, and
+    every one in the seeded default list, is a college matchup, so this form does not (yet)
+    support NFL rivalries. canonical_key never raises and falls back to a slug of whatever
+    was typed, so an unrecognised team name is stored rather than dropped; it simply will
+    not match any real game until the spelling is fixed.
+    """
+    pairs: list[list[str]] = []
+    for raw_line in text.splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        parts = _VS_RE.split(line, maxsplit=1)
+        if len(parts) != 2:
+            continue
+        left, right = (part.strip() for part in parts)
+        if not left or not right:
+            continue
+        pairs.append([canonical_key(left, "ncaaf"), canonical_key(right, "ncaaf")])
+    return pairs
+
+
+def _rivalries_text(rivalries: list[list[str]] | None) -> str:
+    """The reverse of _parse_rivalries, for the settings form's textarea."""
+    lines: list[str] = []
+    for pair in rivalries or []:
+        if len(pair) != 2:
+            continue
+        a, b = pair
+        lines.append(f"{display_name(a) or a} vs {display_name(b) or b}")
+    return "\n".join(lines)
 
 
 # Dashboard ------------------------------------------------------------------
@@ -115,6 +161,7 @@ def settings_page(
             "max_slate": Settings.MAX_SLATE,
             "env_open_registration": settings.open_registration,
             "scoring_modes": SCORING_MODES,
+            "rivalries_text": _rivalries_text(pool.rivalries),
             "timezones": [
                 "America/New_York",
                 "America/Chicago",
@@ -144,6 +191,7 @@ def settings_save(
     sports_nfl: str = Form(""),
     sports_ncaaf: str = Form(""),
     week1_anchor_date: str = Form(""),
+    rivalries: str = Form(""),
     db: Session = Depends(get_db),
     user: User = Depends(require_user),
     pool: Pool = Depends(require_commissioner),
@@ -199,6 +247,7 @@ def settings_save(
     pool.auto_publish = bool(auto_publish)
     pool.open_registration = bool(open_registration)
     pool.week1_anchor_date = anchor_date
+    pool.rivalries = _parse_rivalries(rivalries)
     db.commit()
 
     total = sum(pool.league_targets.values())
@@ -346,6 +395,9 @@ def slate_page(
     candidates: list[Game] = []
     editable = False
     pick_count = 0
+    reasons: dict[int, str] = {}
+    pinned_count = 0
+    missing_spread_count = 0
 
     if row is not None:
         games = list(db.scalars(select(Game).where(Game.week_id == row.id)))
@@ -362,6 +414,9 @@ def slate_page(
             db.scalar(select(func.count(func.distinct(Pick.user_id))).where(Pick.week_id == row.id))
             or 0
         )
+        reasons = {g.id: ingest.slate_reason(g, pool) for g in on_slate}
+        pinned_count = sum(1 for g in games if g.pinned and g.status != "void")
+        missing_spread_count = sum(1 for g in games if g.spread_home is None and g.status != "void")
 
     return render(
         request,
@@ -376,6 +431,9 @@ def slate_page(
             "targets": pool.league_targets,
             "league_labels": LEAGUE_LABELS,
             "warnings": provider_warnings(db),
+            "reasons": reasons,
+            "pinned_count": pinned_count,
+            "missing_spread_count": missing_spread_count,
         },
         **_base(db, user, pool),
     )
@@ -398,14 +456,22 @@ def slate_build(
     user: User = Depends(require_user),
     pool: Pool = Depends(require_commissioner),
 ):
-    report = ingest.build_slate(
-        db,
-        pool,
-        pool.season_year,
-        week_number,
-        allow_metered=not bool(no_metered),
-        publish=True if publish else None,
-    )
+    try:
+        report = ingest.build_slate(
+            db,
+            pool,
+            pool.season_year,
+            week_number,
+            allow_metered=not bool(no_metered),
+            publish=True if publish else None,
+        )
+    except ValueError as exc:
+        # Most likely more games are pinned than the slate total allows (app.slate raises
+        # this rather than silently truncating the pins). Reduce the total, or unpin a game,
+        # from the slate editor below.
+        db.rollback()
+        flash(request, str(exc), "error")
+        return _redirect(f"/admin/slate?week={week_number}")
     db.commit()
     flash(request, report.summary(), "ok" if report.selected else "info")
     for note in report.notes:
@@ -468,6 +534,12 @@ def slate_game_action(
             value = spread.strip()
             ingest.set_manual_spread(db, row, game_id, float(value) if value else None)
             flash(request, "Line set by hand. No feed will overwrite it.")
+        elif action == "pin":
+            ingest.set_pinned(db, row, game_id, True)
+            flash(request, "Game pinned. It will always be on the slate the next time it is built.")
+        elif action == "unpin":
+            ingest.set_pinned(db, row, game_id, False)
+            flash(request, "Game unpinned.")
         else:
             raise ValueError("Unknown action.")
         db.commit()

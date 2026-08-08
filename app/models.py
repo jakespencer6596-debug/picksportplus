@@ -19,6 +19,8 @@ from sqlalchemy import (
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
+from app.providers.teams import canonical_key
+
 
 class Base(DeclarativeBase):
     pass
@@ -38,6 +40,27 @@ SPREAD_SOURCES = ("espn", "espn_core", "odds_api", "cfbd", "manual")
 # real rule and the default. "standard": correct picks earn points, highest total wins,
 # kept switchable per pool. See app/scoring.py.
 SCORING_MODES = ("standard", "inverse")
+
+# The rivalry pairs (Phase 5) that auto-pin themselves onto every rebuilt slate no matter
+# how wide the spread runs: the two the commissioner group named directly (Ohio State vs
+# Michigan, Auburn vs Alabama) plus the rest of the obviously-same-shape rivalries. Every
+# key comes from a real canonical_key(...) call, never a hand typed slug, so a change to
+# app/providers/teams.py's alias tables cannot silently drift this list out of sync with
+# what upsert_games actually matches against. See DECISIONS.md, Phase 5.
+DEFAULT_RIVALRIES: tuple[tuple[str, str], ...] = (
+    (canonical_key("Ohio State", "ncaaf"), canonical_key("Michigan", "ncaaf")),
+    (canonical_key("Auburn", "ncaaf"), canonical_key("Alabama", "ncaaf")),
+    (canonical_key("Army", "ncaaf"), canonical_key("Navy", "ncaaf")),
+    (canonical_key("Michigan", "ncaaf"), canonical_key("Michigan State", "ncaaf")),
+    (canonical_key("Florida", "ncaaf"), canonical_key("Georgia", "ncaaf")),
+    (canonical_key("Texas", "ncaaf"), canonical_key("Oklahoma", "ncaaf")),
+    (canonical_key("USC", "ncaaf"), canonical_key("Notre Dame", "ncaaf")),
+)
+
+
+def _default_rivalries() -> list[list[str]]:
+    """A fresh, mutable copy, so no two Pool rows ever share the same list object."""
+    return [list(pair) for pair in DEFAULT_RIVALRIES]
 
 
 class User(Base):
@@ -88,7 +111,18 @@ class Pool(Base):
     sports: Mapped[list[str]] = mapped_column(
         JSON, default=lambda: ["nfl", "ncaaf"], nullable=False
     )
-    auto_publish: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    # Off by default (Phase 5): the tool always proposes a slate, but a fresh pool waits for
+    # the commissioner to review and publish it by hand rather than opening automatically.
+    # See DECISIONS.md, Phase 5, for why the default flipped.
+    auto_publish: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    # Rivalry pairs that auto-pin themselves onto every rebuilt slate, regardless of spread
+    # width (Phase 5: "certain games with wider spreads are almost always included"). A list
+    # of two element lists of canonical team keys, either order, for example
+    # [["ncaaf:ohio-state", "ncaaf:michigan"]]. See app/providers/teams.canonical_key for the
+    # key format and app/services/ingest.py for where a match is applied to a new Game row.
+    rivalries: Mapped[list[list[str]]] = mapped_column(
+        JSON, default=_default_rivalries, nullable=False
+    )
     # Per pool override of the OPEN_REGISTRATION env default, owned by the commissioner.
     open_registration: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     current_week: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
@@ -227,6 +261,12 @@ class Game(Base):
 
     in_slate: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     slate_rank: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # True means this game always makes the slate on the next rebuild, regardless of its
+    # spread (Phase 5). Set either by a commissioner action or by a rivalry auto-pin on
+    # first creation (see upsert_games in app/services/ingest.py). No separate "why pinned"
+    # column: whether it is a rivalry match against pool.rivalries or a manual pin is worked
+    # out at render/report time from canonical_home_key/canonical_away_key, not stored here.
+    pinned: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
 
     status: Mapped[str] = mapped_column(String(16), default="scheduled", nullable=False)
     home_score: Mapped[int | None] = mapped_column(Integer, nullable=True)

@@ -12,8 +12,12 @@ from __future__ import annotations
 
 import datetime as dt
 
-from app.models import Pool
+from sqlalchemy import select
+
+from app.models import Game, Pick, Pool, User, Week
+from app.providers import espn
 from app.providers.http import cache_put
+from app.providers.teams import canonical_key
 from app.services import ingest
 
 UTC = dt.UTC
@@ -301,3 +305,246 @@ def test_build_slate_succeeds_normally_when_only_one_league_has_no_games(db, loa
 
     assert report.candidates == 24
     assert not any("ESPN returned no games" in w for w in report.warnings)
+
+
+# Pinned and rivalry games (Phase 5) -------------------------------------------
+
+
+def _week_row(db, pool: Pool) -> Week:
+    week = Week(
+        pool_id=pool.id,
+        season_year=pool.season_year,
+        week_number=1,
+        label="Week 1",
+        status="draft",
+    )
+    db.add(week)
+    db.flush()
+    return week
+
+
+def _rivalry_game(event_id: str, home_name: str, away_name: str) -> espn.EspnGame:
+    """A college matchup, real canonical_key(...) output on both sides, no fixture needed."""
+    return espn.EspnGame(
+        event_id=event_id,
+        league="ncaaf",
+        kickoff=dt.datetime(2026, 9, 12, 17, 0, tzinfo=UTC),
+        home=espn.TeamSide(
+            name=home_name,
+            abbr=home_name[:3].upper(),
+            canonical=canonical_key(home_name, "ncaaf"),
+        ),
+        away=espn.TeamSide(
+            name=away_name,
+            abbr=away_name[:3].upper(),
+            canonical=canonical_key(away_name, "ncaaf"),
+        ),
+        status="scheduled",
+        winner=None,
+    )
+
+
+_OSU_MICHIGAN = [[canonical_key("Ohio State", "ncaaf"), canonical_key("Michigan", "ncaaf")]]
+
+
+def test_upsert_games_auto_pins_a_new_rivalry_game_home_order(db):
+    pool = _pool(db, rivalries=_OSU_MICHIGAN)
+    week = _week_row(db, pool)
+    game = _rivalry_game("evt1", "Ohio State", "Michigan")
+
+    rows = ingest.upsert_games(db, week, [game], {}, pool)
+
+    assert rows[0].pinned is True
+
+
+def test_upsert_games_auto_pins_a_new_rivalry_game_away_order(db):
+    # The pool's rivalry pair lists Ohio State first, but this game has Michigan at home,
+    # Ohio State away: the match still has to fire, that is the whole point of checking
+    # both home/away orders.
+    pool = _pool(db, rivalries=_OSU_MICHIGAN)
+    week = _week_row(db, pool)
+    game = _rivalry_game("evt1", "Michigan", "Ohio State")
+
+    rows = ingest.upsert_games(db, week, [game], {}, pool)
+
+    assert rows[0].pinned is True
+
+
+def test_upsert_games_does_not_pin_a_non_rivalry_game(db):
+    pool = _pool(db, rivalries=_OSU_MICHIGAN)
+    week = _week_row(db, pool)
+    game = _rivalry_game("evt1", "Duke", "Wake Forest")
+
+    rows = ingest.upsert_games(db, week, [game], {}, pool)
+
+    assert rows[0].pinned is False
+
+
+def test_upsert_games_with_no_rivalries_configured_never_pins(db):
+    pool = _pool(db, rivalries=[])
+    week = _week_row(db, pool)
+    game = _rivalry_game("evt1", "Ohio State", "Michigan")
+
+    rows = ingest.upsert_games(db, week, [game], {}, pool)
+
+    assert rows[0].pinned is False
+
+
+def test_a_commissioners_manual_unpin_of_a_rivalry_game_survives_a_rebuild(db):
+    """Decision (DECISIONS.md, Phase 5): auto-pin only fires the first time a game row is
+    created. A commissioner who deliberately un-pins a rivalry game while reviewing the
+    slate keeps that choice on every later rebuild of the same event id."""
+    pool = _pool(db, rivalries=_OSU_MICHIGAN)
+    week = _week_row(db, pool)
+    game = _rivalry_game("evt1", "Ohio State", "Michigan")
+
+    created = ingest.upsert_games(db, week, [game], {}, pool)
+    assert created[0].pinned is True
+
+    ingest.set_pinned(db, week, created[0].id, False)
+
+    rebuilt = ingest.upsert_games(db, week, [game], {}, pool)
+
+    assert rebuilt[0].pinned is False
+
+
+def test_upsert_games_matches_a_rivalry_pair_regardless_of_pair_order_in_settings(db):
+    # The pool stored [Michigan, Ohio State] (reversed from the constant above); the match
+    # still has to fire against a game listing them the other way around.
+    pool = _pool(
+        db,
+        rivalries=[[canonical_key("Michigan", "ncaaf"), canonical_key("Ohio State", "ncaaf")]],
+    )
+    week = _week_row(db, pool)
+    game = _rivalry_game("evt1", "Ohio State", "Michigan")
+
+    rows = ingest.upsert_games(db, week, [game], {}, pool)
+
+    assert rows[0].pinned is True
+
+
+# Pin toggling and the freeze rule (Phase 5) -----------------------------------
+
+
+def _picked_game(db, week: Week) -> Game:
+    game = Game(
+        week_id=week.id,
+        league="nfl",
+        espn_event_id="evtA",
+        start_time=dt.datetime(2026, 9, 13, 17, 0, tzinfo=UTC),
+        home_team="Home Team",
+        away_team="Away Team",
+        home_abbr="HOM",
+        away_abbr="AWY",
+        canonical_home_key="nfl:home-team",
+        canonical_away_key="nfl:away-team",
+        spread_home=1.0,
+        closeness=1.0,
+        in_slate=True,
+        slate_rank=1,
+    )
+    db.add(game)
+    db.flush()
+    return game
+
+
+def test_set_pinned_does_not_require_can_resize_slate(db):
+    """Freeze rule check (spec point 7): pinning a game is always allowed, including once
+    picks exist, because it only affects a future rebuild's proposal, it never resizes or
+    reorders the slate that is already live. add_to_slate/remove_from_slate/swap_slate_game
+    would all raise SlateLocked in this exact setup; set_pinned must not."""
+    pool = _pool(db, num_games_per_week=1, target_nfl=1, target_ncaaf=0, sports=["nfl"])
+    week = _week_row(db, pool)
+    game = _picked_game(db, week)
+
+    user = User(email="player@example.com", password_hash="x", display_name="Player")
+    db.add(user)
+    db.flush()
+    db.add(
+        Pick(
+            user_id=user.id,
+            pool_id=pool.id,
+            week_id=week.id,
+            game_id=game.id,
+            picked_team="home",
+            confidence=1,
+        )
+    )
+    db.flush()
+
+    assert ingest.can_resize_slate(db, week) is False
+
+    result = ingest.set_pinned(db, week, game.id, True)
+
+    assert result.pinned is True
+    # Pinning changed nothing about the live slate itself.
+    assert result.in_slate is True
+    assert result.slate_rank == 1
+
+    unpinned = ingest.set_pinned(db, week, game.id, False)
+    assert unpinned.pinned is False
+    assert unpinned.in_slate is True
+
+
+def test_a_new_rivalry_game_does_not_resize_a_frozen_slate(db, monkeypatch):
+    """Freeze rule check (spec point 7): once any pick exists, build_slate's locked-out
+    branch still runs upsert_games (a genuinely brand new game can still auto-pin itself,
+    for example a rivalry matchup that was not part of the original candidate pool), but it
+    never calls apply_slate. So that pin can mark itself pinned for a future week, but it
+    cannot grow or reshuffle the slate players have already picked against right now."""
+    pool = _pool(
+        db,
+        rivalries=_OSU_MICHIGAN,
+        num_games_per_week=1,
+        target_nfl=0,
+        target_ncaaf=1,
+        sports=["ncaaf"],
+    )
+    week = _week_row(db, pool)
+    on_slate = Game(
+        week_id=week.id,
+        league="ncaaf",
+        espn_event_id="already-on-slate",
+        start_time=dt.datetime(2026, 9, 13, 17, 0, tzinfo=UTC),
+        home_team="Duke",
+        away_team="Wake Forest",
+        home_abbr="DUKE",
+        away_abbr="WAKE",
+        canonical_home_key=canonical_key("Duke", "ncaaf"),
+        canonical_away_key=canonical_key("Wake Forest", "ncaaf"),
+        spread_home=1.0,
+        closeness=1.0,
+        in_slate=True,
+        slate_rank=1,
+    )
+    db.add(on_slate)
+    db.flush()
+
+    user = User(email="player3@example.com", password_hash="x", display_name="Player 3")
+    db.add(user)
+    db.flush()
+    db.add(
+        Pick(
+            user_id=user.id,
+            pool_id=pool.id,
+            week_id=week.id,
+            game_id=on_slate.id,
+            picked_team="home",
+            confidence=1,
+        )
+    )
+    db.flush()
+
+    rivalry_game = _rivalry_game("evt-rivalry", "Ohio State", "Michigan")
+    monkeypatch.setattr(ingest, "fetch_candidates", lambda db, pool, week: ([rivalry_game], []))
+
+    report = ingest.build_slate(db, pool, pool.season_year, week.week_number, allow_metered=False)
+
+    assert report.locked_out is True
+    new_row = db.scalar(
+        select(Game).where(Game.week_id == week.id, Game.espn_event_id == "evt-rivalry")
+    )
+    assert new_row is not None
+    assert new_row.pinned is True  # auto-pin still fires the moment the row is created
+    assert new_row.in_slate is False  # but the live, frozen slate itself is untouched
+    assert report.selected == 1  # the game count genuinely did not move

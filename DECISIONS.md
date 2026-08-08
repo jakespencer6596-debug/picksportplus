@@ -659,3 +659,199 @@ already served as this repo's boot-and-load smoke test for `/picks`; it needed n
 since the open state it exercises still renders under the rebuilt template. `app/scoring.py`
 and `validate_picks` are unchanged by this phase, so no new tests were added there, per the
 brief.
+
+## Phase 5
+
+Two pieces of pool feedback, both about who gets to decide the slate: closest-spread alone
+routinely drops a rivalry game the moment either side is having a lopsided season, and
+automation building *and opening* a week by itself was more than the group actually wanted.
+`app/slate.py` gained a `pinned` field that guarantees a candidate survives selection no
+matter how wide its spread is; `Pool.auto_publish` defaults to `False`, so a build now
+always produces a draft the commissioner reviews and publishes by hand, unless they
+explicitly turn automatic opening back on.
+
+### Eligibility requires a resolvable spread, even for a pin
+
+A pinned candidate with no resolvable spread, or one that has already kicked off, is
+dropped by the same eligibility filter every other candidate goes through, before pins are
+even looked at. **Why:** `Selected.closeness` is a real `float`, not optional, and every
+downstream consumer (slate rank ordering, the admin "closest (spread X)" reason text) reads
+it as one; a pin cannot "always include" a game the rest of the pipeline has no number to
+rank. This is not a corner the brief left open to interpretation, it names the exact reason
+(`Selected.closeness needs a real number and the rest of the pipeline assumes one`), and it
+matches this codebase's existing rule that a game with no spread has no closeness and cannot
+be added to the slate at all (`add_to_slate`/`swap_slate_game` already reject a game with
+`spread_home is None` for the identical reason). Practically: a rivalry game with no line
+yet still auto-pins itself (`Game.pinned=True` is a durable, independent flag, unaffected by
+whether a spread has resolved), it simply will not appear on the slate until a spread
+exists, exactly like an ordinary unpinned game with no line. Covered by
+`tests/test_slate.py::test_a_pin_with_no_resolvable_spread_is_not_eligible_to_force_inclusion`
+and the started-game twin.
+
+### `select_slate_by_targets`: pins seeded into the first pass, not a second pass bolted on
+
+Per the brief's own steer, pins are seeded into `chosen_keys`/`first_pass` *before* the
+existing per-league fill loop runs, and that loop only takes `max(0, target -
+first_pass.get(league, 0))` more games. This is the one place real algorithmic judgment was
+needed: the existing "drop the farthest when over total" step (`chosen[:total]`, since
+`chosen` is already closest-first) would otherwise cut a pinned game the instant it is the
+widest spread in the final set, since a pin can rank anywhere, including dead last. Fixed by
+splitting the trim's tail-drop to only ever remove *unpinned* games
+(`app/slate.py`, the `if len(chosen) > total:` branch): `excess = len(chosen) - total`
+unpinned games are dropped from the tail, which is always possible because the len(pinned) >
+total case already raised before this point runs. Verified with
+`test_a_pinned_candidate_survives_a_trim_even_as_the_farthest_game`. Everything else
+(the fill-from-the-other-league branch, `per_league`, `shortfalls`, `notes`) needed no
+change: `first_pass[league]` is updated to `pinned_count + additional_taken` after the loop
+(not left at just the pinned count), which is what keeps the shortfall math honest when a
+league's pins do not use up its whole target and the rest of its supply genuinely falls
+short.
+
+### `Selected.pinned`: added to the dataclass, but `apply_slate` never writes `Game.pinned`
+
+`Selected` gained a `pinned: bool = False` field (mirroring `Candidate.pinned`) as the brief
+allowed. It turned out not to be needed for round-tripping state back onto the `Game` row:
+`Game.pinned` is the input to selection (read into `Candidate.pinned` in `apply_slate`), and
+`select_slate_by_targets` never invents a pin, it only guarantees one that was already set
+survives. So there is nothing to write back; a pinned game that missed this build (no
+spread yet, already kicked off) simply keeps `Game.pinned=True` on the row, waiting for the
+next rebuild, exactly like a commissioner's own manual pin would. `Selected.pinned` is kept
+anyway because it is genuinely useful to any future caller of `app/slate.py` that wants to
+know which selected games were forced rather than chosen by closeness, and because the brief
+explicitly offered it as an acceptable shape; it is simply unused by `apply_slate` today.
+
+### Rivalry auto-pin: fires once, on row creation, never on an update
+
+Chose (a) from the brief's own framing: `upsert_games` (`app/services/ingest.py`) only
+checks a game against `pool.rivalries` inside the `if row is None:` (brand new game) branch.
+An existing row is never re-checked. **Why:** a commissioner who deliberately unpins a
+rivalry game while reviewing a draft has made a real decision; re-applying the auto-pin on
+every later rebuild of the same event id would silently overturn it every time the cron
+runs, which is worse than the problem this feature is solving (the whole point of Phase 5 is
+that automation should defer to the commissioner, not override them). Proven directly by
+`tests/test_ingest.py::test_a_commissioners_manual_unpin_of_a_rivalry_game_survives_a_rebuild`
+(create, unpin, upsert the identical game again, still unpinned) and by
+`test_a_new_rivalry_game_does_not_resize_a_frozen_slate` for the freeze interaction: once
+picks exist, `build_slate`'s locked-out branch still calls `upsert_games` (so a genuinely
+new rivalry matchup that shows up in that week's fetch still gets pinned for a *future*
+build), but it never calls `apply_slate`, so that pin cannot grow or reorder the slate that
+players have already picked against.
+
+### The seeded rivalry pairs, and how the canonical keys were derived
+
+Seeded matchups: Ohio State vs Michigan and Auburn vs Alabama (named directly by the group),
+plus Army vs Navy, Michigan vs Michigan State, Florida vs Georgia, Texas vs Oklahoma, and USC
+vs Notre Dame (the rest of the obviously-same-shape rivalries). Every key is the real return
+value of `canonical_key(name, "ncaaf")`, called at import time inside `app/models.py`
+(`DEFAULT_RIVALRIES`), never a hand typed slug:
+
+```
+canonical_key("Ohio State", "ncaaf")    -> "ncaaf:ohio-state"
+canonical_key("Michigan", "ncaaf")      -> "ncaaf:michigan"
+canonical_key("Auburn", "ncaaf")        -> "ncaaf:auburn"
+canonical_key("Alabama", "ncaaf")       -> "ncaaf:alabama"
+canonical_key("Army", "ncaaf")          -> "ncaaf:army"
+canonical_key("Navy", "ncaaf")          -> "ncaaf:navy"
+canonical_key("Michigan State", "ncaaf")-> "ncaaf:michigan-state"
+canonical_key("Florida", "ncaaf")       -> "ncaaf:florida"
+canonical_key("Georgia", "ncaaf")       -> "ncaaf:georgia"
+canonical_key("Texas", "ncaaf")         -> "ncaaf:texas"
+canonical_key("Oklahoma", "ncaaf")      -> "ncaaf:oklahoma"
+canonical_key("USC", "ncaaf")           -> "ncaaf:usc"
+canonical_key("Notre Dame", "ncaaf")    -> "ncaaf:notre-dame"
+```
+
+`tests/test_ingest.py` proves the match logic against these exact values by calling
+`canonical_key(...)` itself rather than pasting the strings above, so a future change to
+`app/providers/teams.py`'s alias tables cannot silently make this list (or the tests) stop
+matching real games without a test failing first.
+
+### Where a fresh pool's rivalry list actually gets set: the model default, not `seed_admin`
+
+`Pool.rivalries`'s `mapped_column` default is `_default_rivalries()` (a fresh copy of
+`DEFAULT_RIVALRIES` per row), not an empty list. **Why:** the brief's own phrasing, "wherever
+a fresh pool's defaults are established," already describes exactly how every other
+opinionated pool default in this codebase works (`sports` defaults to
+`["nfl", "ncaaf"]`, `target_nfl`/`target_ncaaf` default to 8/12, not to nothing), so the
+curated list living on the column default is consistent with that pattern rather than a
+special case bolted onto `seed_admin`. `app/cli.py`'s `seed_admin` needed no new code for
+this as a result: it already omits `rivalries=` from its `Pool(...)` call (matching the fix
+already required for `auto_publish`), so a freshly seeded pool gets the curated list for
+free. The Alembic migration additionally back-fills the same curated list onto any pool row
+that predates this column (a real, if small, concern here since this repo's own local/demo
+pool already exists), rather than back-filling an empty list and asking the commissioner to
+type the whole thing in by hand.
+
+### `auto_publish`'s migration: no schema change needed, and why that is not a shortcut
+
+The brief calls for "a migration ... for the column default." `Pool.auto_publish` has never
+carried a `server_default` at the database level (`alembic/versions/139ee0ca88d8_initial_schema.py`
+defines it as plain `NOT NULL` with none); the `default=True` that just flipped to
+`default=False` in `app/models.py` is a Python-side, ORM-only default, applied only when a
+new row is inserted through SQLAlchemy. Alembic's own `--autogenerate` confirms there is
+nothing to diff: the column's type, nullability and constraints are byte-for-byte unchanged.
+So the actual migration added in this phase (`6b6eab096a56`) touches only the two genuinely
+new columns, `games.pinned` and `pools.rivalries`; `auto_publish`'s flip is enforced entirely
+by `app/models.py`'s default plus the `app/cli.py` `seed_admin` fix (the hard coded
+`auto_publish=True` removed from its `Pool(...)` call), both covered by
+`tests/test_cli.py`. This is not a corner cut to avoid writing a migration: there is
+genuinely no schema to alter, and inventing a `server_default` this phase never asked for
+would only create a second, redundant place for the default to live and drift out of sync
+with the model.
+
+### Rivalry list editing: college matchups only, one "Team A vs Team B" per line
+
+The `/admin/settings` textarea (`app/routers/admin.py`'s `_parse_rivalries`) always resolves
+both sides through `canonical_key(name, "ncaaf")`. **Why:** every rivalry named in the brief
+and every one in the seeded default list is a college matchup; the product does not yet need
+a way to pin an NFL rivalry, and a league selector for a feature this small would add a
+second form control for a case nobody asked for. A line with no recognisable "vs"/"vs."
+separator, or a blank line, is skipped rather than rejected, since a bad line in a rivalry
+list is a low stakes typo, not something worth blocking the rest of the settings save over;
+`canonical_key` itself never raises, so an unrecognised team name is still stored (as its own
+slug), it simply will not match any real game until the spelling is fixed. The reverse
+direction, rendering the saved keys back into readable names for the textarea
+(`_rivalries_text`), uses `app.providers.teams.display_name`, falling back to the raw key for
+anything it does not recognise, so a hand-edited or stale key is still visible rather than
+silently disappearing from the form.
+
+### `slate_build`'s new failure mode: pins summing past `num_games_per_week`
+
+`select_slate_by_targets` now raises `ValueError` when more games are pinned than the slate
+total allows, per the brief. `POST /admin/slate/build` (`app/routers/admin.py`) did not
+previously need a `try/except` around `ingest.build_slate` at all, since nothing in the old
+pipeline could raise; added one, following the exact flash-and-redirect pattern
+`slate_game_action` already uses for `SlateLocked`/`ValueError`, rather than letting a
+misconfigured pin count crash the request with a 500. The CLI paths (`build-slate`,
+`sync-week`, `run-cron`) were deliberately left without new exception handling: a pin count
+exceeding the total is a real, self-inflicted configuration error a commissioner needs to
+notice and fix immediately (reduce pins or raise `num_games_per_week`/a league target), and a
+loud CLI traceback naming the exact problem is the correct behavior there, matching how this
+codebase's other configuration errors already surface (`_resolve_pool`'s `typer.BadParameter`
+for a missing pool, for example). No test pins a specific CLI traceback shape as a result;
+the pure-function `ValueError` and the one admin-router catch are what is tested.
+
+### Where "why is this game on the slate" is computed
+
+Per the brief, no `pin_reason` column: `ingest.slate_reason(game, pool)` computes "Pinned" /
+"Rivalry" / "Closest (spread X, source Y)" at render time from `Game.pinned` and a live
+`canonical_home_key`/`canonical_away_key` match against `pool.rivalries`, so editing the
+rivalry list retroactively changes how an already-pinned game explains itself the next time
+the slate editor is loaded, with no backfill needed. `app/routers/admin.py`'s `slate_page`
+computes one `reasons: dict[game_id, str]` for the games actually on the slate and hands it
+to the template; the candidates table (games not yet on the slate) only needs a plain
+"Pinned" badge, not the full reason, since "why would this be on the slate" does not apply to
+a game that is not there yet.
+
+### Tests
+
+**664 passed**, 0 failed (642 at the Phase 4 baseline, 22 net new: 12 in
+`tests/test_slate.py` for pin selection, trimming, league expansion/shrink, the over-total
+`ValueError`, the zero-pins regression, and shuffling with pins present; 8 in
+`tests/test_ingest.py` for rivalry auto-pin in both home/away order, the no-rivalries-
+configured case, the manual-unpin-survives-a-rebuild case, and the two freeze-rule checks;
+2 in the new `tests/test_cli.py` for `seed_admin`'s `auto_publish` default end to end,
+including that a commissioner's own later choice is not silently reset on a rerun, since
+`seed_admin` is designed to run on every boot). `ruff check .`, `black .` and the full suite
+all clean. An em dash search across every file touched this phase finds nothing; no emoji
+were added anywhere.

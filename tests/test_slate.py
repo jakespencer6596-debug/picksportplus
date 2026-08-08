@@ -42,6 +42,7 @@ def game(
     spread: float | None = 0.0,
     league: str = "nfl",
     hours: float = 0.0,
+    pinned: bool = False,
 ) -> Candidate:
     """Build a Candidate with readable defaults."""
     return Candidate(
@@ -49,6 +50,7 @@ def game(
         league=league,
         kickoff=BASE + timedelta(hours=hours),
         spread_home=spread,
+        pinned=pinned,
     )
 
 
@@ -497,6 +499,164 @@ def test_a_target_of_zero_leaves_a_league_to_the_fill_only():
     assert keys(result) == ["nfl1", "cfb1"]
     assert result.shortfalls == {}
     assert result.filled_from_other == 1
+
+
+# Pinned games
+
+
+def test_a_pinned_candidate_survives_the_widest_spread_in_the_pool():
+    candidates = pool("nfl", "nfl", steps(7, 1.0)) + [
+        game("blowout", spread=45.0, league="nfl", hours=99, pinned=True)
+    ]
+    result = select_slate_by_targets(candidates, {"nfl": 4}, total=4, now=NOW)
+
+    # Closeness alone would never have picked the 45 point blowout: nfl01..nfl04 (1.0..4.0)
+    # are all closer. The pin forces it on anyway, displacing the league's own 4th closest.
+    assert "blowout" in keys(result)
+    assert result.selected[-1].key == "blowout"
+    assert result.selected[-1].pinned is True
+    assert result.selected[-1].closeness == 45.0
+    assert len(result.selected) == 4
+    assert "nfl04" not in keys(result)
+
+
+def test_a_pinned_candidate_survives_a_trim_even_as_the_farthest_game():
+    # Every game here would be selected in the first pass (target 5, only 5 games), so the
+    # pin does nothing on its own; the trim down to a smaller total is what would otherwise
+    # cut it, since it is the widest spread of the five.
+    candidates = pool("nfl", "nfl", steps(4, 1.0)) + [
+        game("pinned_blowout", spread=99.0, league="nfl", hours=50, pinned=True)
+    ]
+    result = select_slate_by_targets(candidates, {"nfl": 5}, total=3, now=NOW)
+
+    assert "pinned_blowout" in keys(result)
+    assert len(result.selected) == 3
+    # The two farthest *unpinned* games (nfl03, nfl04) were dropped instead.
+    assert keys(result) == ["nfl01", "nfl02", "pinned_blowout"]
+
+
+def test_selected_pinned_is_false_for_an_ordinary_closeness_pick():
+    result = select_slate_by_targets([game("a", spread=1.0)], {"nfl": 1}, total=1, now=NOW)
+
+    assert result.selected[0].pinned is False
+
+
+def test_pins_beyond_a_leagues_target_expand_it_and_shrink_the_other():
+    # Two NFL pins against an NFL target of 1: the league ends up with both (pins always
+    # survive), and the college side gives up one of its own closest games so the total
+    # still lands on 4, not 5.
+    candidates = [
+        game("nfl_pin_a", spread=20.0, league="nfl", hours=1, pinned=True),
+        game("nfl_pin_b", spread=25.0, league="nfl", hours=2, pinned=True),
+    ] + pool("cfb", "ncaaf", steps(3, 0.5))
+    result = select_slate_by_targets(candidates, {"nfl": 1, "ncaaf": 3}, total=4, now=NOW)
+
+    assert len(result.selected) == 4
+    # The league's effective count (2) is above its target (1); the pins expanded it.
+    assert result.per_league["nfl"] == 2
+    # College gave up its farthest first-pass game (cfb03) to hold the total at 4.
+    assert result.per_league["ncaaf"] == 2
+    assert {"nfl_pin_a", "nfl_pin_b"} <= set(keys(result))
+    assert "cfb03" not in keys(result)
+    assert {"cfb01", "cfb02"} <= set(keys(result))
+    # Neither league reports a shortfall: nfl finished above its target, and ncaaf's drop
+    # came from the total balancing, not a supply problem, matching how an ordinary
+    # targets-over-total trim is already reported (see
+    # test_a_league_cut_below_its_target_by_the_trim_is_not_a_shortfall).
+    assert result.shortfalls == {}
+
+
+def test_pins_within_a_leagues_target_do_not_expand_it():
+    # One NFL pin, target 3, five NFL games on offer: the pin simply displaces the would be
+    # 3rd closest game rather than growing the league beyond its target.
+    candidates = (
+        pool("nfl", "nfl", steps(4, 1.0))
+        + [game("nfl_pin", spread=50.0, league="nfl", hours=9, pinned=True)]
+        + pool("cfb", "ncaaf", steps(3, 0.5))
+    )
+    result = select_slate_by_targets(candidates, {"nfl": 3, "ncaaf": 3}, total=6, now=NOW)
+
+    assert result.per_league == {"nfl": 3, "ncaaf": 3}
+    assert "nfl_pin" in keys(result)
+    assert "nfl03" not in keys(result)  # displaced by the pin
+    assert result.shortfalls == {}
+
+
+def test_pins_exceeding_the_total_raise_a_clear_value_error():
+    candidates = [
+        game("a", spread=1.0, league="nfl", hours=1, pinned=True),
+        game("b", spread=2.0, league="nfl", hours=2, pinned=True),
+        game("c", spread=3.0, league="nfl", hours=3, pinned=True),
+    ]
+    with pytest.raises(ValueError, match="pinned"):
+        select_slate_by_targets(candidates, {"nfl": 3}, total=2, now=NOW)
+
+
+def test_pins_exactly_equal_to_the_total_do_not_raise():
+    candidates = [
+        game("a", spread=1.0, league="nfl", hours=1, pinned=True),
+        game("b", spread=2.0, league="nfl", hours=2, pinned=True),
+    ]
+    result = select_slate_by_targets(candidates, {"nfl": 2}, total=2, now=NOW)
+
+    assert set(keys(result)) == {"a", "b"}
+
+
+def test_a_pin_with_no_resolvable_spread_is_not_eligible_to_force_inclusion():
+    # Selected.closeness needs a real number, so a pin cannot skip the ordinary eligibility
+    # filter; it is documented as a deliberate choice, not an oversight, in the module
+    # docstring and DECISIONS.md.
+    candidates = [
+        game("no_line", spread=None, league="nfl", hours=1, pinned=True),
+        game("has_line", spread=5.0, league="nfl", hours=2),
+    ]
+    result = select_slate_by_targets(candidates, {"nfl": 2}, total=2, now=NOW)
+
+    assert keys(result) == ["has_line"]
+
+
+def test_a_pin_that_has_already_kicked_off_is_not_eligible_to_force_inclusion():
+    candidates = [
+        game("started_pin", spread=1.0, league="nfl", hours=-8, pinned=True),
+        game("upcoming", spread=9.0, league="nfl", hours=4),
+    ]
+    result = select_slate_by_targets(candidates, {"nfl": 2}, total=2, now=NOW, exclude_started=True)
+
+    assert keys(result) == ["upcoming"]
+
+
+def test_zero_pins_reproduces_the_pre_phase_5_result_byte_for_byte():
+    # Regression proof: every existing (pre Phase 5) candidate omits pinned entirely, which
+    # defaults to False, so a call with pins nowhere in the input must be identical, down to
+    # dict ordering, to a hand built call that explicitly says pinned=False everywhere.
+    implicit = select_slate_by_targets(rich_pool(), DEFAULT_TARGETS, total=DEFAULT_TOTAL, now=NOW)
+    explicit = select_slate_by_targets(
+        [Candidate(c.key, c.league, c.kickoff, c.spread_home, pinned=False) for c in rich_pool()],
+        DEFAULT_TARGETS,
+        total=DEFAULT_TOTAL,
+        now=NOW,
+    )
+
+    assert repr(implicit) == repr(explicit)
+
+
+def test_shuffling_with_pins_present_gives_an_identical_result():
+    candidates = shuffle_pool() + [
+        game("cfb_pin", spread=40.0, league="ncaaf", hours=5, pinned=True)
+    ]
+    targets = {"nfl": 3, "ncaaf": 4}
+    expected = select_slate_by_targets(candidates, targets, total=6, now=NOW)
+
+    assert "cfb_pin" in keys(expected)
+
+    rng = random.Random(19760908)
+    for _ in range(50):
+        shuffled = candidates[:]
+        rng.shuffle(shuffled)
+        result = select_slate_by_targets(shuffled, targets, total=6, now=NOW)
+
+        assert result == expected
+        assert repr(result) == repr(expected)
 
 
 # Closeness and the spread values that cannot be used
@@ -1036,15 +1196,21 @@ def test_the_old_league_mix_surface_is_gone():
 def test_candidate_field_names_and_order():
     fields = [field.name for field in dataclasses.fields(Candidate)]
 
-    assert fields == ["key", "league", "kickoff", "spread_home"]
+    assert fields == ["key", "league", "kickoff", "spread_home", "pinned"]
     with pytest.raises(dataclasses.FrozenInstanceError):
         game("a").key = "b"
+
+
+def test_candidate_pinned_defaults_to_false():
+    # Every pre-Phase-5 caller, including every Candidate(...) call above in this file,
+    # constructs one without pinned. That must keep meaning "not pinned," not raise.
+    assert game("a").pinned is False
 
 
 def test_selected_field_names_and_order():
     fields = [field.name for field in dataclasses.fields(Selected)]
 
-    assert fields == ["key", "slate_rank", "closeness"]
+    assert fields == ["key", "slate_rank", "closeness", "pinned"]
     with pytest.raises(dataclasses.FrozenInstanceError):
         Selected(key="a", slate_rank=1, closeness=0.0).slate_rank = 2
 

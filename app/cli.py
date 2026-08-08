@@ -127,7 +127,11 @@ def seed_admin() -> None:
                 target_nfl=settings.nfl_games_per_week,
                 target_ncaaf=settings.ncaaf_games_per_week,
                 sports=["nfl", "ncaaf"],
-                auto_publish=True,
+                # Off by default (Phase 5): a freshly seeded pool builds a draft and waits for
+                # the commissioner to review and publish it, matching Pool.auto_publish's own
+                # model default. Left unset here rather than hard coded True, which is what
+                # used to silently keep every new pool auto publishing even after the model
+                # default changed.
                 open_registration=settings.open_registration,
                 timezone=settings.timezone,
                 current_week=1,

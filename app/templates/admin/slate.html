@@ -187,6 +187,8 @@
         <span class="pill num">
           {{ pick_count }} {{ pick_count | pluralize("player", "players") }} submitted
         </span>
+        <span class="pill num">{{ pinned_count }} pinned</span>
+        <span class="pill num">{{ missing_spread_count }} missing a spread</span>
       </div>
 
       <p class="target-line">
@@ -285,6 +287,7 @@
               <th scope="col">League</th>
               <th scope="col">Line</th>
               <th scope="col">Spread source</th>
+              <th scope="col">Why it's here</th>
               <th scope="col">Kickoff</th>
               <th scope="col">Status</th>
               <th scope="col">Actions</th>
@@ -295,7 +298,24 @@
               <tr class="{% if game.is_void %}is-void{% endif %}">
                 <td data-label="Rank" class="num">{{ game.slate_rank or "" }}</td>
                 {{ game_cells(game) }}
+                <td data-label="Why it's here">
+                  {% set reason = reasons.get(game.id, "") %}
+                  <span class="badge{% if game.pinned %} badge-pinned{% endif %}">
+                    {{ reason }}
+                  </span>
+                </td>
                 <td data-label="Actions" class="cell-actions">
+                  <form method="post" action="/admin/slate/game" class="inline-form">
+                    <input type="hidden" name="week_id" value="{{ week.id }}">
+                    <input type="hidden" name="game_id" value="{{ game.id }}">
+                    <input type="hidden" name="action" value="{% if game.pinned %}unpin{% else %}pin{% endif %}">
+                    <button class="btn btn-secondary btn-sm" type="submit">
+                      {% if game.pinned %}Unpin{% else %}Pin{% endif %}
+                      <span class="visually-hidden">
+                        {{ game.away_abbr }} at {{ game.home_abbr }}</span>
+                    </button>
+                  </form>
+
                   {% if editable %}
                     <form method="post" action="/admin/slate/game" class="inline-form">
                       <input type="hidden" name="week_id" value="{{ week.id }}">
@@ -383,6 +403,9 @@
               <tr>
                 {{ game_cells(game) }}
                 <td data-label="Actions" class="cell-actions">
+                  {% if game.pinned %}
+                    <span class="badge badge-pinned">Pinned</span>
+                  {% endif %}
                   {% if editable %}
                     {% if game.spread_home is not none %}
                       <form method="post" action="/admin/slate/game" class="inline-form">
@@ -400,6 +423,17 @@
                   {% else %}
                     <span class="cell-note muted">Picks are in, the slate is fixed.</span>
                   {% endif %}
+
+                  <form method="post" action="/admin/slate/game" class="inline-form">
+                    <input type="hidden" name="week_id" value="{{ week.id }}">
+                    <input type="hidden" name="game_id" value="{{ game.id }}">
+                    <input type="hidden" name="action" value="{% if game.pinned %}unpin{% else %}pin{% endif %}">
+                    <button class="btn btn-secondary btn-sm" type="submit">
+                      {% if game.pinned %}Unpin{% else %}Pin{% endif %}
+                      <span class="visually-hidden">
+                        {{ game.away_abbr }} at {{ game.home_abbr }}</span>
+                    </button>
+                  </form>
 
                   {{ spread_form(week.id, game) }}
                 </td>

@@ -2786,6 +2786,16 @@ button.team-btn:not([disabled]):not(.is-picked):hover {
   color: var(--ink);            /* 11.46:1 */
 }
 
+/* A game pinned onto the slate, by a commissioner or by rivalry auto-pin
+   (Phase 5). Gold is already this app's "pay attention to this" voice
+   (badge-live, the lock bar), which is exactly the point of a pin: it
+   overrides the ordinary closeness ranking on purpose. */
+.badge-pinned {
+  background: var(--decor-soft);
+  border-color: var(--decor);
+  color: var(--ink);            /* 11.46:1 */
+}
+
 /* -- Week status. badge-{{ week.status }} resolves to one of these four ---
    The palette tells the story of a week: neutral while it is a draft, green
    once picks are open, brick once it locks (the same brick .lockbar-strong

@@ -168,6 +168,28 @@
     </div>
   </section>
 
+  <section class="card" aria-labelledby="rivalries-title">
+    <div class="card-head">
+      <h2 id="rivalries-title">Pinned rivalry games</h2>
+    </div>
+    <div class="card-body">
+      <div class="field">
+        <label class="field-label" for="rivalries">Always include these matchups</label>
+        <textarea class="input" id="rivalries" name="rivalries" rows="8" spellcheck="false"
+                  placeholder="Ohio State vs Michigan">{{ rivalries_text }}</textarea>
+        <p class="form-hint">
+          One matchup per line, "Team A vs Team B", college teams only. The first time either
+          side of one of these matchups shows up on the schedule, the game is pinned onto the
+          slate automatically, no matter how wide the spread runs, since closest-spread alone
+          would routinely leave out a game like Ohio State vs Michigan the moment either team
+          is having a blowout season. Pinning is a proposal, not a lock: the commissioner can
+          still unpin any single game from the slate editor without losing this list, and that
+          choice sticks across later rebuilds of the same game.
+        </p>
+      </div>
+    </div>
+  </section>
+
   <section class="card" aria-labelledby="scoring-title">
     <div class="card-head">
       <h2 id="scoring-title">Scoring</h2>

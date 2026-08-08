@@ -437,20 +437,47 @@ def resolve_spreads(
 # Persistence ----------------------------------------------------------------
 
 
+def _rivalry_match(home_key: str, away_key: str, rivalries: list[list[str]] | None) -> bool:
+    """True when the two canonical team keys match a configured rivalry pair.
+
+    Order does not matter: a pool row [A, B] matches a game either A at B or B at A.
+    A malformed pair (not exactly two entries) is ignored rather than raised, since
+    this reads a JSON column that a hand edited settings save could in principle leave
+    slightly odd; the fix for that is a better settings form, not an exception here.
+    """
+    for pair in rivalries or []:
+        if len(pair) != 2:
+            continue
+        a, b = pair
+        if {a, b} == {home_key, away_key}:
+            return True
+    return False
+
+
 def upsert_games(
     db: Session,
     week: Week,
     games: list[espn.EspnGame],
     spreads: dict[str, tuple[float, str]],
+    pool: Pool,
 ) -> list[Game]:
-    """Idempotent. Matches on (week_id, espn_event_id) and updates in place."""
+    """Idempotent. Matches on (week_id, espn_event_id) and updates in place.
+
+    A brand new game auto-pins itself (Game.pinned = True) the moment its two teams match
+    one of pool.rivalries's pairs, in either home/away order (Phase 5: "certain games with
+    wider spreads are almost always included"). This only ever happens on creation, the
+    first time a game is seen: a commissioner who deliberately un-pins a rivalry game while
+    reviewing the slate keeps that choice on every later rebuild, since a rebuild never
+    re-applies auto-pin to a game that already has a row. See DECISIONS.md, Phase 5.
+    """
     existing = {g.espn_event_id: g for g in db.scalars(select(Game).where(Game.week_id == week.id))}
     rows: list[Game] = []
 
     for game in games:
         spread, source = spreads.get(game.event_id, (None, None))
         row = existing.get(game.event_id)
-        if row is None:
+        is_new = row is None
+        if is_new:
             row = Game(week_id=week.id, espn_event_id=game.event_id, league=game.league)
             db.add(row)
 
@@ -464,6 +491,11 @@ def upsert_games(
         row.away_record = game.away.record
         row.canonical_home_key = game.home.canonical
         row.canonical_away_key = game.away.canonical
+
+        if is_new:
+            row.pinned = _rivalry_match(
+                row.canonical_home_key, row.canonical_away_key, pool.rivalries
+            )
 
         # A commissioner's manual line is never overwritten by a feed.
         if row.spread_source != "manual":
@@ -508,6 +540,7 @@ def apply_slate(db: Session, pool: Pool, week: Week, *, now: dt.datetime | None 
             league=row.league,
             kickoff=_aware(row.start_time),
             spread_home=row.spread_home,
+            pinned=row.pinned,
         )
         for row in rows
         if row.status != "void"
@@ -658,6 +691,50 @@ def set_void(db: Session, week: Week, game_id: int, void: bool) -> Game:
     return game
 
 
+def set_pinned(db: Session, week: Week, game_id: int, pinned: bool) -> Game:
+    """Pin or unpin a game. Always allowed, including after picks exist.
+
+    A pin never resizes or reorders the current slate by itself, it only changes what the
+    next rebuild proposes (select_slate_by_targets guarantees a pinned candidate survives
+    selection). That is why this follows set_void's "always allowed" shape rather than
+    add_to_slate/remove_from_slate/swap_slate_game's can_resize_slate guard: those three
+    change slate membership right now, this one only changes a future proposal.
+    """
+    game = _game_in_week(db, week, game_id)
+    game.pinned = pinned
+    db.flush()
+    return game
+
+
+# Human labels for spread_source, used only to explain why a game is on the slate.
+SOURCE_LABELS = {
+    "espn": "ESPN",
+    "espn_core": "ESPN core",
+    "odds_api": "The Odds API",
+    "cfbd": "CollegeFootballData",
+    "manual": "set by hand",
+}
+
+
+def slate_reason(game: Game, pool: Pool) -> str:
+    """Why a game is on the slate, worked out at render time rather than stored.
+
+    "Rivalry" when the game is pinned and its two teams match one of pool.rivalries's pairs
+    in either home/away order, "Pinned" for any other commissioner set pin, and "Closest"
+    with the actual spread and source for a game that made the slate on closeness alone. No
+    separate pin_reason column (see app/models.py, Game.pinned): this stays correct even if
+    the commissioner edits the rivalry list after a game was pinned.
+    """
+    if game.pinned:
+        if _rivalry_match(game.canonical_home_key, game.canonical_away_key, pool.rivalries):
+            return "Rivalry"
+        return "Pinned"
+    if game.closeness is None:
+        return "Closest"
+    source = SOURCE_LABELS.get(game.spread_source, "no source")
+    return f"Closest (spread {game.closeness:.1f}, source {source})"
+
+
 def set_manual_spread(db: Session, week: Week, game_id: int, spread_home: float | None) -> Game:
     """A commissioner line. Marked as manual so no feed overwrites it."""
     game = _game_in_week(db, week, game_id)
@@ -716,7 +793,7 @@ def build_slate(
             for g in db.scalars(select(Game).where(Game.week_id == week.id))
             if g.spread_home is not None
         }
-        upsert_games(db, week, games, existing_spreads)
+        upsert_games(db, week, games, existing_spreads, pool)
         report.candidates = len(games)
         report.selected = int(
             db.scalar(
@@ -743,7 +820,7 @@ def build_slate(
     for _spread, source in spreads.values():
         report.sources[source] = report.sources.get(source, 0) + 1
 
-    upsert_games(db, week, games, spreads)
+    upsert_games(db, week, games, spreads, pool)
     result = apply_slate(db, pool, week, now=now)
     report.selected = len(result.selected)
     report.per_league = dict(result.per_league)

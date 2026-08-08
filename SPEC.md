@@ -202,31 +202,31 @@ Given a pool week (its own season year and week number, plus its `anchor_date`):
 
 1. For each enabled league, resolve the ESPN week number and season type from `anchor_date` (Section 5a), then pull that league's games from ESPN (FBS games use `groups=80`). A league whose anchor date falls outside both its regular season and its postseason resolves to no games for that week, which is not an error: the slate is built from whichever leagues did resolve. The resolution actually used is recorded on the week (`resolved_weeks`, `is_bowl_week`).
 2. Resolve each candidate home relative spread via 5e and compute `closeness = abs(spread)`.
-3. Drop candidates with no resolvable spread (still visible to admin) and optionally drop games already kicked off.
+3. Drop candidates with no resolvable spread (still visible to admin) and optionally drop games already kicked off. This applies even to a pinned candidate (below): a pin guarantees the game survives selection, it does not manufacture a rank for a game with no real spread to rank it by.
 4. Sort by closeness ascending (a pick'em at 0 is closest). Break ties by earliest kickoff, then by key so the result is stable.
-5. Take the closest `target_nfl` NFL games and the closest `target_ncaaf` college games. Defaults are 8 and 12, for a `num_games_per_week` total of 20. All three are commissioner settings.
-6. Shortfall handling. If a league has fewer games with a resolvable spread than its target, fill the gap with the next closest games from the other league so the total still matches, and record that it happened so the commissioner can see it. If the targets add up to more than the total, drop the farthest games until the total is met.
+5. Take the closest `target_nfl` NFL games and the closest `target_ncaaf` college games. Defaults are 8 and 12, for a `num_games_per_week` total of 20. All three are commissioner settings. A pinned game already counts against its own league's target here, before the rest of that league's closest games fill in around it.
+6. Shortfall handling. If a league has fewer games with a resolvable spread than its target, fill the gap with the next closest games from the other league so the total still matches, and record that it happened so the commissioner can see it. If the targets add up to more than the total, drop the farthest games until the total is met, except a pinned game, which is never dropped for being far; a pinned game beyond its own league's target simply expands that league's effective count and shrinks the other, the total unchanged. If more games are pinned than `num_games_per_week` allows, the build fails loudly with a clear message rather than silently dropping a pin.
 7. Compute `lock_at` as the earliest kickoff among the selected slate games, unless the commissioner set a manual lock time.
 
-Put the selection in `app/slate.py` as a deterministic pure function and unit test it thoroughly (ties, missing spreads, a league short of its target, targets that do not add up to the total, and stability under input shuffling).
+Put the selection in `app/slate.py` as a deterministic pure function and unit test it thoroughly (ties, missing spreads, a league short of its target, targets that do not add up to the total, pinned games, and stability under input shuffling).
 
 ### 6a. Commissioner control over the slate
 
-The tool always proposes a slate. The commissioner can override it.
+The tool always proposes a slate. The commissioner can override it, and the commissioner alone decides when a proposal actually becomes a published slate (`auto_publish`, Section 7).
 
 - The admin slate editor shows the proposed slate and the full candidate pool for the week, every NFL and FBS game with its resolved spread, spread source and kickoff time.
 - The commissioner can change the total and the per league counts, remove a proposed game, add any candidate game, and swap one game for another. An edited slate overrides the proposal.
-- When `auto_publish` is on (the default) the tool builds and opens the proposed slate automatically. The commissioner may still change the size and the games at any time while no player has submitted a pick for that week.
-- When `auto_publish` is off the tool builds a draft and the commissioner reviews, edits and publishes it by hand.
+- Pinned games. A game can be pinned so it always makes the slate on the next build regardless of how wide its spread runs, because closest-spread selection alone routinely excludes a rivalry game the moment either side is having a lopsided season (Ohio State vs Michigan, Auburn vs Alabama, and similar matchups named below). A pin is set either by hand from the slate editor, or automatically the first time a game matching one of the pool's configured rivalry pairs is created; the commissioner can unpin any single game at any time, and that choice sticks across later rebuilds of the same game. The slate editor shows why each slate game is there: pinned, a rivalry match, or the closest spread. Pinning a game, and editing the rivalry list, are both allowed at any time, including after picks exist: neither resizes or reorders the slate that is already live, they only change what the next rebuild proposes.
+- The commissioner curates the rivalry list from the pool settings page: any matchup, one per line. The seeded default covers the games named by the group running the pool plus the other historically lopsided-but-always-relevant rivalries (Army vs Navy, Michigan vs Michigan State, Florida vs Georgia, Texas vs Oklahoma, USC vs Notre Dame).
 - Voiding a game is always available, including after picks exist.
 - Once any pick exists for a week the game count is fixed for that week and only voiding remains, so scoring stays consistent.
 
 ## 7. Automation and the weekly lifecycle (set and forget)
 
-The pool runs itself. `pool.auto_publish` defaults to true.
+The build side of the pool runs itself; publishing the result to players is a deliberate commissioner action. `pool.auto_publish` defaults to false: a scheduled build always produces a draft, and the commissioner reviews and publishes it by hand from the slate editor. A commissioner who wants the old fully automatic behavior can still switch `auto_publish` on from pool settings, per pool, and everything below runs exactly the same way from that point on except that the last step (opening the week) happens by itself too.
 
 - Detect the pool's current or upcoming week automatically. When `pool.week1_anchor_date` is set this is date arithmetic against that anchor, not an ESPN lookup. A pool with no anchor configured falls back to asking ESPN what NFL's current week number is, which the commissioner should replace with a real anchor date before the season NFL and college drift out of step (see Section 5a). Do not require anyone to set the week by hand once an anchor is configured.
-- A scheduled job builds the slate for the upcoming week, and because `auto_publish` is true, opens it automatically (status open) and sets `lock_at`. No human action is required to run a normal week.
+- A scheduled job builds the slate for the upcoming week. When `auto_publish` is true it also opens the slate automatically (status open) and sets `lock_at`, no human action required. When `auto_publish` is false (the default) the job stops at a draft, and the week opens only once the commissioner publishes it.
 - The commissioner may still adjust a published slate before `lock_at`, but only non destructive changes once picks exist. Before any picks exist, free edits are allowed. After picks exist, allow voiding a game but not reshuffling the whole slate.
 - `pool.current_week` advances automatically as the calendar moves.
 - A results job runs frequently on game days, pulls finals, and scores idempotently. When every slate game is final, mark the week scored.
