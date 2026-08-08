@@ -78,9 +78,17 @@ def fetch_results(db: Session, pool: Pool, week: Week) -> ResultsReport:
     leagues = sorted({g.league for g in rows})
 
     for league in leagues:
+        resolved = (week.resolved_weeks or {}).get(league)
+        espn_week = resolved["week"] if resolved else week.week_number
+        season_type = resolved["season_type"] if resolved else espn.SEASON_TYPE_REGULAR
         try:
             payload = espn.fetch_scoreboard(
-                db, league, week.season_year, week.week_number, ttl_minutes=5
+                db,
+                league,
+                week.season_year,
+                espn_week,
+                season_type=season_type,
+                ttl_minutes=5,
             )
         except ProviderError as exc:
             report.warnings.append(

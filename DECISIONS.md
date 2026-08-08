@@ -120,6 +120,31 @@ existing, already recorded 2026 NFL calendar fixture's week 1 window (2026-09-09
 2026-09-16) both contain September 12, 2026, which is what pins the concrete real world case
 in the brief: the launch date is NFL week 1 and college week 3.
 
+## Phase 1 follow-up: fetch_results had the same bug
+
+While reading `app/services/results.py` in preparation for Phase 2, found that `fetch_results`
+called `espn.fetch_scoreboard(db, league, week.season_year, week.week_number, ...)`, the exact
+same bug class Phase 1 fixed in `fetch_candidates`: it sent the pool's own week_number straight
+to ESPN as the literal week number for every league when refreshing live scores. Phase 1's brief
+scoped the fix to the slate-building path and did not catch this. Left unfixed, Phase 1's slate
+would have built with the correct per-league games, but score refreshing would have asked ESPN
+for the wrong week for whichever league did not match the pool's week_number, silently returning
+stale or wrong game state on every scored week.
+
+**Fix:** `fetch_results` now reads `week.resolved_weeks` (populated by `fetch_candidates`) for
+each league's own resolved week and season type, falling back to `week.week_number` and
+`season_type=2` only when that league has no resolved entry (unanchored pool, or a league that
+had no games for the window), mirroring the same fallback Phase 1 already established.
+
+**Why:** consistency with the Phase 1 architecture: `week.week_number` must never be sent to
+ESPN directly for a league that has a real resolution on file.
+
+**Where:** `app/services/results.py`, `fetch_results`. Covered by
+`tests/test_results_service.py` (new), including a case that would fail if the fix regressed:
+the ncaaf cache entry is keyed on its real resolved week (3), not the pool's week_number (1), so
+a regression back to the old behaviour would find no cached response and the test would fail
+on a missing fixture rather than silently pass.
+
 ## Configuration defaults confirmed as-is
 
 The three decisions raised in Part 4 of the brief were pre-filled with defaults in the
