@@ -118,6 +118,13 @@
      [data-pick-meter] filled from a --pct custom property
      .picks-bar .picks-progress .picks-summary .picks-meter .picks-meter-fill
      .picks-actions .picks-status  (picks.html, the save bar)
+     .conf-controls .conf-input (Stage 1 typed confidence, .has-error is the existing
+     global input state, Section 07, reused rather than invented)
+     .game-list-divider [data-divider]  (the "Not picked" group boundary, app.js
+     repositions it, it is never itself draggable, see regroupDivider)
+     .lock-confirm .lock-confirm-list  ([data-lock-panel] starts hidden via the HTML
+     hidden attribute, [data-reorder-btn] [data-lock-open] [data-lock-cancel] are plain
+     .btn buttons, no dedicated classes of their own)
      .picks-grid with .pick-game .pick-player .pick-cell and the
      .is-correct / .is-wrong / .is-pending / .is-void / .is-missing states
      .subnav .subnav-link  (the four admin screens carry it inline)
@@ -1825,6 +1832,58 @@ button.team-btn:not([disabled]):not(.is-picked):hover {
 /* When a row shows more than one chip, only the first one pushes right. */
 .conf-chip + .conf-chip { margin-left: var(--space-2); }
 
+/* An unpicked row, or a picked row with no confidence assigned yet (Phase 4: confidence is
+   scoped to the picked rows only, never the whole slate). Quiet hollow pill instead of a
+   filled gold one with nothing in it. */
+.conf-chip.is-empty {
+  background: var(--bg-surface-alt);
+  border-color: var(--line);
+  color: var(--text-muted);   /* 7.47:1 on surface-2 */
+}
+
+/* -- Stage 1: the typed confidence input ---------------------------------
+   Sits next to the chip in .game-meta. It IS what the player types into, the hidden
+   input[data-conf] app.js reads for the actual POST is separate and driven from this one.
+   .has-error is the existing global input state (Section 07), reused rather than invented,
+   so a colliding or out of range value reads exactly like any other bad form field. */
+.conf-controls {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin-left: auto;
+}
+
+.conf-field {
+  display: inline-flex;
+}
+
+.conf-input {
+  width: 4.5rem;
+  min-height: var(--tap-sm);
+  flex: none;
+  padding: var(--space-1) var(--space-2);
+  text-align: center;
+}
+
+/* -- "Not picked" divider, inside the same sortable list ------------------
+   A real <li> so it travels with the list rather than floating outside it, but it carries
+   no .game-grip, and SortableJS is scoped to that handle, so it can never be dragged itself
+   (see app.js regroupDivider). Purely cosmetic: which side of it a row visually sits on
+   never decides that row's picked state, only whether its team button is picked does. */
+/* :not([hidden]), not a bare .game-list-divider rule: the HTML hidden attribute (app.js
+   toggles it in regroupDivider) has to actually hide this element. A plain class selector
+   setting display:flex sits at the same specificity as the UA stylesheet's [hidden] rule
+   but comes later in the cascade, so it would win and the divider would stay visible even
+   while hidden. */
+.game-list-divider:not([hidden]) {
+  display: flex;
+  align-items: center;
+  padding-top: var(--space-2);
+  border-top: var(--hairline);
+}
+
+.game-list-divider .eyebrow { margin: 0; }
+
 /* -- Keyboard fallback for ranking --------------------------------------- */
 
 .rank-controls {
@@ -2050,6 +2109,29 @@ button.team-btn:not([disabled]):not(.is-picked):hover {
   border-color: var(--negative-line);
   color: var(--negative);       /* 5.72:1 on brick-tint */
 }
+
+/* -- Stage 3: the lock step ------------------------------------------------
+   .lock-panel is a plain .panel. The confirmation itself, [data-lock-panel], starts
+   hidden (the HTML hidden attribute, no CSS needed to show or hide it, app.js flips it)
+   and is the deliberate extra step between tapping "Lock picks" and the picks actually
+   locking, per Section 8: locking has to be hard to trigger by accident, Save does not.
+   ------------------------------------------------------------------------ */
+
+.lock-confirm {
+  margin-top: var(--space-4);
+  padding-top: var(--space-4);
+  border-top: var(--hairline);
+}
+
+.lock-confirm-list {
+  margin: var(--space-3) 0;
+  padding-left: var(--space-5);
+  font-size: var(--fs-sm);
+  font-variant-numeric: tabular-nums;
+  color: var(--text);
+}
+
+.lock-confirm-list li + li { margin-top: var(--space-1); }
 
 /* -- HTMX request states -------------------------------------------------
    HTMX toggles .htmx-request on the element issuing the request. It ships no

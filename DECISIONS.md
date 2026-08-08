@@ -464,3 +464,198 @@ is the final one. Section 9's `possible` sentence was updated to match the scori
 (scoped to a player's own picks, no-show is 0), a small, adjacent fix since leaving it
 stating the old rule would make the spec itself wrong the moment this phase landed; nothing
 else in Section 9 changed.
+
+## Phase 4
+
+The gap Phase 3 deliberately left: `app/static/app.js`'s `renumber()` numbered every row in
+the drag list positionally from the slate size (20) down to 1, including rows nobody picked.
+This phase rebuilds the picks page into the real three stage flow (type numbers, reorder to
+inputs, drag to refine) plus a player initiated lock, distinct from Save and from the pool
+wide `lock_at`.
+
+### Confidence has two different writers now, on purpose, and they must never fight
+
+The central design problem: a typed number (Stage 1) and a position based drag (Stage 3)
+are two different ways of setting the same value, and a naive single `renumber()` that ran
+on every interaction would have one silently stomp the other the moment either happened near
+the other's row. The fix is two functions with disjoint responsibilities, not one function
+with a growing pile of special cases:
+
+- `applyRowConfidence(row, value, opts)` is the only place that writes a row's hidden
+  `input[data-conf]`, its `.conf-chip`, and `row.dataset.confidence`, which every other
+  function treats as the single source of truth for "what does this row actually submit."
+  `opts.syncTyped` additionally overwrites the visible Stage 1 number input; only a position
+  based caller passes it.
+- `syncRowConfidence(row)` is Stage 1's path: it derives the row's confidence from
+  `(team picked ? the typed input's current value : "")` and calls
+  `applyRowConfidence(row, that, {})` **without** `syncTyped`, so it never touches what the
+  player is mid typing anywhere else on the page. Called from the number input's `input`
+  event and from a team button tap (so a value typed ahead of tapping the winner takes
+  effect the moment the winner is chosen, without requiring the tap to invent a value for a
+  row nobody typed into).
+- `renumber(list)` is Stage 3's path: walks the list top to bottom, skips any row with no
+  team picked entirely (it is never touched, not even to blank it, since it is already
+  blank by construction), and assigns the picked rows `pickedCount` down to 1 in the order
+  they appear, overwriting the typed input too (`syncTyped: true`). Called only from an
+  actual reordering action: SortableJS `onEnd`, the up/down rank buttons, alt+arrow, and
+  "Reorder to inputs" (after that button physically re-sorts the DOM). It is deliberately
+  **not** called on page load or on a bare team tap, both of which must leave an
+  already-typed or already-saved confidence value alone.
+
+One consequence worth naming: `init()` does not call `renumber()`. It used to (Phase 3's
+version renumbered on load too, which is exactly how the whole-slate bug painted every row
+on first paint). For a partial entry, the saved rows are not necessarily contiguous at the
+top of the list (`picks_page` only reorders games into confidence order once the entry is
+*complete*, `len(picks_by_game) == picks_required`; a partial entry falls back to slate rank
+order), so renumbering on load by DOM position would silently overwrite genuinely saved
+confidence values with position based ones the instant the page rendered. `init()` instead
+calls `regroupDivider()` (repositions the "Not picked" divider) and `updateSummary()`
+(gating, duplicate check, the meter) and leaves every row's confidence exactly as the server
+rendered it.
+
+### The "Not picked" divider: a real, cosmetic, undraggable list item
+
+Per the brief's own framing, the decision to land on: the divider (`<li data-divider>`) is a
+genuine sibling inside the same `<ol class="game-list" data-sortable>`, not a second list or
+an element positioned outside it. It carries no `.game-grip`, and SortableJS is configured
+with `handle: ".game-grip"`, so the divider itself can never be picked up and dragged. A
+normal row **can** still be dropped on either side of it by SortableJS, and that is allowed
+on purpose: a row's picked/not-picked state is driven only by whether its team button is
+tapped, never by which side of the divider it visually ends up sitting on after a drag.
+`regroupDivider(list)` repositions the divider (right before the first row with no team
+picked, or at the very end if every row is picked, hidden entirely if none are) after every
+`renumber()` call and after every `syncRowConfidence()` call, so it tracks reality without
+being load bearing for it: if a drag temporarily leaves a picked row below the line or an
+unpicked row above it, `renumber()`'s confidence math is completely unaffected, because it
+scans by `.team-btn.is-picked`, not by DOM position relative to the divider. This is also
+why `move()` (the up/down button and alt+arrow path) needed no special casing for the
+divider: swapping a row with the divider as its neighbor just relocates the divider, and the
+very next `regroupDivider()` call (inside the `renumber()` that `move()` already calls) puts
+it back wherever it actually belongs.
+
+### "Reorder to inputs": duplicates are not an error here, only in `updateSummary()`
+
+`reorderToInputs()` sorts rows with a team picked and a typed value in `1..picks_required`
+to the top, by that value descending, stable sort, everything else to the "Not picked"
+group. A row typed with a duplicate value is not rejected or skipped at this step, it just
+keeps its relative DOM order against its duplicate twin; `renumber()`, which this function
+calls immediately after moving rows, then overwrites every picked row with a clean, gap free
+`picksRequired..1` sequence based on the new order, which is what "so positions and typed
+values agree" (the brief's own phrase) means in practice: the button is exactly what turns a
+messy, duplicate-riddled Stage 1 pass into a valid Stage 3 starting point in one tap.
+
+### Stage 1 live validation reuses `updateSummary()`, does not duplicate it
+
+`updateSummary()` already owned the meter, the save button gating, and the "X of N winners
+chosen" text (Phase 3). Rather than add a second pass with its own counting logic, it now
+also walks the picked rows once for duplicate and out-of-range confidence values, toggles
+the existing `.has-error` input state (Section 07 of `app.css`, the same class every other
+form field already uses for a bad value, not a new one invented for this) on the offending
+`.conf-input` elements, and switches the summary text to "12 of 15 assigned, values 4 and 9
+used twice" when a collision exists. The Save button and the new "Lock picks" button share
+one `complete` condition (`picked === target && !invalid && !missing && no duplicates`), so
+the two buttons can never disagree about whether the entry is postable.
+
+### The lock confirmation: a plain JS panel toggle, not an HTMX round trip
+
+Chose the inline JS panel (`initLockFlow()` in `app.js`, `[data-lock-panel]` starting
+`hidden` in the markup) over asking the server for a confirmation fragment first. The
+picks_required-picks summary the panel shows is built entirely from state already on the
+page (`row.dataset.confidence`, the picked team button's name), so a server round trip would
+add latency and a second request for zero new information; the panel's only job is to make
+"Lock picks" a two-tap action instead of one, which a client side toggle does for free. The
+actual lock is still a real POST: the panel's "Confirm and lock" button is a normal
+`hx-post="/picks/lock"` submit inside the same form (`hx-include="closest form"`), so the
+server still runs full `validate_picks` and nothing is trusted from the confirmation panel
+itself, it is purely a "are you sure" gate in front of the same authoritative POST Save
+already uses. On success (`HX-Request` present), the route replies with an `HX-Redirect: /picks`
+header instead of a swapped partial: the locked view is a genuinely different page state
+(Section 8's read only confirmation branch, not a small save-bar update), so a real
+navigation that re-renders `picks_page` from scratch is simpler and more honest than trying
+to fake that whole state with a fragment. `/picks/unlock` follows the same pattern. Both
+routes also work as plain (non-HTMX) form posts, redirecting 303 back to `/picks`; the
+Unlock button in particular needed no `hx-include` at all, since unlocking posts no pick
+data, only the action.
+
+### `_save_picks`, `_lock_picks`: one parse, one write, two callers
+
+Refactored the body of the old `_save_picks` into `_parse_submission` (reads the
+`winner-{id}`/`confidence-{id}` fields, unchanged behavior: a game with neither present is
+skipped, a game with one but not the other reaches `validate_picks` as a real error) and
+`_upsert_picks` (writes `Pick` rows and touches `WeekEntry.submitted_at`, never
+`locked_at`). `_save_picks` and the new `_lock_picks` both call `_parse_submission` then
+`validate_picks(submitted, slate_ids, pool.picks_required)` (the exact same call Phase 3
+already made, not weakened, not duplicated) before writing anything; `_lock_picks` is the
+only place that ever sets `entry.locked_at`, immediately after `_upsert_picks` returns, so a
+rejected lock attempt (wrong count, duplicate confidence, an off-slate game, anything
+`validate_picks` catches) writes nothing and never touches `locked_at`, exactly mirroring
+what a rejected Save already does. `tests/test_app.py::test_picks_lock_rejects_an_invalid_submission_and_does_not_lock`
+pins this. A hand crafted POST to `/picks/lock` is therefore exactly as safe as one to
+`/picks`: the same validation function, the same "nothing written on failure" guarantee.
+
+### `WeekEntry.locked_at`: new column, one migration, and how it interacts with the real lock
+
+`WeekEntry.locked_at` (nullable timestamp). Migration `be7a7724eee3`, on top of Phase 3's
+head (`7f659398d6cc`), nullable with no backfill needed (an existing row simply has never
+been player-locked). Verified upgrade and downgrade both run cleanly against a fresh SQLite
+database. `week_is_locked(week)` (the pool wide, clock enforced lock, unchanged by this
+phase) is checked **before** `locked_at` everywhere it matters:
+
+- `picks_page`: `locked = week_is_locked(week)`; `player_locked = not locked and
+  entry.locked_at is not None`. The instant `locked` flips true, `player_locked` is
+  definitionally false, so the template's state 4 branch (read only for everyone, fully
+  public on Results) always wins over state 3b (read only for one player, with an unlock
+  escape), regardless of what `locked_at` holds. `locked_at` itself is never cleared or
+  touched when the real lock arrives; it simply stops being consulted.
+- `/picks/unlock`: refuses with a 403 (`"This week is locked. You can no longer unlock your
+  picks."`) the moment `week_is_locked(week)` is true, before it ever looks at `locked_at`.
+  A time locked week can never be unlocked by the player again, matching the brief's rule
+  verbatim. `tests/test_app.py::test_picks_unlock_is_refused_once_the_week_is_time_locked`
+  confirms `locked_at` is left exactly as it was (not silently cleared, not silently
+  no-op'd into a 200) once that happens.
+- `/picks/lock` itself also refuses once `week_is_locked(week)`, same message `_save_picks`
+  already used for a locked week, for the same reason Save does: there is nothing left to
+  lock once the real lock has already frozen everything.
+
+### `picks.html`: a shared `readonly_list` macro, and the state ordering
+
+Factored the read only slate list (matchup, meta, a confidence chip only on picked games)
+out of state 4 into a `readonly_list(games, picks_by_game, tz, label)` macro, since the new
+state 3b (player locked, week still open) needed the identical list with only the heading
+and surrounding copy different. `{% elif player_locked %}` sits between `{% elif locked %}`
+(state 4) and `{% else %}` (state 3, the open editing flow) in the branch chain, which is
+what makes the "time lock always wins" rule visible directly in the template, not just in
+the Python: Jinja evaluates branches top to bottom, so `locked` is tested and can short
+circuit before `player_locked` is ever reached, mirroring `picks_page`'s own
+`not locked and ...` guard. Renamed the doc comment at the top of the file from "five
+states" to "six," with 3b called out explicitly and a one line pointer to where the
+ordering guarantee actually lives.
+
+### Copy
+
+"How this week works" and the "Editable until..." paragraph were rewritten to describe the
+three stage flow (type, reorder, drag) and the new lock/unlock language, replacing every
+remaining sentence that described the old single-stage "tap then drag the whole list" flow.
+Neither `15` nor `20` appears literally anywhere touched; `n` (`picks_required`) and
+`slate_size` are threaded through exactly as Phase 3 established.
+
+### Tests
+
+**642 passed**, 0 failed (636 at the Phase 3 baseline, 6 net new, all router level since
+`app/scoring.py` is untouched by this phase). New coverage in `tests/test_app.py`:
+`test_picks_lock_with_a_valid_submission_saves_and_locks`,
+`test_picks_lock_rejects_an_invalid_submission_and_does_not_lock`,
+`test_picks_lock_is_refused_once_the_week_is_time_locked`,
+`test_picks_unlock_clears_the_lock_while_the_week_is_still_open`,
+`test_picks_unlock_is_refused_once_the_week_is_time_locked`, and
+`test_picks_page_renders_in_every_state`, which walks one player through all five reachable
+GET `/picks` states in order (nothing entered, a genuinely partial entry written directly
+since Save cannot produce one, fully entered but unlocked, player locked, then time locked)
+and asserts the state-specific markers (`"Reorder to inputs"`, `"Unlock to edit"`,
+`"data-sortable"`) appear or disappear exactly where they should, including confirming
+`locked_at` survives untouched once the real lock takes over. The existing
+`test_member_pages_render` (an authenticated player against an open week with a full slate)
+already served as this repo's boot-and-load smoke test for `/picks`; it needed no change
+since the open state it exercises still renders under the rebuilt template. `app/scoring.py`
+and `validate_picks` are unchanged by this phase, so no new tests were added there, per the
+brief.

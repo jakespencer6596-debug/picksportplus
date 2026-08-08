@@ -309,6 +309,12 @@ class WeekEntry(Base):
         ForeignKey("weeks.id", ondelete="CASCADE"), index=True, nullable=False
     )
     submitted_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # Set when the player deliberately locks their own picks for the week, ahead of the
+    # pool-wide lock_at (Phase 4). Distinct from submitted_at: a save touches submitted_at
+    # and never this column, only POST /picks/lock does. Cleared by POST /picks/unlock, which
+    # is only permitted while week_is_locked(week) is still False; once the real lock_at
+    # passes, the player can never unlock again and this column is frozen at whatever it was.
+    locked_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     points: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     correct: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     possible: Mapped[int] = mapped_column(Integer, default=0, nullable=False)

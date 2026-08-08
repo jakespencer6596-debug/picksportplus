@@ -7,7 +7,7 @@ reasoning behind every judgment call made along the way.
 - [x] Phase 1. Fix week resolution (per-league date window)
 - [x] Phase 2. Invert scoring, lowest total wins
 - [x] Phase 3. Pick 15 of 20
-- [ ] Phase 4. Two-step pick entry
+- [x] Phase 4. Two-step pick entry
 - [ ] Phase 5. Admin-curated slate with pinned games
 - [ ] Phase 6. Navigation, sortable tables, transposed results grid
 - [ ] Phase 7. Entry payment and payouts
@@ -225,3 +225,30 @@ counted as new). Explicit coverage for the brief's two named scenarios:
 pins that `picks_required` is enforced server side regardless of what any client sends.
 `ruff check .` and `black .` both clean. Full judgment calls are recorded in `DECISIONS.md`
 under "Phase 3".
+
+## Phase 4 notes
+
+Rebuilt the picks page into the real three stage entry flow the brief named: type a
+confidence number straight into a row (live duplicate/range validation, `.has-error` reused
+rather than a new class), "Reorder to inputs" to snap the list to what was typed, then drag
+or use the up/down buttons to refine, confidence now scoped correctly to the picked rows
+only (`app/static/app.js`'s `renumber()` no longer numbers the whole slate, the Phase 3
+gap). Added a player initiated lock, separate from Save and from the pool wide `lock_at`:
+"Lock picks" opens an inline confirmation panel (no HTMX round trip needed, everything it
+shows is already on the page) before the real `POST /picks/lock` fires; `POST
+/picks/unlock` reverses it, refused once the week's real lock has passed. New
+`WeekEntry.locked_at` column, migration `be7a7724eee3`. `app/routers/picks.py`'s
+`_save_picks` was split into `_parse_submission` / `_upsert_picks` so `/picks` and the new
+`/picks/lock` share exactly one parse and one write path, both still running the same
+`validate_picks` Phase 3 already wired up, never weakened or duplicated. `picks.html` gained
+a shared `readonly_list` macro and a new state (3b: locked by the player, week still open,
+with an "Unlock to edit" escape) ordered so the real time lock always wins over it.
+
+Test suite: **642 passed**, 0 failed (636 at the Phase 3 baseline, 6 net new, all router
+level: `_save_picks`/`_lock_picks`/`_unlock_picks` are the only routers touched, and
+`app/scoring.py` was not touched at all this phase). `tests/test_app.py::test_picks_page_renders_in_every_state`
+walks one player through all five reachable GET `/picks` states end to end, including a
+genuinely partial entry (written directly, since a real Save can never leave one). `ruff
+check .` and `black .` both clean. Full judgment calls, especially the two-writer confidence
+model (typed vs. dragged) and the "Not picked" divider's drag behavior, are recorded in
+`DECISIONS.md` under "Phase 4".

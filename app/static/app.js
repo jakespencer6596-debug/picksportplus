@@ -7,28 +7,130 @@
 
   /* ---------------------------------------------------------------- ranking */
 
-  /* Confidence is positional. The top row stakes N points, the bottom stakes 1.
-     Renumber after any move, whether by drag, by button, or by keyboard. */
+  /* Sets one row's confidence display: the hidden input the form actually posts, the
+     chip, and row.dataset.confidence, which every other function here treats as the
+     single source of truth for "what is this row's confidence right now." When
+     opts.syncTyped is set the visible Stage 1 number input is overwritten to match, which
+     is what a position based reassignment (renumber, below) wants; a plain Stage 1 typed
+     edit (syncRowConfidence, below) must NOT overwrite what the player is mid typing. */
+  function applyRowConfidence(row, value, opts) {
+    var str = value === "" || value === null || typeof value === "undefined" ? "" : String(value);
+    var hidden = row.querySelector("input[data-conf]");
+    if (hidden) hidden.value = str;
+    row.dataset.confidence = str;
+    if (opts && opts.syncTyped) {
+      var typed = row.querySelector("[data-conf-input]");
+      if (typed) typed.value = str;
+    }
+    var chip = row.querySelector(".conf-chip");
+    if (!chip) return;
+    if (str === "") {
+      chip.textContent = "-";
+      chip.classList.add("is-empty");
+      chip.setAttribute("aria-label", "No points staked");
+    } else {
+      chip.textContent = str;
+      chip.classList.remove("is-empty");
+      chip.setAttribute("aria-label", str + " " + (str === "1" ? "point" : "points") + " staked");
+    }
+  }
+
+  /* Confidence is positional, but Phase 4 scopes that position to the picked rows only,
+     never the whole slate: walk the list top to bottom, skip any row with no team picked
+     (it keeps its blank chip and blank hidden value, see applyRowConfidence(row, "")), and
+     assign the picked rows picksCount down to 1 in the order they actually appear. This is
+     what dragging, the up/down buttons, and "Reorder to inputs" all call after they move
+     rows around, so all three paths produce identical state (they already shared move(),
+     this keeps that true). It deliberately does NOT run on page load or on a plain team tap,
+     both of which must leave an already-typed or already-saved confidence value alone; see
+     syncRowConfidence for that path. */
   function renumber(list) {
     var rows = Array.prototype.slice.call(list.querySelectorAll(".game-row"));
     var n = rows.length;
+    var pickedRows = rows.filter(function (row) {
+      return !!row.querySelector(".team-btn.is-picked");
+    });
+    var pickedCount = pickedRows.length;
+    pickedRows.forEach(function (row, i) {
+      applyRowConfidence(row, pickedCount - i, { syncTyped: true });
+    });
     rows.forEach(function (row, i) {
-      var points = n - i;
-      var chip = row.querySelector(".conf-chip");
-      if (chip) {
-        chip.textContent = points;
-        chip.setAttribute("aria-label", points + " " + (points === 1 ? "point" : "points"));
-      }
-      var input = row.querySelector("input[data-conf]");
-      if (input) input.value = points;
-      row.dataset.confidence = points;
-
       var up = row.querySelector(".rank-btn[data-dir='up']");
       var down = row.querySelector(".rank-btn[data-dir='down']");
       if (up) up.disabled = i === 0;
       if (down) down.disabled = i === n - 1;
     });
+    regroupDivider(list);
     updateSummary();
+  }
+
+  /* Stage 1: the typed number input drives the hidden field and the chip directly, no
+     drag or reorder required. Only takes effect while the row's team is picked, so typing
+     a value ahead of tapping a winner is remembered (the browser keeps it in the visible
+     field) without it silently becoming a real, submitted confidence for a game with no
+     winner chosen, which the server would otherwise reject as an invalid pick. */
+  function syncRowConfidence(row) {
+    var picked = !!row.querySelector(".team-btn.is-picked");
+    var typed = row.querySelector("[data-conf-input]");
+    var raw = typed ? typed.value.trim() : "";
+    applyRowConfidence(row, picked ? raw : "");
+    var list = row.closest(".game-list");
+    if (list) regroupDivider(list);
+    updateSummary();
+  }
+
+  /* The "Not picked" divider is a real <li data-divider> inside the same sortable list
+     (see app.css .game-list-divider), purely cosmetic: it carries no .game-grip, so
+     SortableJS (handle: ".game-grip") can never pick it up to drag, but a row CAN still be
+     dropped on either side of it. That is fine on purpose. A row's picked state is driven
+     only by whether its team is tapped, never by which side of this line it visually ends
+     up on after a drag, so the divider never has to be perfectly in sync mid drag, only
+     repositioned here afterward, purely for readability. See DECISIONS.md, Phase 4. */
+  function regroupDivider(list) {
+    var divider = list.querySelector("[data-divider]");
+    if (!divider) return;
+    var rows = Array.prototype.slice.call(list.querySelectorAll(".game-row"));
+    var firstUnpicked = null;
+    for (var i = 0; i < rows.length; i++) {
+      if (!rows[i].querySelector(".team-btn.is-picked")) {
+        firstUnpicked = rows[i];
+        break;
+      }
+    }
+    divider.hidden = !firstUnpicked;
+    if (firstUnpicked) {
+      list.insertBefore(divider, firstUnpicked);
+    } else {
+      list.appendChild(divider);
+    }
+  }
+
+  /* Stage 2. Sorts the picked-with-a-valid-typed-value rows to the top, highest value
+     first, and pushes everything else (no team picked, or no confidence typed yet) into
+     the "Not picked" group. Duplicate typed values are not an error here, a stable sort
+     just keeps their relative order, because the renumber() call right after this
+     overwrites every picked row with a clean, gap free 1..n sequence anyway, which is what
+     "so positions and typed values agree" means in practice. */
+  function reorderToInputs(list) {
+    var rows = Array.prototype.slice.call(list.querySelectorAll(".game-row"));
+    var target = picksRequired(list);
+    var ranked = [];
+    var unranked = [];
+    rows.forEach(function (row) {
+      var picked = !!row.querySelector(".team-btn.is-picked");
+      var raw = row.dataset.confidence || "";
+      var value = raw === "" ? NaN : parseInt(raw, 10);
+      if (picked && raw !== "" && !isNaN(value) && value >= 1 && value <= target) {
+        ranked.push({ row: row, value: value });
+      } else {
+        unranked.push(row);
+      }
+    });
+    ranked.sort(function (a, b) { return b.value - a.value; });
+    ranked.forEach(function (item) { list.appendChild(item.row); });
+    unranked.forEach(function (row) { list.appendChild(row); });
+    renumber(list);
+    markDirty();
   }
 
   function move(row, dir) {
@@ -56,20 +158,76 @@
     return value > 0 ? value : list.querySelectorAll(".game-row").length;
   }
 
+  /* Stage 1 lives here too: the same pass that counts picked rows also checks every
+     picked row's confidence value for a collision or an out of range value, so the save
+     button gating and the duplicate warning share one source of truth rather than two
+     passes that could disagree. Everything read here (.team-btn.is-picked,
+     row.dataset.confidence) is exactly what applyRowConfidence/syncRowConfidence keep in
+     sync, and exactly what gets posted, so "complete" here means "the server would accept
+     this," even though the server remains the only real authority (validate_picks runs
+     again there regardless of what this function ever decided). */
   function updateSummary() {
     var list = document.querySelector(".game-list");
     var summary = document.querySelector("[data-pick-summary]");
     if (!list || !summary) return;
-    var rows = list.querySelectorAll(".game-row");
+    var rows = Array.prototype.slice.call(list.querySelectorAll(".game-row"));
     var target = picksRequired(list);
     var picked = 0;
+    var counts = {};
+    var invalid = false;
+    var missing = false;
+
     rows.forEach(function (row) {
-      if (row.querySelector(".team-btn.is-picked")) picked += 1;
+      if (!row.querySelector(".team-btn.is-picked")) return;
+      picked += 1;
+      var raw = row.dataset.confidence || "";
+      if (raw === "") {
+        missing = true;
+        return;
+      }
+      var num = parseInt(raw, 10);
+      if (isNaN(num) || num < 1 || num > target) {
+        invalid = true;
+        return;
+      }
+      counts[num] = (counts[num] || 0) + 1;
     });
-    summary.textContent =
-      picked + " of " + target + " winner" + (target === 1 ? "" : "s") + " chosen";
+
+    var duplicates = [];
+    Object.keys(counts).forEach(function (key) {
+      if (counts[key] > 1) duplicates.push(parseInt(key, 10));
+    });
+    duplicates.sort(function (a, b) { return a - b; });
+
+    rows.forEach(function (row) {
+      var input = row.querySelector("[data-conf-input]");
+      if (!input) return;
+      var isPicked = !!row.querySelector(".team-btn.is-picked");
+      var raw = row.dataset.confidence || "";
+      var num = raw === "" ? NaN : parseInt(raw, 10);
+      var bad = isPicked && raw !== "" &&
+        (duplicates.indexOf(num) !== -1 || isNaN(num) || num < 1 || num > target);
+      input.classList.toggle("has-error", !!bad);
+    });
+
+    if (duplicates.length) {
+      var words = duplicates.map(String);
+      var joined = words.length === 1
+        ? words[0]
+        : words.slice(0, -1).join(", ") + " and " + words[words.length - 1];
+      summary.textContent = picked + " of " + target + " assigned, value" +
+        (words.length === 1 ? " " + joined + " is" : "s " + joined + " are") + " used twice";
+    } else {
+      summary.textContent =
+        picked + " of " + target + " winner" + (target === 1 ? "" : "s") + " chosen";
+    }
+
+    var complete = picked === target && !invalid && !missing && duplicates.length === 0;
     var save = document.querySelector("[data-save-btn]");
-    if (save) save.disabled = picked !== target;
+    if (save) save.disabled = !complete;
+    var lockOpen = document.querySelector("[data-lock-open]");
+    if (lockOpen) lockOpen.disabled = !complete;
+
     var meter = document.querySelector("[data-pick-meter]");
     if (meter) {
       var pct = target ? Math.min(100, (picked / target) * 100) : 0;
@@ -108,7 +266,13 @@
       });
       var hidden = row.querySelector("input[data-pick]");
       if (hidden) hidden.value = teamBtn.dataset.side;
-      updateSummary();
+      /* A fresh pick does not invent a confidence value: syncRowConfidence only picks up
+         whatever is already typed in this row's Stage 1 input (picking up a pre-typed
+         value if the player typed ahead of tapping), it never assigns a position based
+         one. That is renumber()'s job, reached only via drag, the rank buttons, alt+arrow,
+         or "Reorder to inputs", so a tap elsewhere never clobbers a value the player
+         already typed into some other row. */
+      syncRowConfidence(row);
       markDirty();
       return;
     }
@@ -118,6 +282,18 @@
       var moved = move(rankBtn.closest(".game-row"), rankBtn.dataset.dir);
       if (moved) rankBtn.focus(); /* keep the keyboard user where they were */
     }
+  }
+
+  /* Stage 1's typed confidence input. Delegated like everything else here, fires on every
+     keystroke so the duplicate/range check in updateSummary stays live while the player is
+     mid edit, per Section 8: hold an invalid intermediate state without it blocking typing. */
+  function onInput(e) {
+    var input = e.target.closest("[data-conf-input]");
+    if (!input) return;
+    var row = input.closest(".game-row");
+    if (!row) return;
+    syncRowConfidence(row);
+    markDirty();
   }
 
   /* Keyboard ranking without the buttons: alt plus arrow on a focused row. */
@@ -180,12 +356,81 @@
     });
   }
 
+  /* Stage 2's button. A plain click handler, not a submit: reordering the list is a pure
+     client side rearrangement, nothing is posted until Save or Lock actually fires. */
+  function initReorderButton() {
+    var btn = document.querySelector("[data-reorder-btn]");
+    var list = document.querySelector(".game-list[data-sortable]");
+    if (!btn || !list) return;
+    btn.addEventListener("click", function () {
+      reorderToInputs(list);
+    });
+  }
+
+  /* Builds the confirmation panel's summary, most confident pick first, from exactly what
+     is about to be posted (row.dataset.confidence and the picked team button), so the
+     player is confirming the real submission, not a stale server rendered snapshot. */
+  function buildLockSummary(list, target) {
+    var rows = Array.prototype.slice.call(list.querySelectorAll(".game-row"));
+    var picked = rows.filter(function (row) {
+      return !!row.querySelector(".team-btn.is-picked") && row.dataset.confidence;
+    });
+    picked.sort(function (a, b) {
+      return parseInt(b.dataset.confidence, 10) - parseInt(a.dataset.confidence, 10);
+    });
+    target.innerHTML = "";
+    picked.forEach(function (row) {
+      var nameEl = row.querySelector(".team-btn.is-picked .team-name");
+      var abbrEl = row.querySelector(".team-btn.is-picked .team-abbr");
+      var label = nameEl ? nameEl.textContent : (abbrEl ? abbrEl.textContent : "Pick");
+      var li = document.createElement("li");
+      li.textContent = row.dataset.confidence + ". " + label;
+      target.appendChild(li);
+    });
+  }
+
+  /* Stage 3's lock step. "Lock picks" only opens a confirmation panel, built fresh from
+     the current on page state; the actual POST to /picks/lock is a second, separate tap
+     on the confirm button inside that panel (hx-post, wired in picks.html), so locking
+     can never happen from one accidental click the way Save can. See DECISIONS.md,
+     Phase 4, for why this is a plain JS toggle rather than an HTMX round trip. */
+  function initLockFlow() {
+    var openBtn = document.querySelector("[data-lock-open]");
+    var cancelBtn = document.querySelector("[data-lock-cancel]");
+    var panel = document.querySelector("[data-lock-panel]");
+    var summaryList = document.querySelector("[data-lock-summary]");
+    var list = document.querySelector(".game-list[data-sortable]");
+    if (!openBtn || !panel) return;
+
+    openBtn.addEventListener("click", function () {
+      if (list && summaryList) buildLockSummary(list, summaryList);
+      panel.hidden = false;
+      panel.scrollIntoView({ behavior: reduceMotion ? "auto" : "smooth", block: "nearest" });
+    });
+
+    if (cancelBtn) {
+      cancelBtn.addEventListener("click", function () {
+        panel.hidden = true;
+      });
+    }
+  }
+
   function init() {
     document.addEventListener("click", onClick);
     document.addEventListener("keydown", onKeydown);
+    document.addEventListener("input", onInput);
     initSortable();
     var list = document.querySelector(".game-list");
-    if (list) renumber(list);
+    if (list) {
+      /* Not renumber(): the server already rendered every row's real confidence, saved
+         or blank, and renumber() would overwrite a saved but not yet fully ranked entry
+         with position based values that do not match what is actually stored. Only the
+         divider position and the summary/gating need computing fresh on load. */
+      regroupDivider(list);
+      updateSummary();
+    }
+    initReorderButton();
+    initLockFlow();
     tickCountdowns();
     setInterval(tickCountdowns, 1000);
   }
@@ -240,5 +485,12 @@
     }
   });
 
-  window.PSP = { renumber: renumber, updateSummary: updateSummary, markSaved: markSaved };
+  window.PSP = {
+    renumber: renumber,
+    updateSummary: updateSummary,
+    markSaved: markSaved,
+    reorderToInputs: reorderToInputs,
+    syncRowConfidence: syncRowConfidence,
+    regroupDivider: regroupDivider
+  };
 })();

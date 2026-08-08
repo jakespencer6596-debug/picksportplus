@@ -424,6 +424,160 @@ def test_picks_page_is_read_only_after_lock(client, world, session_factory):
     assert "data-sortable" not in response.text
 
 
+# Player lock, distinct from the pool wide time lock (Phase 4) -------------
+
+
+def test_picks_lock_with_a_valid_submission_saves_and_locks(client, world, session_factory):
+    _login(client, "player@example.com")
+    response = client.post("/picks/lock", data=_valid_submission(world["game_ids"]))
+    assert response.status_code == 303
+
+    db = session_factory()
+    picks = list(db.scalars(select(Pick).where(Pick.user_id == world["player_id"])))
+    assert len(picks) == len(world["game_ids"])
+    entry = db.scalar(select(WeekEntry).where(WeekEntry.user_id == world["player_id"]))
+    assert entry is not None
+    assert entry.locked_at is not None
+    assert entry.submitted_at is not None
+    db.close()
+
+
+def test_picks_lock_rejects_an_invalid_submission_and_does_not_lock(client, world, session_factory):
+    """The same validation Save runs, and the same refusal: nothing is written, and
+    locked_at is never set, whether or not a WeekEntry already existed."""
+    _login(client, "player@example.com")
+    data = _valid_submission(world["game_ids"])
+    dropped = world["game_ids"][0]
+    del data[f"winner-{dropped}"]
+    del data[f"confidence-{dropped}"]
+    response = client.post("/picks/lock", data=data, headers={"HX-Request": "true"})
+    assert response.status_code == 400
+    assert "You have picked 3 games. Pick 4." in response.text
+
+    db = session_factory()
+    assert db.scalar(select(Pick).where(Pick.user_id == world["player_id"])) is None
+    entry = db.scalar(select(WeekEntry).where(WeekEntry.user_id == world["player_id"]))
+    assert entry is None or entry.locked_at is None
+    db.close()
+
+
+def test_picks_lock_is_refused_once_the_week_is_time_locked(client, world, session_factory):
+    db = session_factory()
+    week = db.get(Week, world["week_id"])
+    week.lock_at = dt.datetime.now(UTC) - dt.timedelta(minutes=1)
+    db.commit()
+    db.close()
+
+    _login(client, "player@example.com")
+    response = client.post(
+        "/picks/lock", data=_valid_submission(world["game_ids"]), headers={"HX-Request": "true"}
+    )
+    assert response.status_code == 403
+
+    db = session_factory()
+    assert db.scalar(select(Pick).where(Pick.user_id == world["player_id"])) is None
+    db.close()
+
+
+def test_picks_unlock_clears_the_lock_while_the_week_is_still_open(client, world, session_factory):
+    _login(client, "player@example.com")
+    client.post("/picks/lock", data=_valid_submission(world["game_ids"]))
+
+    response = client.post("/picks/unlock")
+    assert response.status_code == 303
+
+    db = session_factory()
+    entry = db.scalar(select(WeekEntry).where(WeekEntry.user_id == world["player_id"]))
+    assert entry.locked_at is None
+    # Unlocking never touches the picks themselves.
+    assert len(list(db.scalars(select(Pick).where(Pick.user_id == world["player_id"])))) == 4
+    db.close()
+
+
+def test_picks_unlock_is_refused_once_the_week_is_time_locked(client, world, session_factory):
+    """A time locked week can never be unlocked by the player again, no matter what."""
+    _login(client, "player@example.com")
+    client.post("/picks/lock", data=_valid_submission(world["game_ids"]))
+
+    db = session_factory()
+    week = db.get(Week, world["week_id"])
+    week.lock_at = dt.datetime.now(UTC) - dt.timedelta(minutes=1)
+    db.commit()
+    db.close()
+
+    response = client.post("/picks/unlock", headers={"HX-Request": "true"})
+    assert response.status_code == 403
+    assert "locked" in response.text.lower()
+
+    db = session_factory()
+    entry = db.scalar(select(WeekEntry).where(WeekEntry.user_id == world["player_id"]))
+    assert entry.locked_at is not None
+    db.close()
+
+
+def test_picks_page_renders_in_every_state(client, world, session_factory):
+    """Nothing entered, partial, full but unlocked, player locked, and time locked. The
+    real lock always wins over a player lock the moment it hits, regardless of locked_at.
+    """
+    _login(client, "player@example.com")
+
+    # 1: nothing entered yet.
+    response = client.get("/picks")
+    assert response.status_code == 200
+
+    # 2: partially entered. Save always requires the full count, so a genuinely partial
+    # entry (fewer picks saved than picks_required) is written directly, the same way a
+    # commissioner raising picks_required after a smaller entry was already saved would
+    # produce one.
+    db = session_factory()
+    db.add(
+        Pick(
+            user_id=world["player_id"],
+            pool_id=world["pool_id"],
+            week_id=world["week_id"],
+            game_id=world["game_ids"][0],
+            picked_team="home",
+            confidence=1,
+        )
+    )
+    db.commit()
+    db.close()
+    response = client.get("/picks")
+    assert response.status_code == 200
+
+    # 3: fully entered, not locked.
+    response = client.post("/picks", data=_valid_submission(world["game_ids"]))
+    assert response.status_code == 303
+    response = client.get("/picks")
+    assert response.status_code == 200
+    assert "Reorder to inputs" in response.text
+    assert "Unlock to edit" not in response.text
+
+    # 4: locked by the player, the week itself still open.
+    response = client.post("/picks/lock", data=_valid_submission(world["game_ids"]))
+    assert response.status_code == 303
+    response = client.get("/picks")
+    assert response.status_code == 200
+    assert "Unlock to edit" in response.text
+    assert "Reorder to inputs" not in response.text
+
+    # 5: time locked. The pool wide lock always wins, even though locked_at is still set.
+    db = session_factory()
+    week = db.get(Week, world["week_id"])
+    week.lock_at = dt.datetime.now(UTC) - dt.timedelta(minutes=1)
+    db.commit()
+    db.close()
+    response = client.get("/picks")
+    assert response.status_code == 200
+    assert "data-sortable" not in response.text
+    assert "Unlock to edit" not in response.text
+
+    db = session_factory()
+    entry = db.scalar(select(WeekEntry).where(WeekEntry.user_id == world["player_id"]))
+    assert entry.locked_at is not None
+    db.close()
+
+
 # Results and scoring --------------------------------------------------------
 
 

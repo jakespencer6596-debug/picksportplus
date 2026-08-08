@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import datetime as dt
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from fastapi.responses import RedirectResponse
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -75,6 +75,7 @@ def picks_page(
     week = current_week(db, pool)
     games: list[Game] = []
     picks_by_game: dict[int, Pick] = {}
+    entry: WeekEntry | None = None
     if week is not None:
         games = slate_games(db, week)
         picks_by_game = {
@@ -83,6 +84,9 @@ def picks_page(
                 select(Pick).where(Pick.user_id == user.id, Pick.week_id == week.id)
             )
         }
+        entry = db.scalar(
+            select(WeekEntry).where(WeekEntry.user_id == user.id, WeekEntry.week_id == week.id)
+        )
 
     # Saved picks drive the row order, highest confidence at the top, so returning to the page
     # shows the ranking the player left behind. Otherwise fall back to slate rank, which puts
@@ -97,7 +101,13 @@ def picks_page(
             )
         )
 
+    # The pool wide time lock (week.lock_at, enforced server side no matter what) always
+    # wins once it hits. player_locked is the separate, player initiated lock (Phase 4):
+    # true only while the player has locked their own picks AND the real lock has not yet
+    # arrived. The moment `locked` flips True the template's time locked branch takes over
+    # regardless of locked_at, so a player lock never outlives or overrides the real one.
     locked = week is not None and week_is_locked(week)
+    player_locked = not locked and entry is not None and entry.locked_at is not None
     next_week = _next_unpublished_week(db, pool) if week is None else None
 
     return render(
@@ -108,6 +118,8 @@ def picks_page(
             "games": games,
             "picks_by_game": picks_by_game,
             "locked": locked,
+            "player_locked": player_locked,
+            "locked_at": entry.locked_at if entry else None,
             # n is the target picks a player must submit, not the slate size (games can be
             # bigger, for example 20 games with 15 required). Never hard coded, always the
             # pool's own commissioner-set value.
@@ -155,19 +167,15 @@ async def picks_save(
     return await run_in_threadpool(_save_picks, request, db, user, pool, raw)
 
 
-def _save_picks(request: Request, db: Session, user: User, pool: Pool, raw: dict[str, str]):
-    week = current_week(db, pool)
-    if week is None:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "There is no open week right now.")
-    if week_is_locked(week):
-        raise HTTPException(
-            status.HTTP_403_FORBIDDEN,
-            "This week is locked. Picks closed at the first kickoff.",
-        )
+def _parse_submission(games: list[Game], raw: dict[str, str]) -> tuple[list[PickInput], list[str]]:
+    """Parse the winner-{id} / confidence-{id} fields the picks form posts.
 
-    games = slate_games(db, week)
-    slate_ids = [g.id for g in games]
-
+    Shared by /picks and /picks/lock, so there is exactly one reading of the raw form data.
+    A game with neither field present is skipped: an unpicked slate game is legal (Phase 3),
+    not an incomplete row. A game with one field present but not the other is NOT skipped,
+    so it reaches validate_picks and comes back as a real, readable error rather than being
+    silently dropped.
+    """
     submitted: list[PickInput] = []
     malformed: list[str] = []
     for game in games:
@@ -181,23 +189,21 @@ def _save_picks(request: Request, db: Session, user: User, pool: Pool, raw: dict
             malformed.append(f"{game.away_abbr} at {game.home_abbr} is missing a confidence value.")
             continue
         submitted.append(PickInput(game_id=game.id, picked_team=side, confidence=confidence))
+    return submitted, malformed
 
-    errors = malformed + validate_picks(submitted, slate_ids, pool.picks_required)
-    if errors:
-        return render(
-            request,
-            "components/pick_status.html",
-            {"errors": errors, "saved": False, "n": pool.picks_required},
-            current_user=user,
-            pool=pool,
-            status_code=400,
-        )
 
+def _upsert_picks(
+    db: Session, user: User, pool: Pool, week: Week, submitted: list[PickInput], now: dt.datetime
+) -> WeekEntry:
+    """Write the winners and confidence to Pick rows and touch WeekEntry.submitted_at.
+
+    The one write path shared by /picks and /picks/lock. Never touches WeekEntry.locked_at:
+    only the caller in /picks/lock does that, after this returns.
+    """
     existing = {
         p.game_id: p
         for p in db.scalars(select(Pick).where(Pick.user_id == user.id, Pick.week_id == week.id))
     }
-    now = dt.datetime.now(dt.UTC)
     for item in submitted:
         row = existing.get(item.game_id)
         if row is None:
@@ -220,16 +226,40 @@ def _save_picks(request: Request, db: Session, user: User, pool: Pool, raw: dict
         select(WeekEntry).where(WeekEntry.user_id == user.id, WeekEntry.week_id == week.id)
     )
     if entry is None:
-        db.add(
-            WeekEntry(
-                user_id=user.id,
-                pool_id=pool.id,
-                week_id=week.id,
-                submitted_at=now,
-            )
-        )
+        entry = WeekEntry(user_id=user.id, pool_id=pool.id, week_id=week.id, submitted_at=now)
+        db.add(entry)
     elif entry.submitted_at is None:
         entry.submitted_at = now
+    return entry
+
+
+def _save_picks(request: Request, db: Session, user: User, pool: Pool, raw: dict[str, str]):
+    week = current_week(db, pool)
+    if week is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "There is no open week right now.")
+    if week_is_locked(week):
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN,
+            "This week is locked. Picks closed at the first kickoff.",
+        )
+
+    games = slate_games(db, week)
+    slate_ids = [g.id for g in games]
+    submitted, malformed = _parse_submission(games, raw)
+
+    errors = malformed + validate_picks(submitted, slate_ids, pool.picks_required)
+    if errors:
+        return render(
+            request,
+            "components/pick_status.html",
+            {"errors": errors, "saved": False, "n": pool.picks_required},
+            current_user=user,
+            pool=pool,
+            status_code=400,
+        )
+
+    now = dt.datetime.now(dt.UTC)
+    _upsert_picks(db, user, pool, week, submitted, now)
     db.commit()
 
     if request.headers.get("HX-Request") == "true":
@@ -241,6 +271,101 @@ def _save_picks(request: Request, db: Session, user: User, pool: Pool, raw: dict
             pool=pool,
         )
     flash(request, "Your picks are in.")
+    return RedirectResponse("/picks", status_code=303)
+
+
+@router.post("/picks/lock")
+async def picks_lock(
+    request: Request,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_user),
+    pool: Pool = Depends(get_active_pool),
+):
+    """Lock exactly picks_required picks in, a player initiated step distinct from Save.
+
+    Runs the exact same server side validation Save does (validate_picks, never weakened
+    or duplicated) before writing anything or touching locked_at, so a hand crafted POST to
+    this route is exactly as safe as one to /picks.
+    """
+    form = await request.form()
+    raw = {key: str(value) for key, value in form.items()}
+    return await run_in_threadpool(_lock_picks, request, db, user, pool, raw)
+
+
+def _lock_picks(request: Request, db: Session, user: User, pool: Pool, raw: dict[str, str]):
+    week = current_week(db, pool)
+    if week is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "There is no open week right now.")
+    if week_is_locked(week):
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN,
+            "This week is locked. Picks closed at the first kickoff.",
+        )
+
+    games = slate_games(db, week)
+    slate_ids = [g.id for g in games]
+    submitted, malformed = _parse_submission(games, raw)
+
+    errors = malformed + validate_picks(submitted, slate_ids, pool.picks_required)
+    if errors:
+        # Same partial, same shape as a rejected Save: nothing is written, locked_at is
+        # never touched, and the player sees exactly the same messages Save would give.
+        return render(
+            request,
+            "components/pick_status.html",
+            {"errors": errors, "saved": False, "n": pool.picks_required},
+            current_user=user,
+            pool=pool,
+            status_code=400,
+        )
+
+    now = dt.datetime.now(dt.UTC)
+    entry = _upsert_picks(db, user, pool, week, submitted, now)
+    entry.locked_at = now
+    db.commit()
+
+    if request.headers.get("HX-Request") == "true":
+        # The locked view is a genuinely different page state (Section 8's confirmation
+        # branch, read only until unlocked), not a small swap into the save bar, so a full
+        # reload of /picks is simpler and more honest than trying to fake that state with a
+        # partial. htmx follows HX-Redirect as a real navigation.
+        return Response(status_code=200, headers={"HX-Redirect": "/picks"})
+    flash(request, f"Picks locked for {week.label}.")
+    return RedirectResponse("/picks", status_code=303)
+
+
+@router.post("/picks/unlock")
+async def picks_unlock(
+    request: Request,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_user),
+    pool: Pool = Depends(get_active_pool),
+):
+    """Clear a player's own lock. Refused once the week's real lock_at has passed: the pool
+    wide time lock always wins and a player can never claw back editing time from it."""
+    return await run_in_threadpool(_unlock_picks, request, db, user, pool)
+
+
+def _unlock_picks(request: Request, db: Session, user: User, pool: Pool):
+    week = current_week(db, pool)
+    if week is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "There is no open week right now.")
+    if week_is_locked(week):
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN,
+            "This week is locked. You can no longer unlock your picks.",
+        )
+
+    entry = db.scalar(
+        select(WeekEntry).where(WeekEntry.user_id == user.id, WeekEntry.week_id == week.id)
+    )
+    if entry is not None and entry.locked_at is not None:
+        entry.locked_at = None
+        db.commit()
+
+    if request.headers.get("HX-Request") == "true":
+        return Response(status_code=200, headers={"HX-Redirect": "/picks"})
+    flash(request, "Picks unlocked. Make your changes and lock again before kickoff.")
     return RedirectResponse("/picks", status_code=303)
 
 

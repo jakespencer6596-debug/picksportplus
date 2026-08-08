@@ -4,12 +4,17 @@
 {#
   This Week. The core screen (Spec Section 8).
 
-  Five states, all handled below:
+  Six states, all handled below:
     1. no week and no next week   season has not started
     2. no week, next week drafted the slate opens soon
-    3. week open, not locked      the full ranking UI
-    4. locked                     read only, saved picks and results
+    3. week open, not locked      the three stage ranking UI (Phase 4)
+    3b. week open, player locked  read only for this player only, an "Unlock to edit" escape
+    4. time locked                read only for everyone, saved picks and results are public
     5. week with an empty slate   the slate is still being built
+
+  State 4 (the real, pool wide lock_at) always wins over 3b: week_is_locked(week) is checked
+  first, so the moment it flips True this player's own locked_at stops mattering, even if it
+  is still set. See app/routers/picks.py picks_page for player_locked's exact definition.
 
   Neither number is ever hard coded. n is pool.picks_required, how many picks a player must
   submit (and the top confidence value they can stake); slate_size is the published slate,
@@ -56,6 +61,41 @@
   <span class="game-at" aria-hidden="true">at</span>
   {{ team_button(game, "home", pick and pick.picked_team == "home", locked) }}
 </div>
+{%- endmacro %}
+
+{#
+  The read only slate list: every slate game, matchup plus meta, a confidence chip only on
+  the games the player actually picked. Shared by state 4 (time locked, Section 8) and the
+  player-locked-but-not-time-locked confirmation state (Phase 4), which differ only in
+  heading and copy around this list, never in the list itself.
+#}
+{% macro readonly_list(games, picks_by_game, tz, label) -%}
+<ol class="stack" aria-label="{{ label }}">
+  {% for game in games %}
+    {% set pick = picks_by_game.get(game.id) %}
+    <li class="game-row is-complete"
+        data-game-id="{{ game.id }}"
+        {%- if pick %} data-confidence="{{ pick.confidence }}"{% endif %}>
+      {{ matchup(game, pick, true) }}
+      <div class="game-meta">
+        {{ league_badge(game) }}
+        {% if game.is_void %}
+          <span class="badge badge-void">Void</span>
+        {% elif game.is_final and game.winner == "tie" %}
+          <span class="badge badge-void">Tie</span>
+        {% elif game.is_final %}
+          <span class="badge badge-final">Final</span>
+        {% endif %}
+        <span class="game-line">{{ game.line_text }}</span>
+        <span class="game-kick">{{ game.start_time | kickoff(tz) }}</span>
+        {% if pick %}
+          <span class="conf-chip num"
+                aria-label="{{ pick.confidence }} {{ pick.confidence | pluralize('point') }} staked">{{ pick.confidence }}</span>
+        {% endif %}
+      </div>
+    </li>
+  {% endfor %}
+</ol>
 {%- endmacro %}
 
 {# --------------------------------------------------------------- page head #}
@@ -185,33 +225,7 @@
     {%- if has_full_entry %}Your picks, most confident first{% else %}The {{ week.label }} slate{% endif -%}
   </h2>
 
-  <ol class="stack"
-      aria-label="{{ 'Your picks, most confident first' if has_full_entry else week.label ~ ' slate' }}">
-    {% for game in games %}
-      {% set pick = picks_by_game.get(game.id) %}
-      <li class="game-row is-complete"
-          data-game-id="{{ game.id }}"
-          {%- if pick %} data-confidence="{{ pick.confidence }}"{% endif %}>
-        {{ matchup(game, pick, true) }}
-        <div class="game-meta">
-          {{ league_badge(game) }}
-          {% if game.is_void %}
-            <span class="badge badge-void">Void</span>
-          {% elif game.is_final and game.winner == "tie" %}
-            <span class="badge badge-void">Tie</span>
-          {% elif game.is_final %}
-            <span class="badge badge-final">Final</span>
-          {% endif %}
-          <span class="game-line">{{ game.line_text }}</span>
-          <span class="game-kick">{{ game.start_time | kickoff(tz) }}</span>
-          {% if pick %}
-            <span class="conf-chip num"
-                  aria-label="{{ pick.confidence }} {{ pick.confidence | pluralize('point') }} staked">{{ pick.confidence }}</span>
-          {% endif %}
-        </div>
-      </li>
-    {% endfor %}
-  </ol>
+  {{ readonly_list(games, picks_by_game, tz, 'Your picks, most confident first' if has_full_entry else week.label ~ ' slate') }}
 
   <p class="muted">
     {% if has_full_entry %}
@@ -228,6 +242,46 @@
 </section>
 
 
+{% elif player_locked %}
+{# ------------------------------------ 3b: locked by the player, week still open #}
+<section class="section">
+  <div class="flash flash-ok" role="status">
+    {{ ic.icon("lock", 18) }}
+    <span>
+      Your picks are locked in for {{ week.label }}. Unlock any time before
+      {% if week.lock_at %}the real lock at {{ week.lock_at | kickoff(tz) }}{% else %}the
+      first kickoff{% endif %} to make changes.
+    </span>
+  </div>
+
+  <div class="stack">
+    <div class="spread">
+      <h2 class="section-title">Your locked picks, most confident first</h2>
+      <form method="post" action="/picks/unlock">
+        <button class="btn btn-secondary"
+                type="submit"
+                hx-post="/picks/unlock"
+                hx-target="[data-save-target]"
+                hx-swap="innerHTML">
+          {{ ic.icon("refresh", 18) }}<span>Unlock to edit</span>
+        </button>
+      </form>
+    </div>
+
+    <div class="picks-status" data-save-target aria-live="polite"></div>
+
+    {{ readonly_list(games, picks_by_game, tz, "Your locked picks, most confident first") }}
+  </div>
+
+  <p class="muted">
+    You staked {{ n }} points on your top pick and 1 on your last pick. Locking does not
+    submit anything new, it just saves this exact set of picks and switches this page to
+    read only for you until you unlock it or {{ week.label }} locks for good, whichever
+    comes first.
+  </p>
+</section>
+
+
 {% else %}
 {# ------------------------------------------------ 3: the week is open to pick #}
 <section class="section">
@@ -235,18 +289,22 @@
     <p class="eyebrow">How this week works</p>
     {% if pool.scoring_mode == "inverse" %}
       <p>
-        Tap a team to take the winner for {{ n }} of these {{ slate_size }} games, then rank
-        the ones you picked. Drag a row by its grip, or use the up and down buttons. Your most
-        confident pick stakes {{ n }} points and your last pick stakes 1. Low score wins: a
-        wrong pick counts its staked points against you, so stake {{ n }} on your surest pick
-        only if you can afford to be wrong about it.
+        Tap a team to take the winner for {{ n }} of these {{ slate_size }} games. Type a
+        point value straight into a row, from {{ n }} down to 1, or tap "Reorder to inputs"
+        to snap the list to whatever you have typed, then drag a row by its grip (or use the
+        up and down buttons) to fine tune the order. Low score wins: a wrong pick counts its
+        staked points against you, so stake {{ n }} on your surest pick only if you can
+        afford to be wrong about it. When you are done, lock your picks in as a deliberate
+        last step, separate from saving.
       </p>
     {% else %}
       <p>
-        Tap a team to take the winner for {{ n }} of these {{ slate_size }} games, then rank
-        the ones you picked. Drag a row by its grip, or use the up and down buttons. Your most
-        confident pick stakes {{ n }} points and your last pick stakes 1. A correct pick earns
-        the points you staked on it.
+        Tap a team to take the winner for {{ n }} of these {{ slate_size }} games. Type a
+        point value straight into a row, from {{ n }} down to 1, or tap "Reorder to inputs"
+        to snap the list to whatever you have typed, then drag a row by its grip (or use the
+        up and down buttons) to fine tune the order. A correct pick earns the points you
+        staked on it. When you are done, lock your picks in as a deliberate last step,
+        separate from saving.
       </p>
     {% endif %}
     <p class="form-hint">
@@ -276,6 +334,9 @@
         <span class="save-state{{ ' is-saved' if has_full_entry }}" data-save-state>
           {{- "Saved" if has_full_entry else "Not saved yet" -}}
         </span>
+        <button class="btn btn-secondary" type="button" data-reorder-btn>
+          {{ ic.icon("refresh", 18) }}<span>Reorder to inputs</span>
+        </button>
         <button class="btn btn-primary"
                 type="submit"
                 data-save-btn
@@ -296,10 +357,9 @@
         aria-label="{{ week.label }} slate, most confident first">
       {% for game in games %}
         {% set pick = picks_by_game.get(game.id) %}
-        {% set points = slate_size - loop.index0 %}
-        <li class="game-row"
+        <li class="game-row{{ '' if pick else ' is-not-picked' }}"
             data-game-id="{{ game.id }}"
-            data-confidence="{{ points }}"
+            data-confidence="{{ pick.confidence if pick else '' }}"
             tabindex="0"
             aria-label="{{ game.away_team }} at {{ game.home_team }}">
           <span class="game-grip" role="img" aria-label="Drag to rank" title="Drag to rank">
@@ -312,8 +372,16 @@
             {{ league_badge(game) }}
             <span class="game-line">{{ game.line_text }}</span>
             <span class="game-kick">{{ game.start_time | kickoff(tz) }}</span>
-            <span class="conf-chip num"
-                  aria-label="{{ points }} {{ points | pluralize('point') }}">{{ points }}</span>
+            <div class="conf-controls">
+              <label class="conf-field">
+                <span class="visually-hidden">Confidence for {{ game.matchup }}, 1 to {{ n }}</span>
+                <input type="number" inputmode="numeric" class="input conf-input" data-conf-input
+                       min="1" max="{{ n }}" step="1" placeholder="-"
+                       value="{{ pick.confidence if pick else '' }}">
+              </label>
+              <span class="conf-chip num{{ '' if pick else ' is-empty' }}"
+                    aria-label="{% if pick %}{{ pick.confidence }} {{ pick.confidence | pluralize('point') }} staked{% else %}No points staked{% endif %}">{{ pick.confidence if pick else '-' }}</span>
+            </div>
           </div>
 
           <div class="rank-controls">
@@ -327,14 +395,47 @@
 
           <input type="hidden" data-pick name="winner-{{ game.id }}"
                  value="{{ pick.picked_team if pick else '' }}">
-          <input type="hidden" data-conf name="confidence-{{ game.id }}" value="{{ points }}">
+          <input type="hidden" data-conf name="confidence-{{ game.id }}"
+                 value="{{ pick.confidence if pick else '' }}">
         </li>
       {% endfor %}
+      <li class="game-list-divider" data-divider aria-hidden="true" hidden>
+        <span class="eyebrow">Not picked</span>
+      </li>
     </ol>
+
+    <div class="panel">
+      <p class="eyebrow">Lock your picks</p>
+      <p>
+        Locking saves this exact set of picks and switches this page to read only for you,
+        even while {{ week.label }} itself is still open. Unlock any time before the real
+        lock to make more changes.
+      </p>
+      <button class="btn btn-secondary" type="button" data-lock-open disabled>
+        {{ ic.icon("lock", 18) }}<span>Lock picks</span>
+      </button>
+
+      <div class="lock-confirm" data-lock-panel hidden>
+        <p class="form-hint">Locking these {{ n }} picks in, most confident first:</p>
+        <ol class="lock-confirm-list" data-lock-summary></ol>
+        <div class="row">
+          <button class="btn btn-secondary" type="button" data-lock-cancel>Cancel</button>
+          <button class="btn btn-primary"
+                  type="submit"
+                  hx-post="/picks/lock"
+                  hx-target="[data-save-target]"
+                  hx-swap="innerHTML"
+                  hx-include="closest form">
+            {{ ic.icon("check", 18) }}<span>Confirm and lock</span>
+          </button>
+        </div>
+      </div>
+    </div>
 
     <div class="spread">
       <p class="muted">
-        Editable until the lock. After that the week goes read only and every player's
+        Editable until you lock, or until {{ week.label }} locks for good, whichever comes
+        first. After the real lock the week goes read only for everyone and every player's
         picks are public on the Results page.
       </p>
       <a class="btn btn-secondary" href="#save">Back to save</a>
