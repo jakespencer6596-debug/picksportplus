@@ -16,6 +16,7 @@ from sqlalchemy import func, select
 from app.config import settings
 from app.db import engine, session_scope
 from app.models import Base, Pool, PoolMember, User, Week
+from app.providers import espn
 from app.providers.http import usage_report
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)-7s %(name)s: %(message)s")
@@ -356,6 +357,122 @@ def usage_cmd() -> None:
                 _echo(f"{'':<22} last error: {row['last_error']}")
     _echo("")
     _echo("ESPN is keyless and unmetered. Schedules and scores never spend credits.")
+
+
+def _redact_db_url(url: str) -> str:
+    """Hide a password in a postgres URL. Never print a live secret."""
+    if "@" not in url:
+        return url
+    scheme_and_creds, _, rest = url.partition("@")
+    scheme, _, _creds = scheme_and_creds.partition("//")
+    return f"{scheme}//***@{rest}"
+
+
+@app.command("doctor")
+def doctor(
+    pool_id: int | None = typer.Option(None, "--pool"),
+    probe: bool = typer.Option(
+        True, "--probe/--no-probe", help="Also hit ESPN live for a real scoreboard."
+    ),
+) -> None:
+    """Diagnose the setup without changing any data.
+
+    Prints the database, migration state, OFFLINE_MODE, which provider keys are present
+    (presence only, never the value), pool settings, and for each enabled league a live
+    ESPN scoreboard probe showing the URL called, the HTTP status, the returned season
+    year, the returned week number, the game count, and the valid calendar week range.
+    """
+    import httpx
+
+    from alembic.config import Config
+    from alembic.runtime.migration import MigrationContext
+    from alembic.script import ScriptDirectory
+
+    _echo("Database")
+    _echo(f"  dialect     : {engine.dialect.name}")
+    _echo(f"  url         : {_redact_db_url(settings.database_url)}")
+
+    alembic_ini = ROOT / "alembic.ini"
+    if alembic_ini.exists():
+        cfg = Config(str(alembic_ini))
+        cfg.set_main_option("script_location", str(ROOT / "alembic"))
+        cfg.set_main_option("sqlalchemy.url", settings.database_url)
+        script = ScriptDirectory.from_config(cfg)
+        head = script.get_current_head()
+        with engine.connect() as conn:
+            current = MigrationContext.configure(conn).get_current_revision()
+        state = "up to date" if current == head else f"BEHIND (at {current}, head is {head})"
+        _echo(f"  migrations  : {state}")
+    else:
+        _echo("  migrations  : no alembic.ini found")
+
+    _echo("")
+    _echo(f"OFFLINE_MODE  : {settings.offline_mode}")
+    _echo("")
+    _echo("Provider keys (presence only, values are never printed)")
+    _echo(f"  ODDS_API_KEY : {'set' if settings.odds_api_key else 'NOT SET'}")
+    _echo(f"  CFBD_API_KEY : {'set' if settings.cfbd_api_key else 'NOT SET'}")
+
+    with session_scope() as db:
+        pool = (
+            db.get(Pool, pool_id) if pool_id else db.scalars(select(Pool).order_by(Pool.id)).first()
+        )
+        if pool is None:
+            _echo("")
+            _echo("No pool exists yet. Run: python -m app.cli seed-admin")
+            return
+
+        _echo("")
+        _echo(f"Pool: {pool.name} (id {pool.id})")
+        _echo(f"  season_year        : {pool.season_year}")
+        _echo(f"  sports             : {pool.sports}")
+        _echo(f"  num_games_per_week : {pool.num_games_per_week}")
+        _echo(f"  target_nfl/ncaaf   : {pool.target_nfl} / {pool.target_ncaaf}")
+        _echo(f"  auto_publish       : {pool.auto_publish}")
+        _echo(f"  current_week       : {pool.current_week}")
+        _echo(f"  timezone           : {pool.timezone}")
+
+        if not probe:
+            return
+
+        _echo("")
+        _echo("Live ESPN scoreboard probe (unmetered, no data written)")
+        for league in pool.sports or ["nfl", "ncaaf"]:
+            segment, extra = espn.LEAGUE_PATHS[league]
+            params: dict[str, object] = {"seasontype": 2, "dates": pool.season_year, **extra}
+            url = f"{espn.SITE_BASE}/{segment}/scoreboard"
+            query = "&".join(f"{k}={v}" for k, v in params.items())
+            _echo(f"  [{league}]")
+            _echo(f"    url    : {url}?{query}")
+            try:
+                resp = httpx.get(
+                    url,
+                    params=params,
+                    timeout=settings.http_timeout_seconds,
+                    headers={"User-Agent": "PickSportPlus/1.0 (weekly pick em pool)"},
+                )
+            except httpx.HTTPError as exc:
+                _echo(f"    status : request failed ({exc})")
+                continue
+            _echo(f"    status : HTTP {resp.status_code}")
+            if resp.status_code != 200:
+                continue
+            payload = resp.json()
+            season = payload.get("season") or {}
+            week = payload.get("week") or {}
+            events = payload.get("events") or []
+            _echo(f"    season year returned : {season.get('year')}")
+            _echo(f"    week number returned : {week.get('number')}")
+            _echo(f"    game count           : {len(events)}")
+            calendar_weeks = [
+                c for c in espn.parse_calendar(payload) if c.season_type == espn.SEASON_TYPE_REGULAR
+            ]
+            if calendar_weeks:
+                lo, hi = calendar_weeks[0], calendar_weeks[-1]
+                _echo(
+                    f"    valid regular season range : week {lo.week} ({lo.start.date()}) "
+                    f"to week {hi.week} ({hi.end.date()})"
+                )
 
 
 def _week_or_current(db, pool: Pool, week: int | None, year: int | None) -> Week | None:
