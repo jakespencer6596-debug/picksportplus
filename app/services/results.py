@@ -160,9 +160,7 @@ def score_week_for_pool(db: Session, pool: Pool, week: Week) -> ScoreReport:
         e.user_id: e for e in db.scalars(select(WeekEntry).where(WeekEntry.week_id == week.id))
     }
 
-    # picks_required stands in for a real per pool "picks required" field until Phase 3
-    # adds one: today every player picks the whole slate, so the slate size is correct.
-    picks_required = pool.num_games_per_week
+    picks_required = pool.picks_required
 
     results = {}
     for member in members:

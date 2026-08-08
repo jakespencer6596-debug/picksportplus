@@ -11,7 +11,9 @@
     4. locked                     read only, saved picks and results
     5. week with an empty slate   the slate is still being built
 
-  The slate size is never hard coded. Every count comes from n.
+  Neither number is ever hard coded. n is pool.picks_required, how many picks a player must
+  submit (and the top confidence value they can stake); slate_size is the published slate,
+  games|length, which can be larger than n (Phase 3: 15 required out of a 20 game slate).
 #}
 
 {# ------------------------------------------------------------------ macros #}
@@ -95,8 +97,9 @@
 {# ------------------------------------------------------------------ content #}
 
 {% block content %}
+{% set slate_size = games | length %}
 {% set nfl_count = games | selectattr("league", "equalto", "nfl") | list | length %}
-{% set ncaaf_count = n - nfl_count %}
+{% set ncaaf_count = slate_size - nfl_count %}
 
 <div class="page-head">
   <div>
@@ -108,7 +111,7 @@
 
   {% if week and games %}
   <div class="row">
-    <span class="pill">{{ n }} {{ n | pluralize("game") }}</span>
+    <span class="pill">{{ slate_size }} {{ slate_size | pluralize("game") }}</span>
     {% if nfl_count and ncaaf_count %}
       <span class="pill">{{ nfl_count }} NFL, {{ ncaaf_count }} college</span>
     {% elif nfl_count %}
@@ -212,14 +215,14 @@
 
   <p class="muted">
     {% if has_full_entry %}
-      You staked {{ n }} points on the game at the top and 1 on the game at the bottom.
+      You staked {{ n }} points on your top pick and 1 on your last pick.
       {% if pool.scoring_mode == "inverse" %}
         A wrong pick counts the points staked on it against you. A correct pick costs nothing.
       {% else %}
         Correct picks earn the points staked on them.
       {% endif %}
     {% else %}
-      Points are staked from {{ n }} at the top of a ranking down to 1 at the bottom.
+      Points are staked from {{ n }} for your top pick down to 1 for your last.
     {% endif %}
   </p>
 </section>
@@ -232,17 +235,18 @@
     <p class="eyebrow">How this week works</p>
     {% if pool.scoring_mode == "inverse" %}
       <p>
-        Tap a team to take the winner, then rank all {{ n }} games. Drag a row by its grip,
-        or use the up and down buttons. The game at the top of the list stakes {{ n }} points
-        and the game at the bottom stakes 1. Low score wins: a wrong pick counts its staked
-        points against you, so stake {{ n }} on your surest pick only if you can afford to be
-        wrong about it.
+        Tap a team to take the winner for {{ n }} of these {{ slate_size }} games, then rank
+        the ones you picked. Drag a row by its grip, or use the up and down buttons. Your most
+        confident pick stakes {{ n }} points and your last pick stakes 1. Low score wins: a
+        wrong pick counts its staked points against you, so stake {{ n }} on your surest pick
+        only if you can afford to be wrong about it.
       </p>
     {% else %}
       <p>
-        Tap a team to take the winner, then rank all {{ n }} games. Drag a row by its grip,
-        or use the up and down buttons. The game at the top of the list stakes {{ n }} points
-        and the game at the bottom stakes 1. A correct pick earns the points you staked on it.
+        Tap a team to take the winner for {{ n }} of these {{ slate_size }} games, then rank
+        the ones you picked. Drag a row by its grip, or use the up and down buttons. Your most
+        confident pick stakes {{ n }} points and your last pick stakes 1. A correct pick earns
+        the points you staked on it.
       </p>
     {% endif %}
     <p class="form-hint">
@@ -288,10 +292,11 @@
 
     <div class="picks-status" data-save-target aria-live="polite"></div>
 
-    <ol class="game-list" data-sortable aria-label="{{ week.label }} slate, most confident first">
+    <ol class="game-list" data-sortable data-picks-required="{{ n }}"
+        aria-label="{{ week.label }} slate, most confident first">
       {% for game in games %}
         {% set pick = picks_by_game.get(game.id) %}
-        {% set points = n - loop.index0 %}
+        {% set points = slate_size - loop.index0 %}
         <li class="game-row"
             data-game-id="{{ game.id }}"
             data-confidence="{{ points }}"

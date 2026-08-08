@@ -79,6 +79,11 @@ class Pool(Base):
     num_games_per_week: Mapped[int] = mapped_column(Integer, default=20, nullable=False)
     target_nfl: Mapped[int] = mapped_column(Integer, default=8, nullable=False)
     target_ncaaf: Mapped[int] = mapped_column(Integer, default=12, nullable=False)
+    # How many of the num_games_per_week slate games a player must pick, exactly, confidence
+    # 1..picks_required. Must stay between 1 and num_games_per_week (settings_save enforces
+    # this); a pool that wants to require the whole slate just sets this equal to
+    # num_games_per_week. See app/scoring.py for how this feeds validate_picks and score_week.
+    picks_required: Mapped[int] = mapped_column(Integer, default=15, nullable=False)
 
     sports: Mapped[list[str]] = mapped_column(
         JSON, default=lambda: ["nfl", "ncaaf"], nullable=False

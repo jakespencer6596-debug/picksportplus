@@ -47,25 +47,35 @@
 
   /* --------------------------------------------------------------- progress */
 
+  /* How many picks make a complete submission. This can be smaller than the number of
+     rows in the list (Phase 3: 15 required out of a 20 game slate), so it comes from
+     data-picks-required on the list, set server side from pool.picks_required, never
+     hard coded here. Falls back to the row count only if that attribute is missing. */
+  function picksRequired(list) {
+    var value = parseInt(list.dataset.picksRequired, 10);
+    return value > 0 ? value : list.querySelectorAll(".game-row").length;
+  }
+
   function updateSummary() {
     var list = document.querySelector(".game-list");
     var summary = document.querySelector("[data-pick-summary]");
     if (!list || !summary) return;
     var rows = list.querySelectorAll(".game-row");
-    var total = rows.length;
+    var target = picksRequired(list);
     var picked = 0;
     rows.forEach(function (row) {
       if (row.querySelector(".team-btn.is-picked")) picked += 1;
     });
     summary.textContent =
-      picked + " of " + total + " winner" + (total === 1 ? "" : "s") + " chosen";
+      picked + " of " + target + " winner" + (target === 1 ? "" : "s") + " chosen";
     var save = document.querySelector("[data-save-btn]");
-    if (save) save.disabled = picked !== total;
+    if (save) save.disabled = picked !== target;
     var meter = document.querySelector("[data-pick-meter]");
     if (meter) {
-      meter.style.setProperty("--pct", total ? (picked / total) * 100 + "%" : "0%");
+      var pct = target ? Math.min(100, (picked / target) * 100) : 0;
+      meter.style.setProperty("--pct", pct + "%");
       meter.setAttribute("aria-valuenow", String(picked));
-      meter.setAttribute("aria-valuemax", String(total));
+      meter.setAttribute("aria-valuemax", String(target));
     }
   }
 

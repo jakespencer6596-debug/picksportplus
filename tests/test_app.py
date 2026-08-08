@@ -64,7 +64,10 @@ def client(session_factory):
 # Fixtures that build a small but complete pool ------------------------------
 
 
-def _make_pool(db: Session, *, num_games: int = 4) -> Pool:
+def _make_pool(db: Session, *, num_games: int = 4, picks_required: int | None = None) -> Pool:
+    # picks_required defaults to num_games so _valid_submission (which submits every game
+    # in world["game_ids"]) stays a valid, complete entry unless a test deliberately wants
+    # picks_required to be smaller than the slate, proving it is a real, honored setting.
     pool = Pool(
         name="Test Pool",
         join_code="TESTCODE",
@@ -72,6 +75,7 @@ def _make_pool(db: Session, *, num_games: int = 4) -> Pool:
         num_games_per_week=num_games,
         target_nfl=2,
         target_ncaaf=2,
+        picks_required=picks_required if picks_required is not None else num_games,
         sports=["nfl", "ncaaf"],
         auto_publish=True,
         open_registration=False,
@@ -318,7 +322,12 @@ def test_duplicate_confidence_is_rejected(client, world):
     assert "used twice" in response.text
 
 
-def test_a_missing_winner_is_rejected(client, world):
+def test_an_incomplete_submission_is_rejected(client, world):
+    """Phase 3: an unpicked slate game is legal, but the submission still has to add up to
+    exactly picks_required. Dropping one of the pool's 4 required picks (world's pool sets
+    picks_required equal to its 4 game slate) must be rejected with the count message, not
+    the old per-game "missing a winner" message that Phase 3 removed.
+    """
     _login(client, "player@example.com")
     data = _valid_submission(world["game_ids"])
     dropped = world["game_ids"][0]
@@ -326,7 +335,33 @@ def test_a_missing_winner_is_rejected(client, world):
     del data[f"confidence-{dropped}"]
     response = client.post("/picks", data=data, headers={"HX-Request": "true"})
     assert response.status_code == 400
-    assert "missing a winner" in response.text
+    assert "You have picked 3 games. Pick 4." in response.text
+
+
+def test_server_rejects_too_many_picks_even_if_no_client_would_send_them(
+    client, world, session_factory
+):
+    """Server side validation is authoritative for the picks_required rule, never the
+    client. Lower this pool's picks_required below its slate size, then hand craft a
+    submission covering every slate game, exactly what a stale or bypassed client might
+    send. It must be rejected, and nothing must be saved.
+    """
+    db = session_factory()
+    pool = db.get(Pool, world["pool_id"])
+    pool.picks_required = 3  # below the world fixture's 4 game slate
+    db.commit()
+    db.close()
+
+    _login(client, "player@example.com")
+    response = client.post(
+        "/picks", data=_valid_submission(world["game_ids"]), headers={"HX-Request": "true"}
+    )
+    assert response.status_code == 400
+    assert "You have picked 4 games. Pick 3." in response.text
+
+    db = session_factory()
+    assert db.scalar(select(Pick).where(Pick.user_id == world["player_id"])) is None
+    db.close()
 
 
 def test_partial_entry_saves_nothing(client, world, session_factory):
@@ -610,6 +645,7 @@ def test_commissioner_can_change_the_slate_size(client, world, session_factory):
             "num_games_per_week": "18",
             "target_nfl": "6",
             "target_ncaaf": "12",
+            "picks_required": "15",
             "scoring_mode": "inverse",
             "auto_publish": "1",
             "open_registration": "",
@@ -624,9 +660,39 @@ def test_commissioner_can_change_the_slate_size(client, world, session_factory):
     assert pool.num_games_per_week == 18
     assert pool.target_nfl == 6
     assert pool.target_ncaaf == 12
+    assert pool.picks_required == 15
     assert pool.timezone == "America/Chicago"
     assert pool.auto_publish is True
     assert pool.open_registration is False
+    db.close()
+
+
+def test_commissioner_cannot_set_picks_required_above_the_slate_size(
+    client, world, session_factory
+):
+    _login(client, "boss@example.com")
+    response = client.post(
+        "/admin/settings",
+        data={
+            "name": "Test Pool",
+            "season_year": "2025",
+            "timezone": "America/New_York",
+            "num_games_per_week": "4",
+            "target_nfl": "2",
+            "target_ncaaf": "2",
+            "picks_required": "5",  # more than the 4 game slate
+            "scoring_mode": "inverse",
+            "auto_publish": "1",
+            "open_registration": "",
+            "sports_nfl": "1",
+            "sports_ncaaf": "1",
+        },
+    )
+    assert response.status_code == 303
+    db = session_factory()
+    pool = db.get(Pool, world["pool_id"])
+    # Rejected: picks_required is unchanged from the world fixture's original value.
+    assert pool.picks_required == 4
     db.close()
 
 

@@ -212,9 +212,11 @@ def test_standard_mixed_week_hand_computed():
     )
 
 
-def test_standard_unsubmitted_player_scores_zero_against_full_possible():
+def test_standard_unsubmitted_player_scores_zero_and_possible_is_zero():
+    # Phase 3: a no-show submitted no picks, so there is nothing of theirs to count, even
+    # though the slate itself has 14 countable games for players who did pick.
     result = score_week([], slate_outcomes(), mode="standard")
-    assert result == WeekResult(points=0, correct=0, possible=14, did_not_submit=True)
+    assert result == WeekResult(points=0, correct=0, possible=0, did_not_submit=True)
 
 
 def test_standard_tie_game_is_excluded_from_correct_and_possible():
@@ -267,10 +269,13 @@ def test_standard_pick_for_a_game_that_left_the_slate_is_ignored():
     assert result == WeekResult(points=6, correct=3, possible=3)
 
 
-def test_standard_possible_counts_slate_games_the_player_skipped():
+def test_standard_possible_excludes_slate_games_the_player_skipped():
+    # Phase 3: possible is scoped to the player's own submitted picks, not the whole slate.
+    # This player only picked game 1 of a 3 game slate, so possible is 1, not 3, even though
+    # games 2 and 3 are countable for whoever did pick them.
     picks = [PickInput(1, "home", 3)]
     result = score_week(picks, slate_outcomes(3), mode="standard")
-    assert result == WeekResult(points=3, correct=1, possible=3)
+    assert result == WeekResult(points=3, correct=1, possible=1)
 
 
 def test_standard_empty_slate_scores_nothing():
@@ -391,7 +396,7 @@ def test_standard_no_show_scores_zero_and_is_flagged():
     assert result.did_not_submit is True
     assert result.points == 0
     assert result.correct == 0
-    assert result.possible == 14
+    assert result.possible == 0
 
 
 def test_inverse_no_show_takes_the_maximum_penalty_and_is_flagged():
@@ -402,18 +407,28 @@ def test_inverse_no_show_takes_the_maximum_penalty_and_is_flagged():
     assert result.did_not_submit is True
     assert result.points == max_penalty(14) == 105
     assert result.correct == 0
-    assert result.possible == 14
+    assert result.possible == 0
 
 
 def test_inverse_no_show_penalty_uses_explicit_picks_required_not_slate_size():
     # A real pool today has num_games_per_week=20 but, per the brief's own confirmed
     # defaults (DECISIONS.md), a picks_required of 15 (120 max penalty). picks_required is
     # never inferred as the slate size when the caller passes it explicitly, only when it
-    # is omitted.
+    # is omitted. possible is 0 regardless of slate size: a no-show submitted nothing.
     outcomes = slate_outcomes(20)
     result = score_week([], outcomes, mode="inverse", picks_required=15)
     assert result.points == sum(range(1, 16)) == 120
-    assert result.possible == 20
+    assert result.possible == 0
+
+
+def test_no_show_possible_is_zero_not_the_slate_size():
+    # The Phase 3 refinement, named directly: possible is scoped to a player's own picks,
+    # so a no-show (zero submitted picks) has possible=0 in both modes, even against a
+    # large countable slate. Before this phase a no-show's possible came from the whole
+    # slate; see DECISIONS.md, Phase 3, for why this changed.
+    outcomes = slate_outcomes(20)
+    assert score_week([], outcomes, mode="standard").possible == 0
+    assert score_week([], outcomes, mode="inverse", picks_required=15).possible == 0
 
 
 def test_inverse_no_show_default_picks_required_matches_the_slate_size():
@@ -456,6 +471,45 @@ def test_inverse_perfect_week_beats_a_no_shows_max_penalty():
     assert weekly_winner_ids(results, mode="inverse") == {perfect_user_id}
 
 
+# Phase 3: possible is scoped to the player's own submitted picks, not the whole slate.
+# This is what lets one player's slate cover a different subset of the 20 game slate than
+# another player's 15 picks without either one affecting the other's possible count.
+
+
+def test_possible_only_counts_the_players_own_picks_on_a_bigger_slate():
+    # 20 game slate, this player only picked 15 of them (games 1..15). Only their own 15
+    # picks can ever show up in their possible, no matter how many games are on the slate.
+    picks = picks_all("home", 15)
+    result = score_week(picks, slate_outcomes(20), mode="standard", picks_required=15)
+    assert result.possible == 15
+
+
+def test_a_voided_pick_scores_zero_and_only_reduces_that_players_own_possible():
+    # The player submitted a full 15 picks. One of their picked games is voided by the
+    # commissioner after the fact; the rest of the slate (including their other 14 picks)
+    # goes final. Their possible drops to 14, the void pick itself earns nothing and is not
+    # counted as correct, and every other pick's points/correct are unaffected.
+    picks = picks_all("home", 15)
+    outcomes = slate_outcomes(20)
+    outcomes[0] = void(1)  # the game this player staked their top pick (15) on
+    result = score_week(picks, outcomes, mode="standard", picks_required=15)
+    # Games 2..15 are all correct (home won, picked home), staked 14 down to 1.
+    assert result.possible == 14
+    assert result.correct == 14
+    assert result.points == sum(range(1, 15))
+
+
+def test_a_voided_pick_under_inverse_also_only_reduces_that_players_own_possible():
+    picks = picks_all("away", 15)  # every pick wrong except the voided one
+    outcomes = slate_outcomes(20, winner="home")
+    outcomes[0] = void(1)
+    result = score_week(picks, outcomes, mode="inverse", picks_required=15)
+    assert result.possible == 14
+    assert result.correct == 0
+    # Games 2..15 are all wrong under inverse, staked 14 down to 1, all counted against.
+    assert result.points == sum(range(1, 15))
+
+
 # Validation (unchanged by Phase 2, mode has no bearing on what a valid submission looks
 # like)
 
@@ -475,31 +529,14 @@ def test_validate_picks_accepts_any_confidence_order():
     assert validate_picks(picks, slate) == []
 
 
-def test_validate_picks_missing_one_game():
-    slate = [1, 2, 3, 4, 5]
-    picks = [
-        PickInput(1, "home", 4),
-        PickInput(2, "home", 3),
-        PickInput(3, "away", 2),
-        PickInput(4, "home", 1),
-    ]
-    assert validate_picks(picks, slate) == ["One game is missing a winner."]
-
-
-def test_validate_picks_missing_two_games():
-    slate = [1, 2, 3, 4, 5]
-    picks = [
-        PickInput(1, "home", 5),
-        PickInput(2, "home", 4),
-        PickInput(3, "away", 3),
-    ]
-    assert validate_picks(picks, slate) == ["Two games are missing a winner."]
-
-
 def test_validate_picks_extra_game_not_on_slate():
     slate = [1, 2, 3, 4, 5]
     picks = picks_all("home", 5) + [PickInput(99, "home", 5)]
-    assert validate_picks(picks, slate) == ["Game 99 is not on this week's slate."]
+    # picks_required is set to the submitted count so this stays a test of the off slate
+    # check alone; the Phase 3 count check gets its own tests below.
+    assert validate_picks(picks, slate, picks_required=6) == [
+        "Game 99 is not on this week's slate."
+    ]
 
 
 def test_validate_picks_same_game_picked_twice():
@@ -509,9 +546,10 @@ def test_validate_picks_same_game_picked_twice():
         PickInput(1, "away", 2),
         PickInput(2, "home", 1),
     ]
-    errors = validate_picks(picks, slate)
-    assert "Game 1 has more than one pick." in errors
-    assert "One game is missing a winner." in errors
+    # Phase 3 removed the old per-game "missing a winner" check (an unpicked slate game is
+    # legal now), so a duplicate no longer implies a second, separate "missing" message,
+    # just the duplicate itself.
+    assert validate_picks(picks, slate) == ["Game 1 has more than one pick."]
 
 
 def test_validate_picks_duplicate_confidence_value():
@@ -614,7 +652,7 @@ def test_validate_picks_off_slate_confidence_is_not_range_checked():
         PickInput(3, "home", 1),
         PickInput(9, "home", 99),
     ]
-    assert validate_picks(picks, slate) == ["Game 9 is not on this week's slate."]
+    assert validate_picks(picks, slate, picks_required=4) == ["Game 9 is not on this week's slate."]
 
 
 def test_validate_picks_negative_confidence_is_out_of_range():
@@ -669,6 +707,73 @@ def test_validate_error_strings_follow_the_copy_rules():
         assert en_dash not in message
         assert message.endswith(".")
         assert message == message.strip()
+
+
+# Validation, Phase 3: picks_required can be smaller than the slate, the pool's real rule
+# is 15 picks out of a 20 game slate. Every call below passes picks_required explicitly,
+# since that is what real call sites (app/routers/picks.py) always do.
+
+
+def test_validate_picks_valid_submission_of_15_of_20():
+    slate = list(range(1, 21))
+    assert validate_picks(picks_all("home", 15), slate, picks_required=15) == []
+
+
+def test_validate_picks_one_pick_short_of_required():
+    slate = list(range(1, 21))
+    picks = picks_all("home", 14)
+    assert validate_picks(picks, slate, picks_required=15) == ["You have picked 14 games. Pick 15."]
+
+
+def test_validate_picks_one_pick_over_required():
+    slate = list(range(1, 21))
+    picks = picks_all("home", 16)
+    errors = validate_picks(picks, slate, picks_required=15)
+    assert "You have picked 16 games. Pick 15." in errors
+
+
+def test_validate_picks_duplicated_game_still_errors_with_picks_required():
+    slate = list(range(1, 21))
+    # 14 distinct games plus a second pick on game 1: 15 picks total, matching
+    # picks_required, so the only remaining problem is the duplicate itself.
+    picks = picks_all("home", 14) + [PickInput(1, "away", 15)]
+    assert validate_picks(picks, slate, picks_required=15) == ["Game 1 has more than one pick."]
+
+
+def test_validate_picks_off_slate_game_still_errors_with_picks_required():
+    slate = list(range(1, 21))
+    # 14 on slate picks plus one off slate pick: 15 total, matching picks_required, so the
+    # only remaining problem is the off slate game.
+    picks = picks_all("home", 14) + [PickInput(99, "home", 15)]
+    assert validate_picks(picks, slate, picks_required=15) == [
+        "Game 99 is not on this week's slate."
+    ]
+
+
+def test_validate_picks_duplicate_confidence_still_errors_with_picks_required():
+    slate = [1, 2, 3, 4, 5]
+    picks = [
+        PickInput(1, "home", 3),
+        PickInput(2, "home", 3),
+        PickInput(3, "home", 2),
+    ]
+    errors = validate_picks(picks, slate, picks_required=3)
+    assert "Confidence value 3 is used twice." in errors
+
+
+def test_validate_picks_confidence_16_is_out_of_range_when_15_are_required():
+    slate = list(range(1, 21))
+    picks = list(picks_all("home", 15))
+    picks[0] = PickInput(picks[0].game_id, picks[0].picked_team, 16)
+    errors = validate_picks(picks, slate, picks_required=15)
+    assert "Confidence value 16 is outside the range 1 to 15." in errors
+
+
+def test_validate_picks_20_of_20_still_validates_cleanly():
+    # Proves picks_required is a real, honored config value: a pool that wants the whole
+    # slate just sets picks_required equal to num_games_per_week, nothing is hard coded.
+    slate = list(range(1, 21))
+    assert validate_picks(picks_all("home", 20), slate, picks_required=20) == []
 
 
 # Weekly winners, standard mode: highest points wins, unchanged from before Phase 2

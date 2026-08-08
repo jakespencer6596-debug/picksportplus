@@ -29,8 +29,17 @@ Rules that hold in both modes:
   Under "inverse" a no-show is the trap this rule is built to catch: they take the
   maximum possible penalty, sum(1..picks_required), since a player who dodges the risk
   of a wrong pick cannot be allowed to end up better off than someone who played and
-  lost. Either way the possible count for the week is still the size of the countable
-  slate, and a no-show is never eligible to win the week (see weekly_winner_ids).
+  lost. A no-show is never eligible to win the week (see weekly_winner_ids).
+
+Since Phase 3 (the slate can be larger than the number of picks a player actually makes,
+for example 20 games on the slate with 15 required): "possible" is the count of countable
+outcomes AMONG THAT PLAYER'S OWN SUBMITTED PICKS, not the whole slate. This is what lets
+players cover different subsets of the slate without cross contaminating each other's
+possible count: a game nobody on the slate picked scores nobody and counts against
+nobody's possible either. A concrete consequence is that a no-show's possible is always 0
+(they submitted no picks, so there is nothing of theirs to count), a deliberate refinement
+of the pre-Phase-3 behavior where a no-show's possible came from the whole slate. See
+DECISIONS.md, Phase 3, for why this is one rule rather than a no-show special case.
 """
 
 from __future__ import annotations
@@ -143,37 +152,38 @@ def score_week(
 ) -> WeekResult:
     """Score one player's week against the slate outcomes.
 
-    possible = number of countable outcomes on the slate, regardless of whether the player
-    submitted a pick for them. correct = number of countable games the player picked right,
-    counted the same way in both modes. points = sum of score_pick over the picks, which is
-    the wrong ones under "inverse" and the right ones under "standard".
+    possible = number of countable outcomes AMONG THE PICKS THIS PLAYER SUBMITTED, not the
+    whole slate (see the module docstring for why, this is the Phase 3 refinement). correct
+    = number of the player's own picks that were countable and right, counted the same way
+    in both modes. points = sum of score_pick over the picks, which is the wrong ones under
+    "inverse" and the right ones under "standard".
 
-    picks_required is how many picks a full submission needs. When not given it defaults to
-    len(outcomes), which is correct as long as every player picks the whole slate (true
-    today; a future phase that lets players pick a subset of the slate will pass this
-    explicitly instead of relying on the default).
+    picks_required is how many picks a full submission needs, used only for the no-show
+    penalty math below. When not given it defaults to len(outcomes), which is correct only
+    when every player is expected to pick the whole slate; a pool that picks a subset of a
+    larger slate (for example 15 of 20) must pass this explicitly.
 
-    A player with no picks at all is a no-show: did_not_submit=True, correct=0, and points
-    is 0 under "standard" (unchanged prior behavior) or the maximum possible penalty,
-    sum(1..picks_required), under "inverse". possible is still the size of the countable
-    slate either way. Picks referring to a game_id not in outcomes are ignored (the game
-    left the slate).
+    A player with no picks at all is a no-show: did_not_submit=True, correct=0, possible=0
+    (there is nothing of theirs to count), and points is 0 under "standard" (unchanged prior
+    behavior) or the maximum possible penalty, sum(1..picks_required), under "inverse".
+    Picks referring to a game_id not in outcomes are ignored (the game left the slate).
     """
     by_game: dict[int, GameOutcome] = {o.game_id: o for o in outcomes}
-    possible = sum(1 for outcome in by_game.values() if is_countable(outcome))
 
     if not picks:
         if picks_required is None:
             picks_required = len(outcomes)
         penalty = sum(range(1, picks_required + 1)) if mode == "inverse" else 0
-        return WeekResult(points=penalty, correct=0, possible=possible, did_not_submit=True)
+        return WeekResult(points=penalty, correct=0, possible=0, did_not_submit=True)
 
     points = 0
     correct = 0
+    possible = 0
     for pick in picks:
         outcome = by_game.get(pick.game_id)
         if outcome is None or not is_countable(outcome):
             continue
+        possible += 1
         # correct comes from the pick being right, never from the earned points being
         # non zero, so a stored confidence of 0 cannot hide a correct pick, and it counts
         # the same way regardless of mode.
@@ -187,21 +197,31 @@ def score_week(
 def validate_picks(
     picks: Sequence[PickInput],
     slate_game_ids: Sequence[int],
+    picks_required: int | None = None,
 ) -> list[str]:
     """Return a list of human readable error strings, empty when the submission is valid.
 
-    Checks: exactly one pick per slate game and no extras, picked_team in ("home","away"),
-    and the confidence values are exactly a permutation of 1..N where N is the number of
-    distinct game ids on the slate. Messages are sentence case, plainspoken, and name the
-    problem concretely, for example "Confidence value 7 is used twice." or
-    "Two games are missing a winner."
+    picks_required is how many picks this submission must contain, exactly, no more and no
+    fewer. It should always be passed explicitly by real call sites (Pool.picks_required).
+    The default of len(slate_game_ids) exists only so a caller that has not been updated to
+    pass it does not silently break; it is not a real rule about the slate.
+
+    Checks: exactly picks_required picks are submitted, every picked game is on the slate,
+    no game is picked twice, picked_team is "home" or "away", and the confidence values are
+    exactly a permutation of 1..picks_required. A slate game the player did not pick is
+    legal and simply is not scored for them, so there is no longer a per-game "missing a
+    winner" check, only the one count check against picks_required. Messages are sentence
+    case, plainspoken, and name the problem concretely, for example "Confidence value 7 is
+    used twice." or "You have picked 13 games. Pick 15."
     """
     errors: list[str] = []
-    # A repeated id in the slate list is still one game, so N counts distinct ids.
+    # A repeated id in the slate list is still one game.
     slate_ids = list(dict.fromkeys(slate_game_ids))
-    n = len(slate_ids)
+    slate_set = set(slate_ids)
+    if picks_required is None:
+        picks_required = len(slate_ids)
 
-    if n == 0:
+    if not slate_ids:
         for game_id in sorted({p.game_id for p in picks}):
             errors.append(f"Game {game_id} is not on this week's slate.")
         return errors
@@ -209,7 +229,6 @@ def validate_picks(
     if not picks:
         return ["No picks were submitted."]
 
-    slate_set = set(slate_ids)
     picks_per_game = Counter(p.game_id for p in picks)
 
     # Games picked that are not on the slate.
@@ -220,12 +239,12 @@ def validate_picks(
     for game_id in sorted(gid for gid, count in picks_per_game.items() if count > 1):
         errors.append(f"Game {game_id} has more than one pick.")
 
-    # Slate games with no pick at all.
-    missing = sum(1 for gid in slate_ids if gid not in picks_per_game)
-    if missing == 1:
-        errors.append("One game is missing a winner.")
-    elif missing > 1:
-        errors.append(f"{_number_word(missing)} games are missing a winner.")
+    # Exactly picks_required picks, not more, not fewer. An unpicked slate game beyond that
+    # is fine on its own, it just is not scored for this player.
+    if len(picks) != picks_required:
+        errors.append(
+            f"You have picked {len(picks)} {_game_word(len(picks))}. Pick {picks_required}."
+        )
 
     # Picks that name something other than home or away.
     for pick in picks:
@@ -235,7 +254,7 @@ def validate_picks(
                 f'"{pick.picked_team}". Pick home or away.'
             )
 
-    errors.extend(_confidence_errors(picks, slate_set, n))
+    errors.extend(_confidence_errors(picks, slate_set, picks_required))
     return errors
 
 
@@ -318,25 +337,6 @@ def season_totals(entries: Iterable[SeasonEntryInput]) -> SeasonTotals:
     )
 
 
-_NUMBER_WORDS = {
-    1: "One",
-    2: "Two",
-    3: "Three",
-    4: "Four",
-    5: "Five",
-    6: "Six",
-    7: "Seven",
-    8: "Eight",
-    9: "Nine",
-    10: "Ten",
-    11: "Eleven",
-    12: "Twelve",
-    13: "Thirteen",
-    14: "Fourteen",
-    15: "Fifteen",
-    16: "Sixteen",
-}
-
 _TIMES_PHRASES = {
     2: "twice",
     3: "three times",
@@ -346,9 +346,9 @@ _TIMES_PHRASES = {
 }
 
 
-def _number_word(count: int) -> str:
-    """Sentence leading number word for small counts, digits beyond the slate range."""
-    return _NUMBER_WORDS.get(count, str(count))
+def _game_word(count: int) -> str:
+    """The word "game" for exactly one, "games" otherwise."""
+    return "game" if count == 1 else "games"
 
 
 def _times_phrase(count: int) -> str:

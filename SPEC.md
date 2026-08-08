@@ -10,7 +10,7 @@ PickSportPlus is a weekly confidence pick'em pool for NFL and college football (
 
 - Each week the app publishes a slate of games. The default is 20 games, split 8 NFL and 12 college (FBS). The total and the per league counts are commissioner settings.
 - The slate is chosen to be the closest games that week, meaning the games with the smallest betting point spread, so players pick genuinely competitive matchups instead of blowouts. Closest is judged within each league against that league's target count.
-- Each player picks the straight-up winner of every game on the slate and ranks their confidence across the slate as one combined ranking. With N games, a player assigns N points to their most confident pick down to 1 point for their least confident pick, using each value from 1 to N exactly once. N is the final game count for that week, whatever the commissioner settled on.
+- Each player picks the straight-up winner of exactly `picks_required` of the slate games (the default is 15, out of the default 20 game slate) and ranks their confidence across only the games they picked, as one combined ranking. A player assigns `picks_required` points to their most confident pick down to 1 point for their least confident pick, using each value from 1 to `picks_required` exactly once. A slate game a player does not pick is legal to leave alone; it simply scores nothing for that player. Both the slate size and `picks_required` are commissioner settings, read from the pool, never hard coded.
 - When a game goes final, a correct pick earns the points staked on it and a wrong pick earns 0.
 - The app maintains leaderboards all season: weekly points, season total points, games correct, and weekly wins.
 
@@ -236,13 +236,14 @@ The pool runs itself. `pool.auto_publish` defaults to true.
 
 For a week that is open and before `lock_at`:
 
-- The This Week page lists the slate games with matchup, kickoff in the pool timezone, and the informational line.
+- The This Week page lists the slate games with matchup, kickoff in the pool timezone, and the informational line. The slate holds `num_games_per_week` games (the default is 20); a player picks exactly `picks_required` of them (the default is 15), both commissioner settings on the pool.
 - For each game the player taps a team to select the straight-up winner. The selected side fills with `--green-tint` and shows a check.
-- The whole list is drag sortable (SortableJS) to set confidence as one combined ranking across both leagues. Order maps to points, top is N down to 1, where N is the final game count for the week. Each row shows its current point value live as the list reorders. Provide up and down buttons per row as the accessible fallback.
-- A summary bar shows progress, for example "20 of 20 winners chosen", with a Save action over HTMX and a clear saved indicator. Validate on save: exactly one winner per game and confidence values are a permutation of 1 to N.
-- Never hard code the slate size in copy or validation. Always read N from the week's actual game count.
+- The picked games are ranked as one combined ranking across both leagues to set confidence. Order maps to points, top is `picks_required` down to 1. Each row shows its current point value live as the list reorders. Provide up and down buttons per row as the accessible fallback.
+- A summary bar shows progress against `picks_required`, for example "12 of 15 winners chosen", with a Save action over HTMX and a clear saved indicator. Validate on save: exactly `picks_required` picks submitted, every picked game on the slate, and confidence values are a permutation of 1 to `picks_required`. A slate game the player did not pick is not an error.
+- Never hard code the slate size or `picks_required` in copy or validation. Always read both from the pool.
 - Editable until `lock_at`, then read only for everyone. After lock, all players' picks become visible on the Results page for transparency.
 - A player who did not submit by `lock_at` scores 0 for that week.
+- The three-stage entry flow (type confidence numbers, a "reorder to inputs" step, then live drag refinement, then a distinct lock confirmation step) is a later phase; the interaction described above is what ships with this phase's `picks_required` rule.
 
 ## 9. Scoring and leaderboards
 
@@ -250,7 +251,7 @@ For a week that is open and before `lock_at`:
 - Each pool runs in one of two scoring modes, set per pool on `Pool.scoring_mode` and switchable by the commissioner in pool settings without a code change:
   - `inverse` (the default, and this pool's real rule): a wrong pick counts its confidence points AGAINST the player, a correct pick earns nothing. Lowest total wins. A player who submits no picks for a week is flagged `did_not_submit` and takes the maximum possible penalty, `sum(1..picks_required)`, so sitting a week out is never the safe play. A no-show is never eligible to win the week, no matter how the arithmetic compares.
   - `standard` (the older rule, kept switchable): if `picked_team == winner` the player earns that pick's confidence points, else 0. Highest total wins. A player who submits no picks scores 0 and is excluded from winning the week the same way.
-- `correct` (how many picks matched the winner) is counted the same way in both modes; only the direction points run in is different. `possible` is the count of countable outcomes on the slate either way.
+- `correct` (how many picks matched the winner) is counted the same way in both modes; only the direction points run in is different. `possible` is the count of countable outcomes among that player's own submitted picks, not the whole slate, so players covering different subsets of the slate never affect each other's possible count. A no-show's possible is 0.
 - Tie games (possible in NFL) are voided: 0 points for everyone on that game and excluded from the correct and possible counts, in both modes. Same for a game the commissioner voids (cancellation or moved out of week).
 - Weekly result per player: points (sum earned or charged, depending on mode), correct (count), possible, `did_not_submit`, stored in a `week_entries` row. Season standings aggregate weekly rows into total points, total correct, and weekly wins (best points that week under the pool's mode, ties share the win, no-shows excluded).
 - Put per pick and per week scoring in `app/scoring.py` as pure functions and unit test heavily: all correct, all wrong, mixed, an unsubmitted player (in both modes, including the no-show max penalty), a tie or voided game, and a shorter than N slate.

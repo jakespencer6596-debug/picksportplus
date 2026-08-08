@@ -6,7 +6,7 @@ reasoning behind every judgment call made along the way.
 - [x] Phase 0. Orientation and baseline
 - [x] Phase 1. Fix week resolution (per-league date window)
 - [x] Phase 2. Invert scoring, lowest total wins
-- [ ] Phase 3. Pick 15 of 20
+- [x] Phase 3. Pick 15 of 20
 - [ ] Phase 4. Two-step pick entry
 - [ ] Phase 5. Admin-curated slate with pinned games
 - [ ] Phase 6. Navigation, sortable tables, transposed results grid
@@ -170,3 +170,58 @@ through the real database and router, not just `app/scoring.py` directly, and
 when a commissioner chooses it. New `tests/test_standings.py` covers sort direction for both
 `season_standings` and `weekly_leaderboard`. `ruff check .` and `black .` both clean.
 Full judgment calls are recorded in `DECISIONS.md` under "Phase 2".
+
+## Phase 3 notes
+
+The pool's real submission rule: the slate stays 20 games, a player now picks exactly 15 of
+them, confidence 1 to 15 assigned only to the games they picked. Both the slate size and the
+pick count are commissioner settings (`Pool.num_games_per_week`, new `Pool.picks_required`),
+never hard coded.
+
+- `app/scoring.py`. `validate_picks` gained a `picks_required` parameter and now checks
+  exactly `picks_required` picks are submitted (one message, `"You have picked N games. Pick
+  15."`, for both short and over) instead of requiring one pick per slate game; the old
+  per-game "missing a winner" check is gone entirely, since an unpicked slate game is legal
+  now. `score_week`'s `possible` changed meaning: it is now the count of countable outcomes
+  among a player's own submitted picks, not the whole slate, so two players can cover
+  different subsets of the same slate without affecting each other's `possible`. A direct
+  consequence, called out explicitly in `DECISIONS.md`: a no-show's `possible` is now 0
+  (was the slate's countable count under Phase 2), a deliberate refinement, not a
+  regression. The no-show max-penalty math is unchanged.
+- `app/models.py`. `Pool.picks_required` (new column, default 15).
+- `alembic/versions/7f659398d6cc_add_picks_required_to_pools.py`. The migration, reversible,
+  verified upgrade and downgrade against a fresh SQLite database.
+- `app/routers/admin.py` / `app/templates/admin/settings.html`. A "Picks required" field in
+  the existing Slate size card, validated `1 <= picks_required <= num_games_per_week`,
+  following the same pattern `week1_anchor_date` and `scoring_mode` used in Phases 1 and 2.
+- `app/routers/picks.py`. `_save_picks` threads `pool.picks_required` into `validate_picks`.
+  `picks_page`'s `n` and `has_full_entry` context values now mean `picks_required`, not the
+  full slate; the saved-order sort was reworked to put picked games first (by confidence)
+  and any unpicked slate games after, since it can no longer assume every slate game has a
+  pick.
+- `app/services/results.py`. `score_week_for_pool` reads the real `pool.picks_required`
+  instead of the Phase 2 stand-in (`pool.num_games_per_week`).
+- `app/templates/picks.html` / `components/pick_status.html`. Introduced `slate_size`
+  (`games | length`) as its own value, separate from `n` (`picks_required`), for every place
+  that actually means the whole published slate (the "N games" pill, the NFL/college
+  breakdown) versus the pick target (progress text, the confidence range, the no-show
+  penalty formula, the "how this week works" panel). `app/static/app.js`'s live progress
+  readout and Save button gating now read `picks_required` from a `data-picks-required`
+  attribute instead of the row count; the per-row confidence numbering during drag is
+  unchanged (still positional over the whole slate) since building the real "pick 15 of 20"
+  interaction is Phase 4's job, not this phase's; see `DECISIONS.md` for the full reasoning
+  and what specifically is and is not fixed client side.
+- `app/cli.py`. `doctor` now prints `picks_required` alongside `num_games_per_week`.
+- `SPEC.md`. Section 1 and Section 8 rewritten for the real rule; Section 9's `possible`
+  sentence updated to match the scoring change.
+
+Test suite: **636 passed**, 0 failed (624 at the Phase 2 baseline, plus 12 net new: several
+Phase 2 no-show tests were also updated in place for the `possible=0` refinement rather than
+counted as new). Explicit coverage for the brief's two named scenarios:
+`tests/test_scoring.py::test_a_voided_pick_scores_zero_and_only_reduces_that_players_own_possible`
+(a voided pick only shrinks that player's own `possible`, not the slate's) and
+`test_no_show_possible_is_zero_not_the_slate_size` (the no-show refinement). Router level:
+`tests/test_app.py::test_server_rejects_too_many_picks_even_if_no_client_would_send_them`
+pins that `picks_required` is enforced server side regardless of what any client sends.
+`ruff check .` and `black .` both clean. Full judgment calls are recorded in `DECISIONS.md`
+under "Phase 3".

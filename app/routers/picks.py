@@ -86,9 +86,16 @@ def picks_page(
 
     # Saved picks drive the row order, highest confidence at the top, so returning to the page
     # shows the ranking the player left behind. Otherwise fall back to slate rank, which puts
-    # the closest game first as a reasonable starting point.
-    if picks_by_game and len(picks_by_game) == len(games):
-        games.sort(key=lambda g: -picks_by_game[g.id].confidence)
+    # the closest game first as a reasonable starting point. A "complete" entry means exactly
+    # picks_required picks are in, not that every slate game has one: a picked game is legal to
+    # leave off the slate now (Phase 3), so picks_by_game can be smaller than games on purpose.
+    if picks_by_game and len(picks_by_game) == pool.picks_required:
+        games.sort(
+            key=lambda g: (
+                0 if g.id in picks_by_game else 1,
+                -picks_by_game[g.id].confidence if g.id in picks_by_game else 0,
+            )
+        )
 
     locked = week is not None and week_is_locked(week)
     next_week = _next_unpublished_week(db, pool) if week is None else None
@@ -101,9 +108,12 @@ def picks_page(
             "games": games,
             "picks_by_game": picks_by_game,
             "locked": locked,
-            "n": len(games),
+            # n is the target picks a player must submit, not the slate size (games can be
+            # bigger, for example 20 games with 15 required). Never hard coded, always the
+            # pool's own commissioner-set value.
+            "n": pool.picks_required,
             "submitted_count": len(picks_by_game),
-            "has_full_entry": len(picks_by_game) == len(games) and bool(games),
+            "has_full_entry": len(picks_by_game) == pool.picks_required and bool(games),
             "next_week": next_week,
         },
         current_user=user,
@@ -134,9 +144,11 @@ async def picks_save(
 ):
     """Save winners and confidence.
 
-    Nothing from the browser is trusted. The submission must contain exactly one winner per
-    slate game, confidence values that are a permutation of 1 to N, and it must arrive before
-    lock_at. N is the real slate size for this week, never a hard coded number.
+    Nothing from the browser is trusted. The submission must contain exactly
+    pool.picks_required picks, confidence values that are a permutation of 1 to
+    picks_required, and it must arrive before lock_at. picks_required is a commissioner
+    setting on the pool, never a hard coded number, and it can be smaller than the slate
+    (Phase 3: 15 picks out of a 20 game slate is the pool's real rule).
     """
     form = await request.form()
     raw = {key: str(value) for key, value in form.items()}
@@ -170,12 +182,12 @@ def _save_picks(request: Request, db: Session, user: User, pool: Pool, raw: dict
             continue
         submitted.append(PickInput(game_id=game.id, picked_team=side, confidence=confidence))
 
-    errors = malformed + validate_picks(submitted, slate_ids)
+    errors = malformed + validate_picks(submitted, slate_ids, pool.picks_required)
     if errors:
         return render(
             request,
             "components/pick_status.html",
-            {"errors": errors, "saved": False, "n": len(games)},
+            {"errors": errors, "saved": False, "n": pool.picks_required},
             current_user=user,
             pool=pool,
             status_code=400,
@@ -224,7 +236,7 @@ def _save_picks(request: Request, db: Session, user: User, pool: Pool, raw: dict
         return render(
             request,
             "components/pick_status.html",
-            {"saved": True, "errors": [], "n": len(games), "saved_at": now},
+            {"saved": True, "errors": [], "n": pool.picks_required, "saved_at": now},
             current_user=user,
             pool=pool,
         )

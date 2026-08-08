@@ -285,3 +285,182 @@ following the same pattern Phase 1 used for its four new columns: a server defau
 to back-fill existing rows, then gets dropped in the same migration so the schema matches
 `app/models.py` exactly (new rows always go through the ORM, which always sends an explicit
 value). Verified upgrade and downgrade both run cleanly against a throwaway SQLite file.
+
+## Phase 3
+
+### The rule, and what stayed the same
+
+The slate stays `num_games_per_week` games (default 20). A player now submits exactly
+`Pool.picks_required` picks (default 15), confidence a permutation of `1..picks_required`,
+assigned only to the games they picked. A slate game a player does not pick is legal and
+simply is not scored for them. Both numbers are commissioner settings, read from the pool,
+never hard coded anywhere (`app/scoring.py`, `app/routers/picks.py`,
+`app/services/results.py`, `app/templates/picks.html` all take them as parameters or
+context, none of them contain a literal `15` or `20`).
+
+### Exact wording landed on for the count mismatch message
+
+`validate_picks` now has exactly one message for "wrong number of picks," used for both the
+short case and the over case, rather than separate phrasing for each direction:
+
+- Short: `"You have picked 14 games. Pick 15."`
+- Over: `"You have picked 16 games. Pick 15."`
+- Singular is handled (`"You have picked 1 game. Pick 15."`) via a small `_game_word` helper,
+  since the old `_number_word` map (a leftover from the deleted "missing a winner" copy) had
+  no reason to exist any more and was removed rather than left dead.
+
+One message shape for both directions was chosen over separate "too few"/"too many" copy
+because the fix is identical either way (add or remove a pick until the count matches), and
+a single terse sentence names the actual problem (the count) without editorializing about
+which direction it is wrong in.
+
+### The old "missing a winner" check is gone, not relaxed
+
+`validate_picks` no longer requires one pick per slate game. That check assumed full slate
+coverage, which stopped being true the moment `picks_required` could be smaller than the
+slate. It is not replaced by a partial version of itself; the single count check above
+(`len(picks) != picks_required`) is the only place submission size is validated. A slate
+game with no pick is not an error condition at all any more, at any point in
+`validate_picks`; it is simply not present in the picks list, and `score_week` already
+handles "not present" as "not scored" for that player with no extra code (see below).
+`tests/test_scoring.py::test_validate_picks_same_game_picked_twice` is the regression that
+pins this: a duplicated pick used to also trigger a separate "One game is missing a winner"
+message for the game that lost out to the duplicate; now it only reports the duplicate
+itself, because an unpicked game is legal on its own.
+
+### `possible` is scoped to the player's own picks: the no-show refinement
+
+Per the brief, `possible` in `score_week` changed meaning from "countable outcomes on the
+whole slate" to "countable outcomes among this player's own submitted picks." This is a
+single rule, not a special case for no-shows: a no-show submitted zero picks, so there is
+nothing of theirs to count, and `possible=0` falls straight out of the same loop that
+computes it for everyone else (`possible` is incremented once per pick that is on the slate
+and countable; with zero picks the loop never runs, and the no-show branch returns
+`possible=0` explicitly for the same reason). This is a deliberate change from Phase 2's
+behavior, where a no-show's `possible` came from the whole slate's countable count. It is
+the right call, not a regression, because the alternative is a second, separate rule for
+"what does possible mean for a player who picked nothing," which is exactly the kind of
+special case Phase 3's own subset-of-the-slate rule was designed to make unnecessary: once
+two different players can legitimately cover two different subsets of the same 20 game
+slate, "possible" can only mean "counted against outcomes this specific player actually had
+a stake in," and a no-show's stake in anything is, correctly, zero. Updated Phase 2's
+no-show tests in `tests/test_scoring.py` that asserted the old slate-wide `possible` value
+(`test_standard_no_show_scores_zero_and_is_flagged`,
+`test_inverse_no_show_takes_the_maximum_penalty_and_is_flagged`,
+`test_inverse_no_show_penalty_uses_explicit_picks_required_not_slate_size`), and added
+`test_no_show_possible_is_zero_not_the_slate_size` naming the refinement directly. The
+no-show max-penalty formula, `sum(1..picks_required)`, is untouched: it already took
+`picks_required` as an explicit parameter, never `possible`.
+
+Added `test_a_voided_pick_scores_zero_and_only_reduces_that_players_own_possible` (and an
+inverse-mode twin) as the direct test of the brief's central Phase 3 scoring scenario: a
+player submits 15 picks, the commissioner voids one of the games they picked after the
+fact, and only that player's own `possible` drops (14, not the slate's own count), with
+`points`/`correct` on the other 14 picks unaffected.
+
+### `score_week`'s `picks_required` default did not change shape
+
+`picks_required: int | None = None`, defaulting to `len(outcomes)`, is unchanged from Phase
+2; it is still only used for the no-show penalty math, never for `possible` (which no
+longer has any concept of a slate-wide count to default against). `app/services/results.py`
+now passes the real `pool.picks_required` instead of the Phase 2 stand-in
+(`pool.num_games_per_week`, with a comment marking it as temporary until this exact phase);
+that comment and the stand-in value are both gone.
+
+### `validate_picks` gained a `picks_required` parameter with the same soft-compat shape
+
+`picks_required: int | None = None`, defaulting to `len(slate_game_ids)`. Every real call
+site (`app/routers/picks.py`) passes `pool.picks_required` explicitly; the default exists
+only so a caller nobody updated does not silently break, matching the pattern already used
+for `score_week`. Several pre-existing tests that submitted more picks than the slate
+(intentionally, to test the "off slate game" and "duplicate" checks in isolation) now pass
+`picks_required` explicitly equal to their own submitted count, so the new count-mismatch
+check does not leak an unrelated second error into tests that were not about counts.
+
+### `Pool.picks_required`: new column, one migration, same validation pattern as `scoring_mode`
+
+`Pool.picks_required` (Integer, default 15, NOT NULL). Migration `7f659398d6cc`, on top of
+Phase 2's head (`6aa4a2f020c6`), server default `15` for the backfill only, dropped in the
+same migration (the ORM always sends an explicit value for new rows), following the exact
+pattern the last two migrations used. Verified upgrade and downgrade both run cleanly.
+`settings_save` validates `1 <= picks_required <= num_games_per_week` and rejects anything
+else with `"Picks required must be between 1 and games per week (N)."`, following the same
+required-`Form(...)`-field, flash-and-redirect-on-error pattern `scoring_mode` used in
+Phase 2. The settings form field lives in the existing "Slate size" card, right after games
+per week, with its own `min`/`max` bounds mirrored from the same rule.
+
+### `app/routers/picks.py`: `n` and `has_full_entry` now mean `picks_required`
+
+Per the brief, `picks_page`'s `n` context key changed from `len(games)` to
+`pool.picks_required`, and `has_full_entry` from "every slate game has a pick" to "exactly
+`picks_required` picks are in." The row-sort-by-saved-confidence condition in `picks_page`
+(which decides whether to show the player's own ranking or fall back to slate order) moved
+from `len(picks_by_game) == len(games)` to `== pool.picks_required` for the same reason,
+and its sort key was rewritten to put picked games first (by descending confidence) and any
+unpicked slate games after, since a `KeyError` was otherwise possible the moment
+`picks_by_game` could legitimately be smaller than `games`. `_save_picks` threads
+`pool.picks_required` into `validate_picks`, and both `pick_status.html` renders pass
+`pool.picks_required` as `n` instead of `len(games)`.
+
+### Template copy: what changed, and what deliberately did not (yet)
+
+`app/templates/picks.html` had two genuinely different numbers hiding under one context
+key, `n`: the target pick count (now `picks_required`) and the total published slate size.
+Introduced `slate_size` (`games | length`) as its own value in the template for the places
+that actually mean "the whole slate" (the page head's "N games" pill, the NFL/college
+breakdown), and left every other `n` as `picks_required`, which automatically fixed the
+no-show max-penalty formula in the locked view (`(n * (n + 1)) // 2`, unchanged code, now
+correct because `n` itself changed meaning to match `score_week`'s own formula) and the
+"you staked N points" summary. Reworded "You staked N points on the game at the top and 1
+on the game at the bottom" to "...on your top pick and 1 on your last pick," because once
+`slate_size` can exceed `picks_required`, the literal last row in the read only list can be
+an unpicked slate game, not the confidence-1 pick, so "the bottom of the list" stopped being
+a safe way to refer to "the last pick." Reworded the open week "how this week works" panel
+to state the rule plainly ("winner for `n` of these `slate_size` games... your most
+confident pick stakes `n` points") rather than tying the copy to "the top/bottom of the
+list," for the same reason. `pick_status.html`'s error hint and success message both moved
+off "every game needs a winner" (no longer true) and "all N games ranked" (no longer
+literally "all," since N is now smaller than the slate) to "pick exactly N games" and "N
+games ranked."
+
+Known, deliberate limitation, left for Phase 4: `app/static/app.js`'s `renumber()` (the
+function that assigns each row's confidence chip while dragging) still numbers every row in
+the drag list positionally from the slate size down to 1, unchanged from before this phase,
+because Phase 4 is explicitly the phase that rebuilds the picks page into a real "pick N of
+the slate" interaction (type numbers, reorder, drag refine, a distinct lock step); building
+that selection mechanism here would be exactly the redesign this phase was told not to do,
+and the current tap-to-pick control has no way to un-pick a game once tapped, so a truly
+correct client side "exactly `picks_required`" flow is not achievable without new controls
+Phase 4 is responsible for. What this phase does fix, narrowly: the progress readout
+(`updateSummary()` in `app.js`) and the Save button's enable threshold now read a
+`data-picks-required` attribute (rendered from `pool.picks_required`, never hard coded)
+instead of the total row count, so "X of N winners chosen" and the Save gating are honest
+about the real target even while the per row confidence numbering is not yet rebuilt. The
+server is the actual authority regardless: `validate_picks` rejects any submission that
+does not add up to exactly `picks_required`, whatever the client sent, proven by
+`tests/test_app.py::test_server_rejects_too_many_picks_even_if_no_client_would_send_them`.
+
+### `tests/test_app.py`'s `world` fixture: `picks_required` defaults to the fixture's own slate size
+
+`_make_pool` gained a `picks_required` parameter defaulting to `num_games` (the fixture's
+own 4 game slate), not the model's real default of 15, so the existing `_valid_submission`
+helper (which posts a winner and confidence for every game in `world["game_ids"]`) keeps
+producing a complete, valid entry without every existing test needing to know about the new
+rule. Tests that want to exercise `picks_required` being smaller than the slate set
+`pool.picks_required` explicitly after fetching it from the fixture's pool.
+`test_a_missing_winner_is_rejected` was renamed to `test_an_incomplete_submission_is_rejected`
+and its assertion moved from the deleted "missing a winner" copy to the new count message,
+since dropping one of the world fixture's 4 required picks now produces `"You have picked 3
+games. Pick 4."`.
+
+### SPEC.md
+
+Section 1's slate paragraph and Section 8 (Picks and confidence UI) were rewritten to
+describe `picks_required` as a real, separate, commissioner-set number from the slate size,
+with the default 15-of-20 stated explicitly. Section 8 gained one line naming the later
+three-stage entry flow (type numbers, reorder, drag refine, a distinct lock step) as a
+future phase, so the spec does not read as though the interaction described in this section
+is the final one. Section 9's `possible` sentence was updated to match the scoring change
+(scoped to a player's own picks, no-show is 0), a small, adjacent fix since leaving it
+stating the old rule would make the spec itself wrong the moment this phase landed; nothing
+else in Section 9 changed.

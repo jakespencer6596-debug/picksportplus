@@ -86,8 +86,20 @@
                value="{{ pool.num_games_per_week }}" min="{{ min_slate }}" max="{{ max_slate }}"
                step="1" required>
         <p class="form-hint">
-          Between {{ min_slate }} and {{ max_slate }}. This is the total that lands on the slate,
-          and it is also the top confidence value a player can stake.
+          Between {{ min_slate }} and {{ max_slate }}. This is the total that lands on the slate.
+        </p>
+      </div>
+
+      <div class="field">
+        <label class="field-label" for="picks_required">Picks required</label>
+        <input class="input num" type="number" id="picks_required" name="picks_required"
+               value="{{ pool.picks_required }}" min="1" max="{{ pool.num_games_per_week }}"
+               step="1" required>
+        <p class="form-hint">
+          How many of the games per week a player must pick, exactly. This is also the top
+          confidence value a player can stake, from this number down to 1. Must be between 1
+          and games per week; set it equal to games per week if every player should pick the
+          whole slate.
         </p>
       </div>
 

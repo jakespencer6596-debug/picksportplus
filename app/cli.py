@@ -429,6 +429,7 @@ def doctor(
         _echo(f"  season_year        : {pool.season_year}")
         _echo(f"  sports             : {pool.sports}")
         _echo(f"  num_games_per_week : {pool.num_games_per_week}")
+        _echo(f"  picks_required     : {pool.picks_required}")
         _echo(f"  target_nfl/ncaaf   : {pool.target_nfl} / {pool.target_ncaaf}")
         _echo(f"  auto_publish       : {pool.auto_publish}")
         _echo(f"  current_week       : {pool.current_week}")
