@@ -1508,6 +1508,49 @@ and `README.md` finds nothing; a code-point scan of every `.py`/`.html`/`.js`/`.
 
 ## Post-launch fixes
 
+### Picks page: no color before a pick, sequential auto-numbering, and a hard 15-pick cap
+
+Three related fixes, all in the open-week pick flow, reported directly by the product owner
+after trying the demo:
+
+1. **Team buttons showed green/red win-loss coloring before any pick was made.** Root cause:
+   `_load_real_games` in `app/services/demo.py` loads a real, already-finished historical game
+   for the demo's "open" week (Week 7), and was writing that game's real final `status`,
+   `winner`, and scores onto the row, even though the week's `lock_at` is pushed artificially
+   into the future so the picks page renders as if it were still open. `team_button` in
+   `picks.html` colors a button `.is-winner`/`.is-loser` based purely on `game.is_final` and
+   `game.winner`, with no awareness that the week's own lock is what actually gates picking, so
+   a demo player saw real historical outcomes leaking through as premature coloring. Fixed by
+   adding `_load_real_games(..., unplayed=True)`, used only by `_build_open_week`, which resets
+   `status` to `"scheduled"` and clears `winner`/`home_score`/`away_score` while keeping the
+   real matchup, spread, and kickoff time. This is a demo-data bug specifically: a real
+   production week's games are genuinely not final yet while picking is open, so this never
+   affected anything but the reused-historical-data demo path.
+2. **A fresh pick now gets an immediate confidence number**, in the order picks are made (first
+   pick tapped gets the smallest available value, 1, next gets 2, and so on), rather than
+   sitting blank until the player manually types a number or drags. Implemented in
+   `app/static/app.js`'s `onClick` (a new `nextAvailableConfidence` helper picks the smallest
+   value 1..picks_required not already used by any row, so it never collides even after a pick
+   is undone out of order). A value the player already typed ahead of tapping is never
+   overwritten. This is explicitly a starting point, not a claim about true confidence:
+   "Reorder to inputs," dragging, and manual typing all still fully override it afterward,
+   unchanged from Phase 4.
+3. **Picking is now hard capped at `picks_required`.** Tapping a team on an unpicked row once
+   the cap is already reached is blocked outright (no DOM change, a message replaces the
+   picks-summary text: "All 15 picks made. Tap a pick again to undo it before picking
+   another."). This required adding a real undo affordance that did not exist before: tapping
+   the already-picked team on a row again now unpicks that game entirely (clears the winner and
+   the confidence), rather than being a no-op, since a hard cap is only usable if there is a way
+   to free a slot back up. Switching which side is picked on an already-picked row still never
+   counts against the cap, only a genuinely new pick does.
+
+No automated test coverage for any of this: it is all client-side JavaScript, and this
+environment has no browser or JS test runner (same limitation noted in Phase 9's acceptance
+pass). Verified by hand: `node --check app/static/app.js` for syntax, tracing the `onClick`
+branches by hand for each of new-pick/switch-side/undo/at-cap, and confirming the demo rebuild
+(`seed-demo --reset`) produces `status="scheduled"`, `winner=None`, `(None, None)` scores for
+every Week 7 game.
+
 ### A resolvable spread ranks a game, it never gates eligibility
 
 The product owner's own words: "line is not mandatory, its just a nice added feature." Before

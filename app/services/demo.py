@@ -296,8 +296,18 @@ def _seed_payout_rules(db: Session, pool: Pool, out: list[str]) -> None:
     out.append("Seeded demo payout rules: weekly 1st/2nd/3rd and season 1st/2nd, all demo figures.")
 
 
-def _load_real_games(db: Session, week: Week, spec: WeekSpec, out: list[str]) -> list[Game]:
-    """Parse the recorded scoreboards and attach the recorded historical spreads."""
+def _load_real_games(
+    db: Session, week: Week, spec: WeekSpec, out: list[str], *, unplayed: bool = False
+) -> list[Game]:
+    """Parse the recorded scoreboards and attach the recorded historical spreads.
+
+    unplayed=True is for the open demo week (_build_open_week): the underlying recording is
+    a real, already finished game, but the demo is supposed to look like a week nobody has
+    played yet. Without this, the picks page shows real historical win/loss coloring on
+    every team button before a demo player has picked anything, which reads as a bug, not a
+    feature. Status, scores and the winner are reset here; everything else (matchup, spread,
+    kickoff time) stays the real recording.
+    """
     parsed: list[espn.EspnGame] = []
     parsed += espn.parse_scoreboard(_load(spec.nfl_scoreboard), "nfl")
     parsed += espn.parse_scoreboard(_load(spec.cfb_scoreboard), "ncaaf")
@@ -349,10 +359,10 @@ def _load_real_games(db: Session, week: Week, spec: WeekSpec, out: list[str]) ->
             spread_home=spread,
             closeness=abs(spread) if spread is not None else None,
             spread_source=source if spread is not None else None,
-            status=game.status,
-            home_score=game.home.score,
-            away_score=game.away.score,
-            winner=game.winner,
+            status="scheduled" if unplayed else game.status,
+            home_score=None if unplayed else game.home.score,
+            away_score=None if unplayed else game.away.score,
+            winner=None if unplayed else game.winner,
         )
         db.add(row)
         rows.append(row)
@@ -596,7 +606,7 @@ def _build_open_week(
     db.add(week)
     db.flush()
 
-    _load_real_games(db, week, spec, out)
+    _load_real_games(db, week, spec, out, unplayed=True)
     apply_slate(db, pool, week, now=None)
     publish_week(db, week)
 

@@ -255,10 +255,75 @@
 
   /* ------------------------------------------------------------ interaction */
 
+  /* The smallest confidence value 1..required not already sitting on some other row.
+     Used to give a brand new pick an immediate number instead of leaving it blank, without
+     ever colliding with a value another row already has (typed, dragged, or previously
+     auto assigned), including after a pick was undone and the numbers are no longer a
+     clean run from 1. */
+  function nextAvailableConfidence(list, required) {
+    var used = {};
+    Array.prototype.slice.call(list.querySelectorAll(".game-row")).forEach(function (row) {
+      var v = row.dataset.confidence;
+      if (v) used[v] = true;
+    });
+    for (var n = 1; n <= required; n++) {
+      if (!used[String(n)]) return n;
+    }
+    return null;
+  }
+
+  function pickedRowCount(list) {
+    return list.querySelectorAll(".game-row .team-btn.is-picked").length;
+  }
+
+  /* Told through the same element updateSummary already writes to, so it reads naturally
+     next to the running count rather than as a separate popup. The next real change (a
+     swap, an undo, typing a number) overwrites it via updateSummary as usual. */
+  function announcePickLimitReached(required) {
+    var summary = document.querySelector("[data-pick-summary]");
+    if (summary) {
+      summary.textContent =
+        "All " + required + " picks made. Tap a pick again to undo it before picking another.";
+    }
+  }
+
   function onClick(e) {
     var teamBtn = e.target.closest(".team-btn");
     if (teamBtn && !teamBtn.disabled) {
       var row = teamBtn.closest(".game-row");
+      var list = row.closest(".game-list");
+
+      /* Tapping the team already picked on this game undoes the pick entirely (never just
+         a no-op), since a hard cap on how many games can be picked (below) is only usable
+         if there is a way to free up a slot again. Clears the confidence too, on purpose:
+         a game with no winner chosen can never legitimately carry points. */
+      if (teamBtn.classList.contains("is-picked")) {
+        row.querySelectorAll(".team-btn").forEach(function (b) {
+          b.classList.remove("is-picked");
+          b.setAttribute("aria-pressed", "false");
+        });
+        var clearedHidden = row.querySelector("input[data-pick]");
+        if (clearedHidden) clearedHidden.value = "";
+        applyRowConfidence(row, "", { syncTyped: true });
+        if (list) regroupDivider(list);
+        updateSummary();
+        markDirty();
+        return;
+      }
+
+      var wasPicked = !!row.querySelector(".team-btn.is-picked");
+
+      /* A tap that switches which side is picked on an already picked game never changes
+         how many games are picked, so it never needs the cap check below, only a genuinely
+         new pick does. */
+      if (!wasPicked && list) {
+        var required = picksRequired(list);
+        if (pickedRowCount(list) >= required) {
+          announcePickLimitReached(required);
+          return;
+        }
+      }
+
       row.querySelectorAll(".team-btn").forEach(function (b) {
         var on = b === teamBtn;
         b.classList.toggle("is-picked", on);
@@ -266,12 +331,22 @@
       });
       var hidden = row.querySelector("input[data-pick]");
       if (hidden) hidden.value = teamBtn.dataset.side;
-      /* A fresh pick does not invent a confidence value: syncRowConfidence only picks up
-         whatever is already typed in this row's Stage 1 input (picking up a pre-typed
-         value if the player typed ahead of tapping), it never assigns a position based
-         one. That is renumber()'s job, reached only via drag, the rank buttons, alt+arrow,
-         or "Reorder to inputs", so a tap elsewhere never clobbers a value the player
-         already typed into some other row. */
+
+      /* A fresh pick with nothing already typed into its Stage 1 input gets the next
+         available confidence value immediately, in the order picks are made, so the row
+         never sits blank until the player manually types or drags. A value the player
+         already typed ahead of tapping is left alone, never overwritten. Dragging,
+         "Reorder to inputs", and manual typing all still work exactly as before, this
+         only fills in a starting point. */
+      if (!wasPicked && list) {
+        var typed = row.querySelector("[data-conf-input]");
+        var alreadyTyped = typed && typed.value.trim() !== "";
+        if (!alreadyTyped) {
+          var next = nextAvailableConfidence(list, picksRequired(list));
+          if (next !== null) applyRowConfidence(row, next, { syncTyped: true });
+        }
+      }
+
       syncRowConfidence(row);
       markDirty();
       return;
