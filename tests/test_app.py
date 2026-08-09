@@ -220,7 +220,8 @@ def test_pricing_page_renders_signed_out(client):
     response = client.get("/pricing")
     assert response.status_code == 200
     assert "199" in response.text
-    assert "350" in response.text
+    assert "349" in response.text
+    assert "398" in response.text
     assert "50" in response.text
     assert 'href="/login"' in response.text
 
@@ -233,13 +234,13 @@ def test_pricing_page_renders_signed_in(client, world):
     assert "Regular Player" in response.text  # the signed-in header, not the public one
 
 
-def test_how_to_use_page_renders(client, world):
-    response = client.get("/how-to-use")
+def test_how_it_works_page_renders(client, world):
+    response = client.get("/how-it-works")
     assert response.status_code == 200
     assert "inverse" in response.text.lower()
 
     _login(client, "player@example.com")
-    response = client.get("/how-to-use")
+    response = client.get("/how-it-works")
     assert response.status_code == 200
     assert "Regular Player" in response.text
 

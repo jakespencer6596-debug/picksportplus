@@ -46,13 +46,13 @@ def pricing(
     )
 
 
-@router.get("/how-to-use")
-def how_to_use(
+@router.get("/how-it-works")
+def how_it_works(
     request: Request,
     db: Session = Depends(get_db),
     user: User | None = Depends(get_current_user),
 ):
-    return render(request, "public/how_to_use.html", {}, **_chrome(db, user))
+    return render(request, "public/how_it_works.html", {}, **_chrome(db, user))
 
 
 @router.get("/contact")

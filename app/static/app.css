@@ -737,7 +737,7 @@ details.user-menu[open] > :not(summary) button:hover {
 
 /* -- Mobile site menu (hamburger) -----------------------------------------
    Phone width only (.mobile-only hides it at 768px, where the full row of
-   Pricing / How to use / Contact / Login, or the signed-in Home link,
+   Pricing / How it works / Contact / Login, or the signed-in Home link,
    already fits in .nav / .user-menu instead). Toggled by app.js
    (initMenuToggle): [hidden] removed on open, .is-open added a frame later
    so the fade-and-drop actually animates; both happen in the same paint
@@ -1153,7 +1153,7 @@ details.user-menu[open] > :not(summary) button:hover {
 }
 
 /* The signed-out header's Login button. Deliberately a different treatment from the plain
-   text Pricing / How to use / Contact links beside it, filled antique gold against the
+   text Pricing / How it works / Contact links beside it, filled antique gold against the
    green top bar, so it reads as the one action that actually leaves the marketing pages.
    --ink on --gold measures 6.15:1. See DECISIONS.md, Post-launch fixes, for why gold (not a
    second green fill or the maroon accent) was chosen. */
@@ -3936,6 +3936,21 @@ a.toggle-btn { text-decoration: none; }
   font-size: var(--fs-sm);
   font-weight: 500;
   color: var(--text-muted);
+}
+
+.pricing-was {
+  font-size: var(--fs-md);
+  font-weight: 500;
+  color: var(--text-muted);
+  text-decoration: line-through;
+  text-decoration-color: var(--negative);
+}
+
+.pricing-save {
+  margin: calc(-1 * var(--space-2)) 0 var(--space-3);
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  color: var(--accent-strong);
 }
 
 .pricing-list {
