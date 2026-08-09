@@ -1469,7 +1469,7 @@ textarea[disabled] {
 .game-list {
   display: flex;
   flex-direction: column;
-  gap: var(--space-3);
+  gap: var(--space-2);
   margin: 0;
   padding: 0;
   list-style: none;
@@ -1482,8 +1482,8 @@ textarea[disabled] {
     "grip teams teams"
     "meta meta  rank";
   align-items: center;
-  gap: var(--space-2) var(--space-2);
-  padding: var(--space-3);
+  gap: var(--space-1) var(--space-2);
+  padding: var(--space-2);
   background: var(--bg-surface);
   border: var(--hairline);
   border-radius: var(--radius);
@@ -1581,8 +1581,10 @@ textarea[disabled] {
      ("Notre Dame Fighting Irish") pushed the button 25px past its track at 360px and
      scrolled the whole page sideways. Zero lets it shrink and .team-name ellipsis. */
   min-width: 0;
-  min-height: 52px;
-  padding: var(--space-2) var(--space-3);
+  /* 44px is the accessibility floor for a tap target (Spec Section 3f), not a starting
+     point: do not shrink this further even to fit more rows on a page. */
+  min-height: 44px;
+  padding: var(--space-1) var(--space-3);
   background: var(--bg-surface);
   border: 1px solid var(--line);
   border-radius: var(--radius-sm);
@@ -3702,7 +3704,7 @@ a.toggle-btn { text-decoration: none; }
 
   .panel { padding: var(--space-5); }
 
-  .game-row { padding: var(--space-4); }
+  .game-row { padding: var(--space-3); }
 
   /* There is room for the signed in name once the bar is wider than a phone. */
   .user-name { display: block; }
@@ -3974,8 +3976,8 @@ a.toggle-btn { text-decoration: none; }
   .game-row {
     grid-template-columns: auto minmax(0, 1fr) auto auto;
     grid-template-areas: "grip teams meta rank";
-    gap: var(--space-3);
-    padding: var(--space-3) var(--space-4);
+    gap: var(--space-2);
+    padding: var(--space-2) var(--space-3);
   }
 
   .game-row.is-complete {
