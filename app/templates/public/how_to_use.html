@@ -1,0 +1,77 @@
+{% extends "base.html" %}
+{% block title %}How to use {{ APP_NAME }}{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <div>
+    <p class="eyebrow">How to use</p>
+    <h1 class="page-title">Running a pool, week by week</h1>
+  </div>
+</div>
+
+<article class="card prose">
+  <div class="card-body">
+
+    <p>
+      {{ APP_NAME }} is a weekly confidence pick'em pool for NFL and college football. A
+      commissioner sets up a league, everyone joins with a code, and every week the app
+      hands the group a fresh slate to pick. Here is how the pieces fit together.
+    </p>
+
+    <h2>The weekly slate</h2>
+    <p>
+      Each week the app builds a slate from the games with the smallest point spreads,
+      meaning the closest, most competitive matchups that week, not whichever games happen
+      to be on television. The default slate is 20 games, 8 from the NFL and 12 from
+      college football, and the commissioner can adjust both numbers for their league. The
+      spread is only used to choose which games make the slate. Scoring itself is
+      straight up: did you pick the team that actually won.
+    </p>
+
+    <h2>Confidence ranking</h2>
+    <p>
+      You do not have to pick every game on the slate, only the number your commissioner
+      requires (15 out of the default 20 game slate). For each game you pick, you choose
+      the winner and stake a confidence value on it. Your confidence points run from 1 up
+      to however many picks you are required to make, and you use every value exactly
+      once, your most confident pick getting the highest number. Drag to reorder, use the
+      up and down buttons, or type a value directly, whichever is easiest.
+    </p>
+
+    <h2>Scoring</h2>
+    <p>
+      {{ APP_NAME }}'s default rule is inverse scoring, and it changes how you should think
+      about your picks. A correct pick earns nothing. A wrong pick counts the confidence
+      points you staked on it against you. Lowest total wins the week. That means your
+      highest confidence pick is also your biggest risk: stake it on a game you are sure
+      about, because if that pick loses, you take the full penalty. A player who sits a
+      week out without submitting picks takes the maximum possible penalty for that week,
+      so skipping a week is never the safe play. A commissioner can switch their league to
+      the older, standard rule instead (a correct pick earns its staked points, highest
+      total wins) if that is what their group prefers, but inverse is the rule most leagues
+      run under.
+    </p>
+    <p>
+      Either way, "correct" (how many picks you got right) is tracked the same way, and the
+      app keeps a season long leaderboard: weekly points, season totals, games correct, and
+      weekly wins.
+    </p>
+
+    <h2>Joining a pool and making picks</h2>
+    <ul>
+      <li>Get a join code from your commissioner and create an account with it.</li>
+      <li>Each week, open This Week, pick your winners, and rank your confidence.</li>
+      <li>Save as you go. Picks lock at the first kickoff of the week, enforced by the
+        clock, so there is no late entry once the games start.</li>
+      <li>After the lock, everyone's picks become visible, so the pool can see the week
+        was played straight.</li>
+      <li>Check Season for the standings and Results for the week by week breakdown.</li>
+    </ul>
+
+    <p class="muted legal-note">
+      Ready to set one up. See <a href="/pricing">pricing</a>, or head to
+      <a href="/login">sign in</a> if you already have an account.
+    </p>
+  </div>
+</article>
+{% endblock %}

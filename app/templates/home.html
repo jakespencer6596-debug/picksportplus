@@ -1,0 +1,53 @@
+{% extends "base.html" %}
+{% import "components/icons.html" as ic %}
+{% block title %}{{ APP_NAME }}. Confidence pick'em for NFL and college football{% endblock %}
+
+{% block content %}
+<section class="hero">
+  <p class="eyebrow hero-eyebrow">Weekly confidence pick'em</p>
+  <h1 class="hero-title">The closest games, every week. All season long.</h1>
+  <p class="hero-lede">
+    {{ APP_NAME }} builds a fresh slate every week, but only the closest, most competitive
+    NFL and college football games. No blowouts to coast through. Rank your confidence
+    across the games you pick, and the app tracks your league's standings from kickoff to
+    the last week of the season.
+  </p>
+  <div class="hero-actions">
+    <a class="btn btn-primary" href="/pricing">See pricing</a>
+    <a class="btn btn-secondary" href="/how-to-use">How to use</a>
+  </div>
+</section>
+
+<div class="feature-grid">
+  <article class="feature-card">
+    <span class="feature-icon">{{ ic.icon("flag", 20) }}</span>
+    <h3>Only the closest games</h3>
+    <p>
+      Each week's slate is built from the smallest point spreads across the NFL and college
+      football, so every game on it is genuinely competitive, not a foregone conclusion.
+    </p>
+  </article>
+  <article class="feature-card">
+    <span class="feature-icon">{{ ic.icon("list", 20) }}</span>
+    <h3>Rank your confidence</h3>
+    <p>
+      Pick your winners, then stack your confidence points from your surest pick down to
+      your riskiest. One combined ranking across the slate, not a grid of coin flips.
+    </p>
+  </article>
+  <article class="feature-card">
+    <span class="feature-icon">{{ ic.icon("trophy", 20) }}</span>
+    <h3>Standings all season</h3>
+    <p>
+      Weekly points, season totals, and games correct are all tracked automatically, so
+      your league always knows exactly where it stands.
+    </p>
+  </article>
+</div>
+
+<div class="landing-cta">
+  <h2>Ready to run your own pool?</h2>
+  <p>See what it costs to get your league running, or read how the weekly pick works first.</p>
+  <a class="btn btn-primary" href="/pricing">View pricing</a>
+</div>
+{% endblock %}

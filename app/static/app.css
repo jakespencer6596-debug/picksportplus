@@ -735,6 +735,61 @@ details.user-menu[open] > :not(summary) button:hover {
   font-weight: 600;
 }
 
+/* -- Mobile site menu (hamburger) -----------------------------------------
+   Phone width only (.mobile-only hides it at 768px, where the full row of
+   Pricing / How to use / Contact / Login, or the signed-in Home link,
+   already fits in .nav / .user-menu instead). Toggled by app.js
+   (initMenuToggle): [hidden] removed on open, .is-open added a frame later
+   so the fade-and-drop actually animates; both happen in the same paint
+   when prefers-reduced-motion is on, see app.js's reduceMotion branch. The
+   global reduced-motion rule in Section 03 collapses the transition itself
+   to near zero either way, this only avoids animating a menu that opens
+   pre-collapsed. */
+.site-menu {
+  position: fixed;
+  top: var(--topbar-h);
+  left: 0;
+  right: 0;
+  z-index: var(--z-menu);
+  background: var(--bg-surface);
+  border-bottom: var(--hairline);
+  box-shadow: var(--shadow);
+  padding: var(--space-2);
+  opacity: 0;
+  transform: translateY(-6px);
+  transition: opacity var(--dur) var(--ease), transform var(--dur) var(--ease);
+}
+
+.site-menu.is-open {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+.site-menu-nav {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.site-menu-nav a {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: var(--tap);
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  font-size: var(--fs-sm);
+  font-weight: 500;
+}
+
+.site-menu-nav a:not(.btn):hover {
+  background: var(--bg-surface-alt);
+  text-decoration: none;
+}
+
+.site-menu-nav .btn { margin-top: var(--space-1); justify-content: flex-start; }
+
 /* -- Footer -------------------------------------------------------------- */
 
 .footer {
@@ -1096,6 +1151,36 @@ details.user-menu[open] > :not(summary) button:hover {
   border-color: var(--text-invert);
   color: var(--text-invert);
 }
+
+/* The signed-out header's Login button. Deliberately a different treatment from the plain
+   text Pricing / How to use / Contact links beside it, filled antique gold against the
+   green top bar, so it reads as the one action that actually leaves the marketing pages.
+   --ink on --gold measures 6.15:1. See DECISIONS.md, Post-launch fixes, for why gold (not a
+   second green fill or the maroon accent) was chosen. */
+.btn-gold {
+  background: var(--gold);
+  border-color: var(--gold);
+  color: var(--ink);
+}
+
+.btn-gold:hover {
+  background: var(--gold-soft);
+  border-color: var(--gold-soft);
+  color: var(--ink);
+}
+
+.btn-gold:active { background: var(--gold-soft); }
+
+/* .topbar a sets cream text at the same specificity .btn-gold's own color rule carries, so
+   without this override every Login label on the green bar would render invisible cream on
+   gold. Two classes here (0,2,0) outrank .topbar a's class+element selector (0,1,1). */
+.topbar .btn-gold,
+.topbar .btn-gold:hover {
+  color: var(--ink);
+}
+
+/* Breathing room between the plain nav links and the Login button that follows them. */
+.nav-cta { margin-left: var(--space-2); }
 
 .btn-danger {
   background: var(--negative);
@@ -3692,6 +3777,245 @@ a.toggle-btn { text-decoration: none; }
 
 
 /* ==========================================================================
+   16  PUBLIC PAGES: HERO, PRICING, MARKETING
+   The landing page, pricing, how to use, and contact. Everything here is
+   built from the same cards, buttons and spacing scale the signed in app
+   already uses, no new component system.
+   ========================================================================== */
+
+/* -- Landing page hero ---------------------------------------------------- */
+
+.hero {
+  padding: var(--space-8) 0 var(--space-6);
+  text-align: center;
+}
+
+.hero-eyebrow {
+  justify-content: center;
+}
+
+.hero-eyebrow::after {
+  margin-inline: auto;
+}
+
+.hero-title {
+  max-width: 20ch;
+  margin: 0 auto;
+  font-family: var(--font-display);
+  font-size: var(--fs-xl);
+  font-weight: 600;
+  line-height: var(--lh-tight);
+  letter-spacing: .01em;
+}
+
+.hero-lede {
+  max-width: 56ch;
+  margin: var(--space-4) auto 0;
+  font-size: var(--fs-md);
+  line-height: var(--lh-base);
+  color: var(--text-muted);
+}
+
+.hero-actions {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: var(--space-3);
+  max-width: 320px;
+  margin: var(--space-6) auto 0;
+}
+
+/* -- Feature list, three short "how it works" facts on the landing page -- */
+
+.feature-grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: var(--space-4);
+  margin-bottom: var(--space-8);
+}
+
+.feature-card {
+  padding: var(--space-4);
+  background: var(--bg-surface);
+  border: var(--hairline);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+}
+
+.feature-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  margin-bottom: var(--space-3);
+  background: var(--accent-tint);
+  border-radius: var(--radius-sm);
+  color: var(--accent);
+}
+
+.feature-card h3 {
+  margin: 0 0 var(--space-1);
+  font-family: var(--font-display);
+  font-size: var(--fs-md);
+  font-weight: 600;
+}
+
+.feature-card p {
+  margin: 0;
+  color: var(--text-muted);
+  line-height: var(--lh-base);
+}
+
+.landing-cta {
+  padding: var(--space-6);
+  text-align: center;
+  background: var(--bg-surface-alt);
+  border: var(--hairline);
+  border-radius: var(--radius);
+}
+
+.landing-cta h2 {
+  margin: 0 0 var(--space-2);
+  font-family: var(--font-display);
+  font-size: var(--fs-lg);
+  font-weight: 600;
+}
+
+.landing-cta p {
+  margin: 0 0 var(--space-4);
+  color: var(--text-muted);
+}
+
+.landing-cta .btn { min-width: 200px; }
+
+/* -- Pricing ---------------------------------------------------------------- */
+
+.pricing-grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: var(--space-4);
+  margin-bottom: var(--space-6);
+}
+
+.pricing-card {
+  display: flex;
+  flex-direction: column;
+  padding: var(--space-5);
+  background: var(--bg-surface);
+  border: var(--hairline);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+}
+
+.pricing-card.is-featured {
+  border-color: var(--decor);
+  border-width: 2px;
+}
+
+.pricing-name {
+  font-family: var(--font-display);
+  font-size: var(--fs-md);
+  font-weight: 600;
+  margin: 0;
+}
+
+.pricing-price {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-1);
+  margin: var(--space-3) 0;
+  font-family: var(--font-display);
+  font-size: var(--fs-3xl);
+  font-weight: 600;
+  color: var(--accent);
+}
+
+.pricing-price .unit {
+  font-family: var(--font-body);
+  font-size: var(--fs-sm);
+  font-weight: 500;
+  color: var(--text-muted);
+}
+
+.pricing-list {
+  margin: 0 0 var(--space-5);
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  flex-grow: 1;
+}
+
+.pricing-list li {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+  font-size: var(--fs-sm);
+  line-height: var(--lh-snug);
+}
+
+.pricing-list svg {
+  flex: none;
+  margin-top: 2px;
+  color: var(--accent);
+}
+
+.refer-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding: var(--space-5);
+  background: var(--bg-surface-alt);
+  border: var(--hairline);
+  border-radius: var(--radius);
+}
+
+.refer-card h2 {
+  margin: 0;
+  font-family: var(--font-display);
+  font-size: var(--fs-lg);
+  font-weight: 600;
+}
+
+.refer-card p { margin: 0; color: var(--text-muted); }
+
+/* -- Contact ---------------------------------------------------------------- */
+
+.contact-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  max-width: 44ch;
+  padding: var(--space-6);
+  background: var(--bg-surface);
+  border: var(--hairline);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  text-align: center;
+}
+
+.contact-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 48px;
+  height: 48px;
+  margin: 0 auto;
+  background: var(--accent-tint);
+  border-radius: var(--radius-pill);
+  color: var(--accent);
+}
+
+.contact-email {
+  font-family: var(--font-display);
+  font-size: var(--fs-md);
+  font-weight: 600;
+}
+
+
+/* ==========================================================================
    RESPONSIVE. Breakpoints at 640px, 768px and 1024px.
    Base styles above target 360px.
    ========================================================================== */
@@ -3987,6 +4311,24 @@ a.toggle-btn { text-decoration: none; }
   .game-meta { gap: var(--space-2) var(--space-4); }
 
   .rank-badge { width: 32px; height: 32px; font-size: var(--fs-base); }
+
+  /* -- Public pages: hero, feature grid, pricing -------------------------- */
+
+  .hero { padding: var(--space-12) 0 var(--space-8); }
+
+  .hero-title { font-size: var(--fs-2xl); max-width: 26ch; }
+
+  .hero-actions {
+    flex-direction: row;
+    justify-content: center;
+    max-width: none;
+  }
+
+  .hero-actions .btn { min-width: 180px; }
+
+  .feature-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+
+  .pricing-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 
 /* -- 1024px: the game row collapses to a single line --------------------- */

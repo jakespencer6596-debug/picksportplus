@@ -191,10 +191,21 @@ def test_health(client):
     assert client.get("/healthz").json() == {"status": "ok"}
 
 
-def test_root_redirects_to_login_when_signed_out(client):
+def test_root_renders_landing_page_when_signed_out(client):
+    response = client.get("/")
+    assert response.status_code == 200
+    assert "The closest games, every week" in response.text
+    assert "Pricing" in response.text
+    # The signed-out header, not the signed-in one.
+    assert 'href="/login"' in response.text
+    assert "This Week" not in response.text
+
+
+def test_root_redirects_to_picks_when_signed_in(client, world):
+    _login(client, "player@example.com")
     response = client.get("/")
     assert response.status_code == 303
-    assert response.headers["location"] == "/login"
+    assert response.headers["location"] == "/picks"
 
 
 def test_login_page_renders(client):
@@ -203,6 +214,44 @@ def test_login_page_renders(client):
     assert "Sign in" in response.text
     # The design system must actually be wired up.
     assert "app.css" in response.text
+
+
+def test_pricing_page_renders_signed_out(client):
+    response = client.get("/pricing")
+    assert response.status_code == 200
+    assert "199" in response.text
+    assert "350" in response.text
+    assert "50" in response.text
+    assert 'href="/login"' in response.text
+
+
+def test_pricing_page_renders_signed_in(client, world):
+    _login(client, "player@example.com")
+    response = client.get("/pricing")
+    assert response.status_code == 200
+    assert "199" in response.text
+    assert "Regular Player" in response.text  # the signed-in header, not the public one
+
+
+def test_how_to_use_page_renders(client, world):
+    response = client.get("/how-to-use")
+    assert response.status_code == 200
+    assert "inverse" in response.text.lower()
+
+    _login(client, "player@example.com")
+    response = client.get("/how-to-use")
+    assert response.status_code == 200
+    assert "Regular Player" in response.text
+
+
+def test_contact_page_renders(client, world):
+    response = client.get("/contact")
+    assert response.status_code == 200
+
+    _login(client, "player@example.com")
+    response = client.get("/contact")
+    assert response.status_code == 200
+    assert "Regular Player" in response.text
 
 
 def test_register_page_renders(client):

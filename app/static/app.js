@@ -685,6 +685,60 @@
     }
   }
 
+  /* The header's mobile hamburger menu (base.html: [data-menu-toggle] plus the
+     [data-menu-panel] it controls). One toggle button drives one panel on every page, signed
+     in or signed out, so this stays a single small function rather than page specific code.
+     Opening removes [hidden] then adds .is-open a frame later so the CSS opacity/transform
+     transition in app.css actually has a "before" state to animate from; reduceMotion (set
+     once at the top of this file, see the note there) skips the frame delay so an open never
+     visibly animates for a visitor who asked for less motion, without a second matchMedia
+     check. Escape and an outside click both close it and, for Escape, return focus to the
+     toggle button so a keyboard user never loses their place. */
+  function initMenuToggle() {
+    var toggle = document.querySelector("[data-menu-toggle]");
+    var panel = document.querySelector("[data-menu-panel]");
+    if (!toggle || !panel) return;
+
+    function close() {
+      panel.classList.remove("is-open");
+      panel.hidden = true;
+      toggle.setAttribute("aria-expanded", "false");
+    }
+
+    function open() {
+      panel.hidden = false;
+      toggle.setAttribute("aria-expanded", "true");
+      if (reduceMotion) {
+        panel.classList.add("is-open");
+      } else {
+        window.requestAnimationFrame(function () {
+          panel.classList.add("is-open");
+        });
+      }
+    }
+
+    toggle.addEventListener("click", function (e) {
+      e.stopPropagation();
+      if (panel.hidden) {
+        open();
+      } else {
+        close();
+      }
+    });
+
+    document.addEventListener("click", function (e) {
+      if (panel.hidden) return;
+      if (panel.contains(e.target) || toggle.contains(e.target)) return;
+      close();
+    });
+
+    document.addEventListener("keydown", function (e) {
+      if (e.key !== "Escape" || panel.hidden) return;
+      close();
+      toggle.focus();
+    });
+  }
+
   function init() {
     document.addEventListener("click", onClick);
     document.addEventListener("keydown", onKeydown);
@@ -703,6 +757,7 @@
     initLockFlow();
     initSortableTables();
     initViewToggle();
+    initMenuToggle();
     tickCountdowns();
     setInterval(tickCountdowns, 1000);
   }

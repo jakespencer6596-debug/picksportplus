@@ -94,7 +94,7 @@ def health():
 
 
 # Routers are imported after app creation so they can import from app.main if needed.
-from app.routers import admin, auth, leaderboard, legal, picks, results  # noqa: E402
+from app.routers import admin, auth, leaderboard, legal, picks, public, results  # noqa: E402
 
 app.include_router(auth.router)
 app.include_router(picks.router)
@@ -102,10 +102,13 @@ app.include_router(leaderboard.router)
 app.include_router(results.router)
 app.include_router(admin.router)
 app.include_router(legal.router)
+app.include_router(public.router)
 
 
 @app.get("/", include_in_schema=False)
 def index(request: Request):
+    """A signed in visitor still lands on this week's picks, unchanged. A signed out
+    visitor gets the public landing page instead of being bounced straight to /login."""
     if request.session.get("uid"):
         return RedirectResponse("/picks", status_code=303)
-    return RedirectResponse("/login", status_code=303)
+    return render(request, "home.html", {}, current_user=None, pool=None, is_commissioner=False)

@@ -42,20 +42,47 @@
       </nav>
 
       <div class="user-menu">
+        <a class="nav-link desktop-only" href="/" title="Back to the home page">
+          {{ ic.icon("home", 18) }}<span class="btn-label">Home</span>
+        </a>
         <span class="user-name">{{ current_user.display_name }}</span>
         <form method="post" action="/logout" class="inline-form">
           <button class="btn btn-ghost btn-sm" type="submit">
             {{ ic.icon("logout", 16) }}<span class="btn-label">Sign out</span>
           </button>
         </form>
+        <button class="btn btn-ghost btn-sm mobile-only" type="button" data-menu-toggle
+                aria-haspopup="true" aria-expanded="false" aria-controls="site-menu">
+          {{ ic.icon("menu", 18) }}<span class="visually-hidden">Menu</span>
+        </button>
       </div>
     {% else %}
-      <div class="user-menu">
-        <a class="btn btn-secondary btn-sm" href="/login">Sign in</a>
-      </div>
+      <nav class="nav" aria-label="Primary">
+        <a class="nav-link" href="/pricing">Pricing</a>
+        <a class="nav-link" href="/how-to-use">How to use</a>
+        <a class="nav-link" href="/contact">Contact</a>
+        <a class="btn btn-gold btn-sm nav-cta" href="/login">Login</a>
+      </nav>
+      <button class="btn btn-ghost btn-sm mobile-only" type="button" data-menu-toggle
+              aria-haspopup="true" aria-expanded="false" aria-controls="site-menu">
+        {{ ic.icon("menu", 18) }}<span class="visually-hidden">Menu</span>
+      </button>
     {% endif %}
   </div>
 </header>
+
+<div class="site-menu mobile-only" id="site-menu" data-menu-panel hidden>
+  <nav class="site-menu-nav" aria-label="More">
+    {% if current_user %}
+      <a href="/">{{ ic.icon("home", 18) }}<span>Back to the home page</span></a>
+    {% else %}
+      <a href="/pricing">{{ ic.icon("dollar", 18) }}<span>Pricing</span></a>
+      <a href="/how-to-use">{{ ic.icon("info", 18) }}<span>How to use</span></a>
+      <a href="/contact">{{ ic.icon("mail", 18) }}<span>Contact</span></a>
+      <a class="btn btn-gold btn-sm" href="/login">Login</a>
+    {% endif %}
+  </nav>
+</div>
 
 {% block subbar %}{% endblock %}
 

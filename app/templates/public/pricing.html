@@ -1,0 +1,64 @@
+{% extends "base.html" %}
+{% import "components/icons.html" as ic %}
+{% block title %}Pricing. {{ APP_NAME }}{% endblock %}
+
+{% block content %}
+{% set refer_subject = "Check out PickSportPlus for your pick'em pool" %}
+{% set refer_body %}
+Hey,
+
+I've been running our confidence pick'em pool on PickSportPlus this season. Every week it
+only publishes the closest games, so every pick actually matters, and it tracks the whole
+season's standings for you automatically.
+
+Figured your group might like it too: {{ base_url }}
+
+Let me know if you want a hand getting your first week set up.
+{% endset %}
+
+<div class="page-head">
+  <div>
+    <p class="eyebrow">Pricing</p>
+    <h1 class="page-title">Simple, season-long pricing</h1>
+  </div>
+  <p class="muted">One price for the whole season. No hidden fees.</p>
+</div>
+
+<div class="pricing-grid">
+  <article class="pricing-card">
+    <h2 class="pricing-name">One league</h2>
+    <p class="pricing-price">199<span class="unit">dollars / season</span></p>
+    <ul class="pricing-list">
+      <li>{{ ic.icon("check", 18) }}<span>One league, unlimited players</span></li>
+      <li>{{ ic.icon("check", 18) }}<span>Every week of the season, start to finish</span></li>
+      <li>{{ ic.icon("check", 18) }}<span>Weekly slates built from the closest lines</span></li>
+      <li>{{ ic.icon("check", 18) }}<span>Confidence scoring, standings, and results, all season</span></li>
+    </ul>
+    <a class="btn btn-primary" href="/how-to-use">See how it works</a>
+  </article>
+
+  <article class="pricing-card is-featured">
+    <h2 class="pricing-name">Two leagues</h2>
+    <p class="pricing-price">350<span class="unit">dollars / season</span></p>
+    <ul class="pricing-list">
+      <li>{{ ic.icon("check", 18) }}<span>Two separate leagues, each with unlimited players</span></li>
+      <li>{{ ic.icon("check", 18) }}<span>Everything in the one league plan, twice over</span></li>
+      <li>{{ ic.icon("check", 18) }}<span>Good for a family league and an office league at once</span></li>
+      <li>{{ ic.icon("check", 18) }}<span>Own standings and results for each league</span></li>
+    </ul>
+    <a class="btn btn-primary" href="/how-to-use">See how it works</a>
+  </article>
+</div>
+
+<div class="refer-card">
+  <h2>Refer a friend, earn 50 dollars</h2>
+  <p>
+    When you refer a friend and they sign up for {{ APP_NAME }}, you get 50 dollars off your
+    own league creation. Send them a quick note below, then let us know who you referred
+    once they have joined and we will apply your credit.
+  </p>
+  <a class="btn btn-gold" href="mailto:?subject={{ refer_subject | urlencode }}&body={{ refer_body | trim | urlencode }}">
+    {{ ic.icon("send", 18) }}<span class="btn-label">Refer a friend</span>
+  </a>
+</div>
+{% endblock %}

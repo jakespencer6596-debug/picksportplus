@@ -1,0 +1,31 @@
+{% extends "base.html" %}
+{% import "components/icons.html" as ic %}
+{% block title %}Contact. {{ APP_NAME }}{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <div>
+    <p class="eyebrow">Contact</p>
+    <h1 class="page-title">Get in touch</h1>
+  </div>
+</div>
+
+<div class="contact-card">
+  <span class="contact-icon">{{ ic.icon("mail", 22) }}</span>
+  <p>
+    Questions about {{ APP_NAME }}, setting up a league, or anything else. We would like to
+    hear from you.
+  </p>
+  {% if SUPPORT_EMAIL %}
+    <a class="contact-email" href="mailto:{{ SUPPORT_EMAIL }}">{{ SUPPORT_EMAIL }}</a>
+    <a class="btn btn-primary" href="mailto:{{ SUPPORT_EMAIL }}">
+      {{ ic.icon("mail", 18) }}<span class="btn-label">Send an email</span>
+    </a>
+  {% else %}
+    <p class="muted">
+      A public contact address is not set up yet. If you are already in a pool, your
+      commissioner is the fastest way to reach us.
+    </p>
+  {% endif %}
+</div>
+{% endblock %}

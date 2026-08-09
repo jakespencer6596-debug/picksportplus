@@ -1604,3 +1604,81 @@ September 12, 2026 candidate pool went from "College 7, NFL 13" to "College 12, 
 full 8/12 target, entirely from real games (5 of the 20 slate games have no posted line yet and
 are correctly present, ranked after every game with a known spread). `ruff check .`, `black .`,
 and `pytest -q` all clean, 786 passed, 0 failed. No schema change, so no Alembic migration.
+
+### Public landing page, pricing, how to use, and contact pages
+
+Before this, `/` always redirected: signed in to `/picks`, signed out to `/login`. There was
+no public facing page at all, so a link to the app with nobody signed in just bounced a
+visitor straight to a login form with no explanation of what the product even is. Added a
+real front door plus three supporting pages, all public, none of them behind `require_user`.
+
+**Routing.** `/` stays in `app/main.py` (it was never a router route). A signed in visitor's
+`request.session.get("uid")` check is untouched, still a 303 to `/picks`. A signed out visitor
+now renders `app/templates/home.html` instead of redirecting to `/login`. `/pricing`,
+`/how-to-use` and `/contact` are a new `app/routers/public.py`, following the exact
+`_chrome(db, user)` pattern already established in `app/routers/legal.py` for `/terms` and
+`/privacy` (duplicated rather than imported, matching how legal.py itself keeps that helper
+private and self contained rather than shared from a common module).
+
+**Header nav, signed out.** The old bare "Sign in" button is now a full row: Pricing, How to
+use, Contact as plain `.nav-link` text links, then Login as a new `.btn-gold` button. Gold
+(not a second green fill, and not the maroon secondary accent) was picked because the row
+already has a green top bar as its background: a second green button would blend into the
+bar, and gold is the site's one other high visibility color, already used for the wordmark's
+"Plus" and for ribbons/badges, so it reads immediately as "the one action that leaves the
+marketing pages" without introducing a new hue. Contrast checked: ink on gold is 6.15:1 (AA
+for both normal and large text). `.topbar .btn-gold` overrides `.topbar a`'s cream text the
+same way the pre-existing `.topbar .btn-secondary` rule already had to, same specificity
+reasoning documented inline in `app.css`.
+
+**Header nav, signed in.** Added a persistent way back to the public site. Desktop: a small
+"Home" link (house icon) sits in `.user-menu`, `.desktop-only`, immediately left of the
+display name, so it reads as "leave the app" rather than being confused for one of the four
+pool-scoped nav tabs (This Week / Season / Results / Admin). Mobile: the bottom tab bar is
+already at its four item cap per the brief, so Home does not go there. Instead both the
+signed in and signed out headers share one hamburger affordance: a `.mobile-only` toggle
+button next to the sign out button (signed in) or next to the desktop nav (signed out), which
+opens `#site-menu`, a fixed dropdown panel directly under the top bar. Signed in, that panel
+holds exactly one link, Home. Signed out, it holds Pricing / How to use / Contact / Login,
+mirroring the desktop row. One shared panel and one shared `initMenuToggle()` in `app.js`
+drive both cases, keyed off `[data-menu-toggle]` / `[data-menu-panel]`, rather than two
+separate menu implementations.
+
+**Hamburger menu mechanics.** Plain button, not `<details>`: `<details>` gives free keyboard
+toggling but not free outside-click-to-close or Escape-to-close, and the brief asked for
+both, so a small dedicated `initMenuToggle()` (vanilla JS, no new dependency) owns open,
+close, outside click, and Escape (which also returns focus to the toggle button). It reuses
+the `reduceMotion` variable already declared at the top of `app.js` (the same one
+`initSortable` and the lock flow's `scrollIntoView` already read) rather than adding a second
+`matchMedia` check: opening removes `[hidden]` then adds `.is-open` an animation frame later so
+the CSS opacity/transform transition has a "before" state to animate from, and `reduceMotion`
+skips that frame delay so the panel appears pre-opened instead of visibly sliding in. The
+blanket reduced motion rule in `app.css` Section 03 also collapses the transition duration
+itself to near zero either way, so this is belt and suspenders, not the only protection.
+
+**Pricing copy.** 199 dollars per season for one league, 350 for two, both hard numbers in
+`app/templates/public/pricing.html`, not only in a docstring, per the brief's own test
+requirement. The refer-a-friend button is a `mailto:?subject=...&body=...` link built with
+Jinja's `urlencode` filter over a `{% set %}...{% endset %} | trim` captured message; there is
+no backend referral tracking, no discount code, and no database change, exactly as scoped.
+Redemption of the 50 dollar credit is described as a manual step (email us who you referred),
+since there is nothing here to automate it against.
+
+**How to use copy.** Describes the real, current default: `inverse` scoring (a correct pick
+earns nothing, a wrong pick counts its staked points against you, lowest total wins), pulled
+from `app/scoring.py`'s own module docstring and `SPEC.md` Section 9, not the older `standard`
+(highest wins) behavior. `standard` is mentioned as a per-league setting a commissioner can
+still switch to, since it is a real, live option, not a claim that it is the default.
+
+**New icons.** `menu`, `mail`, `send`, and `home` added to `app/templates/components/icons.html`,
+real Lucide path data (the same canonical paths shipped in Lucide's icon set, matching the
+existing simple multi-path style already used by `calendar`, `trophy`, etc.), not invented
+shapes.
+
+**Verification.** `ruff check .`, `black .`, and `pytest -q` all clean, 791 passed, 0 failed
+(786 before this change, plus 6 new tests covering the landing page, the signed-in `/`
+redirect regression, and all three new pages rendering for both a signed out and a signed in
+visitor). No schema change, so no Alembic migration. `grep -rn "—" app/ tests/` finds nothing
+new. No new Python dependency: pricing is informational copy, the referral button and the
+contact page are both plain `mailto:` links the visitor's own email client opens, nothing is
+sent from the server.
