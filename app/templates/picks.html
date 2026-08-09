@@ -344,32 +344,29 @@
 {% else %}
 {# ------------------------------------------------ 3: the week is open to pick #}
 <section class="section">
-  <div class="panel">
-    <p class="eyebrow">How this week works</p>
+  {# Closed by default (Spec Section 8): a returning player wants the games, not a refresher
+     on the rules every time. Native <details>, same pattern as the scenarios panel in
+     results.html, no JS needed. #}
+  <details class="panel how-it-works">
+    <summary class="eyebrow">How this week works{{ ic.icon("down", 16, "how-it-works-caret") }}</summary>
     {% if pool.scoring_mode == "inverse" %}
       <p>
-        Tap a team to take the winner for {{ n }} of these {{ slate_size }} games. Type a
-        point value straight into a row, from {{ n }} down to 1, or tap "Reorder to inputs"
-        to snap the list to whatever you have typed, then drag a row by its grip (or use the
-        up and down buttons) to fine tune the order. Low score wins: a wrong pick counts its
-        staked points against you, so stake {{ n }} on your surest pick only if you can
-        afford to be wrong about it. When you are done, lock your picks in as a deliberate
-        last step, separate from saving.
+        Tap a team to pick {{ n }} of these {{ slate_size }} games, type a point value or
+        drag rows to rank them. Low score wins: a wrong pick counts its staked points against
+        you, so stake {{ n }} only on a pick you can afford to lose. Lock your picks in as a
+        last, separate step from saving.
       </p>
     {% else %}
       <p>
-        Tap a team to take the winner for {{ n }} of these {{ slate_size }} games. Type a
-        point value straight into a row, from {{ n }} down to 1, or tap "Reorder to inputs"
-        to snap the list to whatever you have typed, then drag a row by its grip (or use the
-        up and down buttons) to fine tune the order. A correct pick earns the points you
-        staked on it. When you are done, lock your picks in as a deliberate last step,
-        separate from saving.
+        Tap a team to pick {{ n }} of these {{ slate_size }} games, type a point value or
+        drag rows to rank them. A correct pick earns the points you staked on it. Lock your
+        picks in as a last, separate step from saving.
       </p>
     {% endif %}
     <p class="form-hint">
       Keyboard: focus a game, then hold alt and press the up or down arrow to move it.
     </p>
-  </div>
+  </details>
 
   <form method="post" action="/picks" class="stack">
     <div class="spread picks-bar" id="save">

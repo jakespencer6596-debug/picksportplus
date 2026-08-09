@@ -2768,6 +2768,29 @@ a.toggle-btn { text-decoration: none; }
   color: var(--accent);
 }
 
+/* Closed by default (Spec Section 8): a short rules refresher a returning player does not
+   have to scroll past to get to the games. Native <details>, browser marker removed in favor
+   of a rotating caret so the eyebrow rule (a small underline, see .eyebrow::after) stays
+   visually intact instead of colliding with a default disclosure triangle. */
+.how-it-works summary {
+  cursor: pointer;
+  list-style: none;
+}
+
+.how-it-works summary::-webkit-details-marker { display: none; }
+
+.how-it-works-caret {
+  display: inline-block;
+  margin-left: var(--space-2);
+  vertical-align: -3px;
+  transition: transform var(--dur) var(--ease);
+}
+
+.how-it-works[open] .how-it-works-caret { transform: rotate(180deg); }
+
+.how-it-works > p,
+.how-it-works > .form-hint { margin-top: var(--space-3); }
+
 .custom-scenario-games {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
