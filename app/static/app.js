@@ -507,6 +507,14 @@
       delay: 80,
       delayOnTouchOnly: true,
       touchStartThreshold: 4,
+      /* SortableJS already reorders the real rows live as the dragged row passes over
+         others, onChange fires on every one of those live moves. Renumber right then, not
+         just onEnd, so the point values update while you are still dragging instead of
+         only once you drop. onEnd still fires last (onChange does not fire for the final
+         drop position on some input methods), so keep both. */
+      onChange: function () {
+        renumber(list);
+      },
       onEnd: function () {
         renumber(list);
         markDirty();
