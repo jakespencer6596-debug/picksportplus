@@ -1682,3 +1682,116 @@ visitor). No schema change, so no Alembic migration. `grep -rn "—" app/ tests/
 new. No new Python dependency: pricing is informational copy, the referral button and the
 contact page are both plain `mailto:` links the visitor's own email client opens, nothing is
 sent from the server.
+
+### Compact, expandable game rows on desktop (1024px and up)
+
+The product owner wanted all 20 games of a slate meaningfully closer to fitting on one desktop
+screen at once, "super skinny," still readable, with a per row expand for the rest. Scoped
+entirely to `.game-list[data-sortable] .game-row`, the open, still-editable pick list rendered
+by the `{% else %}` branch (state 3) of `app/templates/picks.html`. The read only slate
+(`readonly_list`, states 3a/3b/4) and `results.html`, which both reuse the plain
+`.game-row.is-complete` markup, are untouched on purpose, exactly as scoped.
+
+**Always visible in the compact row; never moves.** The drag grip, both team abbreviations and
+full names (already ellipsis truncated, so a long name costs width, never height) with their
+pick buttons at the unchanged 44px minimum tap target (Spec 3f, non-negotiable, verified by
+inspection: `.team-btn`'s `min-height: 44px` is untouched anywhere in this change), the
+confidence number input and chip, the up/down rank buttons (kept, shrunk), and the new expand
+toggle.
+
+**Moved into the collapsed `.game-detail` panel.** The league badge, `game.line_text`, the
+kickoff time, and each team's record. None of these were ever load bearing for the row's
+*height* (the row was always exactly as tall as `.team-btn`'s 44px floor plus padding; a badge,
+a spread and a kickoff time all sit comfortably under 44px and were never what made the row
+tall), only its *width*, so hiding them is what actually buys back real estate. The full team
+name stayed inline rather than joining them: moving it would not have shrunk the row by a
+single pixel either, and losing it would have made the compact row harder to scan for no
+compactness benefit at all.
+
+**How the panel gets its content, and why nothing was duplicated by way of a JS read.** Rather
+than teaching `matchup`/`team_button` a `show_record` flag and having the caller reassemble the
+suppressed pieces somewhere else in the DOM, `picks.html` renders the badge/line/kickoff/record
+block a second time, directly from `game`/`pick`, inside `.game-detail`, and leaves
+`matchup`/`team_button`/`league_badge` completely untouched, same signature, same output, every
+call site (grep confirms `picks.html` is the only caller of either macro; `results.html` builds
+its own row by hand and never calls them). The originals keep rendering in their old spot in
+the DOM at every width; app.css only `display: none`s the redundant copies (`.game-meta`'s
+direct-child badge/line/kick, and `.team-record` inside `.team-btn`) once the viewport is
+1024px and up, and only inside `.game-list[data-sortable] .game-row`. Below that width nothing
+in the DOM or the CSS cascade for this list changed at all, which is what makes "mobile is
+byte-for-byte the same layout" a fact about the cascade rather than a claim to go re-verify by
+hand. The tradeoff is a small amount of duplicated markup (one badge, one line of text, one
+kickoff time, two short record strings) per row; the alternative, a macro that conditionally
+omits content the caller then has to reconstruct from scratch anyway, duplicates exactly the
+same amount of logic one level up for no benefit, so the plain, boring option won.
+
+**The toggle.** A small chevron button, `.row-expand`, reusing the existing `down` icon exactly
+the way `.how-it-works-caret` already does (`ic.icon("down", 16, "row-expand-caret")`, rotated
+180deg via `[aria-expanded="true"] .row-expand-caret`), no new icon. `aria-expanded` and
+`aria-controls="game-detail-{{ game.id }}"` are wired server side; `app.js`'s `onClick` gained
+one new branch, `toggleRowDetail`, checked first via `e.target.closest("[data-row-toggle]")`.
+It is deliberately a lighter version of `initMenuToggle`'s pattern, not a copy of the whole
+thing: no outside-click-to-close and no Escape handling, since the panel is inline content
+inside its own row, not a floating overlay covering the page, and the brief was explicit that a
+native `<button>`'s own Enter/Space handling is enough. What it does keep from
+`initMenuToggle` is the shape: `hidden` removed, `.is-open` added a animation frame later
+(skipped under `reduceMotion`, the one module level flag, no second `matchMedia` check) so the
+opacity transition has a "before" state, and closing drops `.is-open` and restores `hidden` in
+the same tick. `.game-detail:not([hidden])`, not a bare `.game-detail` rule, for the identical
+reason `.game-list-divider` already uses that pattern (see the comment above `regroupDivider` in
+`app.js`): a plain class rule sits at the same specificity as the UA stylesheet's `[hidden]`
+rule and would win on source order, making the panel visible while still hidden.
+
+**Grid mechanics, so a collapsed panel costs zero pixels, not just zero visibility.** The
+detail panel is placed with `grid-column: 1 / -1` and only gets `grid-row: 2` inside the
+`:not([hidden])` rule, never outside it. An element with `display: none` (what `[hidden]`
+resolves to, and what a collapsed panel always has below 1024px) is removed from box generation
+entirely and never participates in grid track sizing, so the browser never creates an implicit
+second row, and no `gap` is ever reserved for one, while the panel is collapsed. The toggle
+button lives in a fifth grid column added only inside `.game-list[data-sortable] .game-row`'s
+own rule; `.game-row`'s shared `grid-template-areas: "grip teams meta rank"` (used by every
+other page that renders a `.game-row`) is untouched, the fifth column is simply never claimed
+by that area string, so the toggle is placed by explicit `grid-column: 5` instead of joining
+the named area system, and no other page that reads that shared rule sees any change.
+
+**Row height, and roughly how many rows that buys back.** The one thing that cannot get
+shorter, on purpose, is `.team-btn`'s 44px minimum tap target, so that stays the floor. Desktop
+row padding-block dropped from `var(--space-2)` (8px) each edge to `var(--space-1)` (4px) each
+edge, and the interactive list's own row gap dropped from `var(--space-2)` (8px) to
+`var(--space-1)` (4px); the grip and the two rank buttons shrank from the 44px square they
+shared with `.team-btn` down to 32px, since the 44px floor was only ever a requirement for team
+pick buttons, not for either of those. Net: a compact row is now 52px tall (4 + 44 + 4) with a
+4px gap to the next one, 56px per row all in, versus roughly 60px tall with an 8px gap (68px
+per row all in) before this change, about an 18% reduction. Twenty rows: about 1,116px of list
+height now versus about 1,352px before. That is a real, visible reduction, not a token one, but
+it does not get all 20 games onto one ordinary laptop screen at once by itself, since the 44px
+tap target floor caps how much further any row can shrink; the expand panel is what makes up
+the rest of the "more powerful" ask from here, without trading away the tap target to get
+there.
+
+**Dragging.** `SortableJS`'s `handle: ".game-grip"` option was already the only thing that can
+start a drag; the new toggle button and detail panel are both plain siblings of the grip inside
+the same `<li>`, never nested inside it, so neither one changes what can pick a row up. Verified
+by inspection, not by running the JS (this environment cannot run a browser, see Phase 9 and
+the earlier post launch notes for the same, already documented, limitation): the toggle button
+is a `<button>`, SortableJS only starts a drag from a `pointerdown`/`mousedown` inside the
+element matched by `handle`, and the toggle is not inside `.game-grip`'s DOM subtree.
+
+**Confidence cap, auto numbering, and the divider.** None of `renumber`, `regroupDivider`,
+`nextAvailableConfidence`, or `updateSummary` read anything new; they all key off
+`.game-row`, `.team-btn.is-picked`, `[data-conf-input]`, `.conf-chip`, `input[data-pick]`,
+`input[data-conf]`, and `row.dataset.confidence`, none of which changed name, shape, or
+position in the DOM. The new elements sit after `.rank-controls` and before the two hidden
+inputs, outside every selector any of those four functions ever touch.
+
+**Verification.** `ruff check .`, `black .`, and `pytest -q` all clean, 792 passed, 0 failed
+(791 before this change, plus one new test asserting the picks page renders exactly one
+`data-row-toggle`/`data-row-detail` pair per slate game, correctly linked by
+`aria-controls`/`id`). No schema change, so no Alembic migration. `grep -rn "—" app/` finds
+nothing new. No new icon (`down`, rotated, reused from `.how-it-works-caret`'s own pattern), no
+emoji, no new dependency, no Tailwind or bundler; the CSS lives in `app/static/app.css` on the
+existing 4px spacing scale and the JS addition is one small function plus one new branch in the
+existing delegated `onClick` in `app/static/app.js`. This environment cannot run a browser, so
+the row height, the grid placement, the animation, and the drag-safety reasoning above are all
+verified by reading the CSS cascade and the SortableJS `handle` contract directly rather than by
+a screenshot; a human should still eyeball it once on a real desktop browser before this ships.

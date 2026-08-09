@@ -333,6 +333,21 @@ def test_member_pages_render(client, world, path):
     assert response.status_code == 200, response.text[:800]
 
 
+def test_open_picks_page_includes_row_expand_toggle(client, world):
+    # Post launch: desktop compact rows (1024px up) move the badge, line, kickoff and
+    # each team's record into a collapsed per row panel, revealed by a new toggle button.
+    # One toggle and one panel per slate game, each pair wired together by id.
+    _login(client, "player@example.com")
+    response = client.get("/picks")
+    assert response.status_code == 200
+    game_ids = world["game_ids"]
+    assert response.text.count("data-row-toggle") == len(game_ids)
+    assert response.text.count("data-row-detail") == len(game_ids)
+    for gid in game_ids:
+        assert f'aria-controls="game-detail-{gid}"' in response.text
+        assert f'id="game-detail-{gid}"' in response.text
+
+
 @pytest.mark.parametrize("path", ["/admin", "/admin/slate", "/admin/members", "/admin/settings"])
 def test_admin_pages_render_for_commissioner(client, world, path):
     _login(client, "boss@example.com")

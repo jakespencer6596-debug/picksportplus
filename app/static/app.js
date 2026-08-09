@@ -312,7 +312,40 @@
     }
   }
 
+  /* Desktop only per row detail toggle (app.css, 1024px up): the same open/close shape as
+     initMenuToggle below, just without the outside-click/Escape handling that toggle needs
+     and this one does not, since the panel is inline content in the row, not a floating
+     overlay covering the page. [hidden] removed then .is-open added a frame later so the
+     opacity transition in app.css has a "before" state to animate from; reduceMotion skips
+     the frame delay, same flag, no second matchMedia check. Closing drops .is-open and sets
+     hidden back on in the same tick, same as initMenuToggle's close(). */
+  function toggleRowDetail(btn) {
+    var detail = document.getElementById(btn.getAttribute("aria-controls"));
+    if (!detail) return;
+    if (detail.hidden) {
+      detail.hidden = false;
+      btn.setAttribute("aria-expanded", "true");
+      if (reduceMotion) {
+        detail.classList.add("is-open");
+      } else {
+        window.requestAnimationFrame(function () {
+          detail.classList.add("is-open");
+        });
+      }
+    } else {
+      detail.classList.remove("is-open");
+      detail.hidden = true;
+      btn.setAttribute("aria-expanded", "false");
+    }
+  }
+
   function onClick(e) {
+    var rowToggle = e.target.closest("[data-row-toggle]");
+    if (rowToggle) {
+      toggleRowDetail(rowToggle);
+      return;
+    }
+
     var teamBtn = e.target.closest(".team-btn");
     if (teamBtn && !teamBtn.disabled) {
       var row = teamBtn.closest(".game-row");

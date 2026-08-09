@@ -2026,6 +2026,16 @@ button.team-btn:not([disabled]):not(.is-picked):hover {
   stroke-width: 2;
 }
 
+/* -- Per row expand toggle and detail panel (post launch, desktop only) --
+   Phone and tablet widths never see either element: .row-expand stays
+   display:none below 1024px (see the 1024px block for where it turns back
+   on) and .game-detail is server rendered with the hidden attribute and
+   only ever loses it from app.js's onClick, which the invisible, unfocusable
+   toggle can never trigger below that width. Below 1024px every field this
+   panel duplicates (badge, line, kickoff, each team's record) is already
+   sitting inline in .game-meta and .team-btn exactly as it always has. */
+.row-expand { display: none; }
+
 /* -- Picks summary bar ---------------------------------------------------
    Section 8 asks for a progress summary plus a Save action and a clear saved
    indicator. app.js drives these exact hooks, so the names are fixed:
@@ -4377,6 +4387,135 @@ a.toggle-btn { text-decoration: none; }
     min-width: 40px;
     min-height: 30px;
     font-size: var(--fs-base);
+  }
+
+  /* -- Compact expandable rows, the open week pick list only ---------------
+     Post launch (see DECISIONS.md). Scoped to .game-list[data-sortable]
+     .game-row, never plain .game-row, so the read only slate (readonly_list,
+     rendered as .game-row.is-complete, both here in state 4 and on
+     results.html) keeps showing everything inline exactly as before; this is
+     the interactive, still-open pick list only.
+
+     The one thing that cannot get any shorter is .team-btn's 44px minimum
+     tap target (Spec 3f), so that is the floor: row height here is that
+     44px plus a trimmed var(--space-1) of padding on each edge, 52px total,
+     down from about 60px. The badge, the line, kickoff and each team's
+     record move out into .game-detail (identical markup, rendered a second
+     time, see DECISIONS.md for why a second render was chosen over
+     reflowing the matchup/team_button macros) since none of them were ever
+     load bearing for the row's height, only its width; team abbreviations,
+     full names (already ellipsis truncated, Section 3) and the confidence
+     controls stay put for the same reason, moving them would not buy back
+     a single pixel of height. The grip and the rank buttons shrink from
+     44px to 32px, since only team-btn carries the tap target requirement;
+     that is real width back, not height, but it also means a shorter,
+     denser looking row. */
+  .game-list[data-sortable] { gap: var(--space-1); }
+
+  .game-list[data-sortable] .game-row {
+    grid-template-columns: auto minmax(0, 1fr) auto auto auto;
+    padding-block: var(--space-1);
+  }
+
+  .game-list[data-sortable] .game-row .game-meta { min-width: 0; }
+
+  /* The badge, line and kickoff move into .game-detail below; only the
+     confidence controls stay inline. Scoped to direct children of
+     .game-meta so .game-detail's own copies, rendered lower in the same
+     row, are never touched by this rule. */
+  .game-list[data-sortable] .game-row .game-meta > .badge,
+  .game-list[data-sortable] .game-row .game-meta > .game-line,
+  .game-list[data-sortable] .game-row .game-meta > .game-kick {
+    display: none;
+  }
+
+  /* Scoped to inside .team-btn specifically, same reasoning: .game-detail
+     prints each team's record again, lower in the row, and that copy must
+     stay visible. */
+  .game-list[data-sortable] .game-row .team-btn .team-record {
+    display: none;
+  }
+
+  .game-list[data-sortable] .game-row .game-grip {
+    width: 32px;
+    height: 32px;
+  }
+
+  .game-list[data-sortable] .game-row .rank-btn {
+    width: 32px;
+    height: 32px;
+  }
+
+  .game-list[data-sortable] .game-row .rank-btn svg {
+    width: 15px;
+    height: 15px;
+  }
+
+  /* Fifth grid column, not named in .game-row's grid-template-areas (that
+     stays "grip teams meta rank" for every other page that shares it), so
+     this is placed by explicit line number instead of joining the area
+     system. */
+  .row-expand {
+    display: inline-flex;
+    grid-column: 5;
+    grid-row: 1;
+    align-items: center;
+    justify-content: center;
+    width: 32px;
+    height: 32px;
+    flex: none;
+    background: var(--bg-surface);
+    border: var(--hairline);
+    border-radius: var(--radius-sm);
+    color: var(--text-muted);
+    transition: color var(--dur) var(--ease), border-color var(--dur) var(--ease),
+                background-color var(--dur) var(--ease);
+  }
+
+  .row-expand:hover {
+    color: var(--accent);
+    border-color: var(--accent);
+    background: var(--bg-surface-alt);
+  }
+
+  .row-expand-caret { transition: transform var(--dur) var(--ease); }
+
+  .row-expand[aria-expanded="true"] .row-expand-caret { transform: rotate(180deg); }
+
+  /* :not([hidden]), not a bare .game-detail rule, for the same reason
+     .game-list-divider uses it (see the note above regroupDivider in
+     app.js): a plain class rule sits at the same specificity as the UA
+     stylesheet's [hidden] rule but wins on source order, which would make
+     this panel visible even while hidden. app.js's onClick toggle removes
+     the hidden attribute, waits a frame (skipped under reduceMotion, the
+     same flag initMenuToggle reuses), then adds .is-open for the fade in;
+     closing does both in the same tick, same as initMenuToggle's close(). */
+  .game-detail:not([hidden]) {
+    grid-column: 1 / -1;
+    grid-row: 2;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-2) var(--space-5);
+    padding-top: var(--space-2);
+    border-top: var(--hairline);
+    opacity: 0;
+    transition: opacity var(--dur) var(--ease);
+  }
+
+  .game-detail.is-open { opacity: 1; }
+
+  .game-detail-row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-2) var(--space-3);
+  }
+
+  .game-detail-team {
+    font-size: var(--fs-xs);
+    font-variant-numeric: tabular-nums;
+    color: var(--text-muted);
   }
 
   .section { margin-bottom: var(--space-10); }
