@@ -23,7 +23,8 @@ Launch is a private pool for the owner and friends, but the data model must make
 - Model a Pool (league) with a unique join code. Users join a pool with its code or an admin adds them.
 - Global env flag `OPEN_REGISTRATION` (default false). When false, a new user can register only with a valid pool join code (private mode). When true, anyone can self register and join pools (public mode). Build both paths now and default to private.
 - v1 ships with one seeded default pool, but the schema supports many pools and many members per pool.
-- Roles: a global `admin` role (the commissioner) and normal `player` roles. A pool also has a commissioner. For v1 the seeded admin is the commissioner of the default pool.
+- Roles: a global `admin` role (the commissioner) and normal `player` roles. A pool also has a commissioner, tracked per member (`PoolMember.role_in_pool`), so a pool can have more than one commissioner or co-commissioner. For v1 the seeded admin is the commissioner of the default pool.
+- Post-launch: a global admin manages every league from `/admin/leagues`, the only place a `Pool` is created. There they create a league, attach one or more existing users as its initial commissioner(s) by email, and can "view as commissioner" to enter any league's own commissioner tools (`/admin` and everything under it) exactly as that league's commissioner would see them, with a visible way back out. A global admin is always treated as a commissioner of every pool; a pool's own commissioner is never a global admin unless their account actually has the global `admin` role.
 
 ## 3. Design system (this is not optional, match it precisely)
 

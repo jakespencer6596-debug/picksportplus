@@ -1,0 +1,93 @@
+{% extends "base.html" %}
+{% block title %}Create a league. {{ APP_NAME }}{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <div>
+    <p class="eyebrow">Site admin</p>
+    <h1 class="page-title">Create a league</h1>
+  </div>
+  <a class="btn btn-secondary btn-sm" href="/admin/leagues">Back to leagues</a>
+</div>
+
+<form method="post" action="/admin/leagues/new" class="stack settings-form">
+  <section class="card" aria-labelledby="league-title">
+    <div class="card-head">
+      <h2 id="league-title">The league</h2>
+    </div>
+    <div class="card-body">
+      <div class="field">
+        <label class="field-label" for="name">League name</label>
+        <input class="input" type="text" id="name" name="name" maxlength="120"
+               autocomplete="off" required>
+      </div>
+
+      <div class="form-row">
+        <div class="field">
+          <label class="field-label" for="join_code">Join code</label>
+          <input class="input input-code" type="text" id="join_code" name="join_code"
+                 value="{{ join_code_prefill }}" minlength="4" maxlength="40"
+                 autocomplete="off" spellcheck="false" required>
+          <p class="form-hint">Pre-filled with a fresh code. Edit it if you want something memorable.</p>
+        </div>
+
+        <div class="field">
+          <label class="field-label" for="season_year">Season year</label>
+          <input class="input num" type="number" id="season_year" name="season_year"
+                 value="{{ default_season_year }}" min="2000" max="2100" step="1" required>
+        </div>
+
+        <div class="field">
+          <label class="field-label" for="timezone">Timezone</label>
+          <select class="select" id="timezone" name="timezone">
+            {% for zone in timezones %}
+              <option value="{{ zone }}" {% if zone == "America/New_York" %}selected{% endif %}>
+                {{ zone.replace("_", " ") }}
+              </option>
+            {% endfor %}
+          </select>
+        </div>
+      </div>
+
+      <div class="field">
+        <label class="field-label" for="week1_anchor_date">Week 1 anchor date</label>
+        <input class="input" type="date" id="week1_anchor_date" name="week1_anchor_date">
+        <p class="form-hint">
+          Optional. The Saturday this league's week 1 belongs to. Leave it blank and the
+          commissioner can set it later from the league's own settings page.
+        </p>
+      </div>
+    </div>
+  </section>
+
+  <section class="card" aria-labelledby="commissioners-title">
+    <div class="card-head">
+      <h2 id="commissioners-title">Commissioners</h2>
+    </div>
+    <div class="card-body">
+      <div class="field">
+        <label class="field-label" for="commissioner_emails">Existing users, by email</label>
+        <textarea class="input" id="commissioner_emails" name="commissioner_emails" rows="3"
+                  placeholder="one@example.com&#10;two@example.com" autocomplete="off"
+                  spellcheck="false"></textarea>
+        <p class="form-hint">
+          One email per line. Each must already have a PickSportPlus account. This does not
+          create new accounts or send invitations. Leave this blank and promote someone to
+          commissioner later from the league's own Members page.
+        </p>
+      </div>
+    </div>
+  </section>
+
+  <div class="row">
+    <button class="btn btn-primary" type="submit">Create league</button>
+  </div>
+</form>
+
+<p class="form-hint">
+  Games per week and league targets start at {{ num_games_per_week }} total ({{ target_nfl }}
+  NFL, {{ target_ncaaf }} college), the same defaults every seeded pool starts with. The
+  commissioner can tune those, and everything else, from the league's own Settings page once
+  it exists.
+</p>
+{% endblock %}

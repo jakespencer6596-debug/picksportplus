@@ -1827,3 +1827,284 @@ def test_season_awards_panel_shows_amounts_once_a_week_is_scored(client, world, 
     assert "Season awards" in response.text
     assert "50 dollars" in response.text
     assert "20 dollars" in response.text
+
+
+# Global admin league management (post-launch) --------------------------------
+#
+# Three roles matter here and must stay distinct: a regular player, a pool commissioner who
+# is NOT a site admin (role="player", role_in_pool="commissioner"), and a site admin
+# (role="admin"). "world"'s boss@example.com is deliberately both at once (role="admin" and
+# role_in_pool="commissioner" of world's own pool), which is realistic for the one seeded
+# account but not what these boundary tests need, so most of them build their own users.
+
+_NEW_LEAGUE_FORM = {
+    "name": "New League",
+    "join_code": "NEWLEAG1",
+    "season_year": "2025",
+    "timezone": "America/New_York",
+}
+
+
+def _make_other_pool(
+    db: Session, *, name: str = "Second Pool", join_code: str = "SECONDPL"
+) -> Pool:
+    pool = Pool(
+        name=name,
+        join_code=join_code,
+        season_year=2025,
+        num_games_per_week=4,
+        target_nfl=2,
+        target_ncaaf=2,
+        sports=["nfl", "ncaaf"],
+        timezone="America/New_York",
+        current_week=1,
+    )
+    db.add(pool)
+    db.flush()
+    return pool
+
+
+def _make_pool_commissioner_who_is_not_admin(db: Session, pool: Pool) -> User:
+    commish = _make_user(db, "commish@example.com", "League Commissioner")  # role="player"
+    db.add(PoolMember(pool_id=pool.id, user_id=commish.id, role_in_pool="commissioner"))
+    return commish
+
+
+@pytest.mark.parametrize(
+    "method,path,data",
+    [
+        ("get", "/admin/leagues", None),
+        ("post", "/admin/leagues/new", _NEW_LEAGUE_FORM),
+        ("post", "/admin/leagues/{pool_id}/view-as", None),
+    ],
+)
+def test_leagues_admin_routes_refused_for_a_regular_player(client, world, method, path, data):
+    _login(client, "player@example.com")
+    target = path.format(pool_id=world["pool_id"])
+    response = (
+        getattr(client, method)(target, data=data) if data else getattr(client, method)(target)
+    )
+    assert response.status_code == 403
+
+
+@pytest.mark.parametrize(
+    "method,path,data",
+    [
+        ("get", "/admin/leagues", None),
+        ("post", "/admin/leagues/new", _NEW_LEAGUE_FORM),
+        ("post", "/admin/leagues/{pool_id}/view-as", None),
+    ],
+)
+def test_leagues_admin_routes_refused_for_a_pool_commissioner_who_is_not_a_site_admin(
+    client, session_factory, method, path, data
+):
+    """Being a commissioner of your own league does not make you a site admin."""
+    db = session_factory()
+    pool = _make_pool(db)
+    _make_pool_commissioner_who_is_not_admin(db, pool)
+    db.commit()
+    pool_id = pool.id
+    db.close()
+
+    _login(client, "commish@example.com")
+    target = path.format(pool_id=pool_id)
+    response = (
+        getattr(client, method)(target, data=data) if data else getattr(client, method)(target)
+    )
+    assert response.status_code == 403
+
+
+def test_leagues_page_lists_every_pool_not_just_the_admins_own(client, world, session_factory):
+    db = session_factory()
+    other = _make_other_pool(db, name="Unrelated League", join_code="UNRELATE")
+    db.commit()
+    other_name = other.name
+    db.close()
+
+    _login(client, "boss@example.com")
+    response = client.get("/admin/leagues")
+    assert response.status_code == 200
+    assert "Test Pool" in response.text
+    assert other_name in response.text
+
+
+def test_leagues_page_shows_a_pools_commissioners(client, session_factory):
+    db = session_factory()
+    pool = _make_other_pool(db, name="Shown League", join_code="SHOWNLGE")
+    commish = _make_pool_commissioner_who_is_not_admin(db, pool)
+    _make_user(db, "siteadmin1@example.com", "Site Admin One", role="admin")
+    db.commit()
+    commish_name = commish.display_name
+    db.close()
+
+    _login(client, "siteadmin1@example.com")
+    response = client.get("/admin/leagues")
+    assert response.status_code == 200
+    assert commish_name in response.text
+
+
+def test_create_league_makes_a_pool_with_seed_admin_defaults(client, session_factory):
+    db = session_factory()
+    _make_user(db, "siteadmin2@example.com", "Site Admin Two", role="admin")
+    db.commit()
+    db.close()
+
+    _login(client, "siteadmin2@example.com")
+    response = client.post(
+        "/admin/leagues/new",
+        data={
+            "name": "Created League",
+            "join_code": "CREATED1",
+            "season_year": "2026",
+            "timezone": "America/Chicago",
+        },
+    )
+    assert response.status_code == 303
+
+    db = session_factory()
+    pool = db.scalar(select(Pool).where(Pool.name == "Created League"))
+    assert pool is not None
+    assert pool.join_code == "CREATED1"
+    assert pool.num_games_per_week == 20
+    assert pool.target_nfl == 8
+    assert pool.target_ncaaf == 12
+    assert pool.season_year == 2026
+    assert pool.timezone == "America/Chicago"
+    db.close()
+
+
+def test_create_league_attaches_an_existing_user_as_commissioner_by_email(client, session_factory):
+    db = session_factory()
+    _make_user(db, "siteadmin3@example.com", "Site Admin Three", role="admin")
+    future_commish = _make_user(db, "future.commish@example.com", "Future Commissioner")
+    db.commit()
+    db.close()
+
+    _login(client, "siteadmin3@example.com")
+    response = client.post(
+        "/admin/leagues/new",
+        data={
+            "name": "Attached League",
+            "join_code": "ATTACHED",
+            "season_year": "2025",
+            "timezone": "America/New_York",
+            "commissioner_emails": "FUTURE.COMMISH@example.com\n",
+        },
+    )
+    assert response.status_code == 303
+
+    db = session_factory()
+    pool = db.scalar(select(Pool).where(Pool.name == "Attached League"))
+    assert pool is not None
+    member = db.scalar(
+        select(PoolMember).where(
+            PoolMember.pool_id == pool.id, PoolMember.user_id == future_commish.id
+        )
+    )
+    assert member is not None
+    assert member.role_in_pool == "commissioner"
+    db.close()
+
+
+def test_admin_can_view_as_commissioner_of_a_pool_never_joined(client, session_factory):
+    """The bug that mattered most: get_active_pool used to silently fall back to the
+    admin's own first membership instead of honoring the session pool it was just told to
+    view, so "view as commissioner" on some other league quietly landed on the wrong one."""
+    db = session_factory()
+    admin = _make_user(db, "siteadmin4@example.com", "Site Admin Four", role="admin")
+    home_pool = _make_other_pool(db, name="Admin Home Pool", join_code="ADMHOME1")
+    db.add(PoolMember(pool_id=home_pool.id, user_id=admin.id, role_in_pool="member"))
+    target_pool = _make_other_pool(db, name="Never Joined League", join_code="NVRJOIN1")
+    db.commit()
+    target_pool_id = target_pool.id
+    target_pool_name = target_pool.name
+    db.close()
+
+    _login(client, "siteadmin4@example.com")
+    view_as = client.post(f"/admin/leagues/{target_pool_id}/view-as")
+    assert view_as.status_code == 303
+    assert view_as.headers["location"] == "/admin"
+
+    dashboard = client.get("/admin")
+    assert dashboard.status_code == 200
+    assert target_pool_name in dashboard.text
+    assert "Admin Home Pool" not in dashboard.text
+
+
+def test_get_active_pool_admin_honors_session_pool_with_no_membership_row(session_factory):
+    """Direct, unit-style call against get_active_pool itself, per the brief: no PoolMember
+    row exists for this admin in this pool at all, and it must still resolve."""
+    from app.auth import SESSION_POOL_KEY, get_active_pool
+
+    class _FakeRequest:
+        def __init__(self, session):
+            self.session = session
+
+    db = session_factory()
+    admin = _make_user(db, "siteadmin5@example.com", "Site Admin Five", role="admin")
+    pool = _make_pool(db)
+    db.commit()
+    pool_id = pool.id
+
+    request = _FakeRequest({SESSION_POOL_KEY: pool_id})
+    resolved = get_active_pool(request, db, admin)
+    assert resolved.id == pool_id
+    db.close()
+
+
+def test_get_active_pool_non_admin_behavior_is_unchanged_by_a_bogus_session_pool(session_factory):
+    """A non-admin with a foreign pool id already sitting in session (left over, or forged)
+    still falls back to their own real membership, exactly as before this feature."""
+    from app.auth import SESSION_POOL_KEY, get_active_pool
+
+    class _FakeRequest:
+        def __init__(self, session):
+            self.session = session
+
+    db = session_factory()
+    real_pool = _make_pool(db)
+    foreign_pool = _make_other_pool(db, name="Foreign Pool", join_code="FOREIGN1")
+    player = _make_user(db, "member2@example.com", "Member Two")
+    db.add(PoolMember(pool_id=real_pool.id, user_id=player.id, role_in_pool="member"))
+    db.commit()
+    real_pool_id = real_pool.id
+    foreign_pool_id = foreign_pool.id
+
+    request = _FakeRequest({SESSION_POOL_KEY: foreign_pool_id})
+    resolved = get_active_pool(request, db, player)
+    assert resolved.id == real_pool_id
+    assert resolved.id != foreign_pool_id
+    # And the session is corrected back to the real membership, same as pre-fix behavior.
+    assert request.session[SESSION_POOL_KEY] == real_pool_id
+    db.close()
+
+
+def test_viewing_as_commissioner_banner_shows_for_admin_and_never_for_a_real_commissioner(
+    client, world, session_factory
+):
+    db = session_factory()
+    _make_pool_commissioner_who_is_not_admin(db, db.get(Pool, world["pool_id"]))
+    db.commit()
+    db.close()
+
+    # A real commissioner, not a site admin, never sees the banner on their own /admin page.
+    _login(client, "commish@example.com")
+    response = client.get("/admin")
+    assert response.status_code == 200
+    assert "as commissioner" not in response.text
+
+    client.post("/logout")
+
+    # The site admin, viewing the same pool, does see it.
+    _login(client, "boss@example.com")
+    response = client.get("/admin")
+    assert response.status_code == 200
+    assert "as commissioner" in response.text
+    assert "Exit to leagues" in response.text
+
+    # And it is absent on the leagues portal itself, which isn't a view of any single pool.
+    # ("View as commissioner" is the per-row button text on this page, a different string
+    # from the banner's own "Exit to leagues", so that is what distinguishes them here.)
+    leagues_response = client.get("/admin/leagues")
+    assert leagues_response.status_code == 200
+    assert "Exit to leagues" not in leagues_response.text

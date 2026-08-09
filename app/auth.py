@@ -116,7 +116,7 @@ def require_user(user: User | None = Depends(get_current_user)) -> User:
 
 def require_admin(user: User = Depends(require_user)) -> User:
     if not user.is_admin:
-        raise HTTPException(status.HTTP_403_FORBIDDEN, "Commissioner access only.")
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "Site admin access only.")
     return user
 
 
@@ -129,16 +129,29 @@ def get_active_pool(
 
     v1 ships one pool per user in practice, but the session remembers a choice so
     multi-pool membership works without further changes.
+
+    A global admin is a special case (post-launch fix): the whole point of "view as
+    commissioner" is that an admin can jump into a league they were never added to as a
+    PoolMember, for example one created before this feature existed, or one they set up for
+    someone else without joining it themselves. So once request.session[SESSION_POOL_KEY]
+    is set, an admin's choice is honored directly, with no PoolMember row required. A
+    non-admin's behavior is completely unchanged: the session pool id is only honored when a
+    real PoolMember row backs it, exactly as before.
     """
     pid = request.session.get(SESSION_POOL_KEY)
     if pid:
-        member = db.scalar(
-            select(PoolMember).where(PoolMember.pool_id == pid, PoolMember.user_id == user.id)
-        )
-        if member is not None:
+        if user.is_admin:
             pool = db.get(Pool, pid)
             if pool is not None:
                 return pool
+        else:
+            member = db.scalar(
+                select(PoolMember).where(PoolMember.pool_id == pid, PoolMember.user_id == user.id)
+            )
+            if member is not None:
+                pool = db.get(Pool, pid)
+                if pool is not None:
+                    return pool
     member = db.scalars(
         select(PoolMember).where(PoolMember.user_id == user.id).order_by(PoolMember.id)
     ).first()

@@ -1795,3 +1795,129 @@ existing delegated `onClick` in `app/static/app.js`. This environment cannot run
 the row height, the grid placement, the animation, and the drag-safety reasoning above are all
 verified by reading the CSS cascade and the SortableJS `handle` contract directly rather than by
 a screenshot; a human should still eyeball it once on a real desktop browser before this ships.
+
+### Global admin league management, and "view as commissioner"
+
+The product owner wanted a real three tier permission model (player, commissioner, admin),
+league creation restricted to a site admin portal, and a way for the admin to enter any
+league's commissioner tools and get back out again cleanly. Almost all of the permission
+model already existed and was already correct (`User.is_admin`, `PoolMember.role_in_pool`,
+`is_commissioner` already treating a global admin as a commissioner everywhere,
+`require_commissioner` already gating every route in `app/routers/admin.py`). This entry
+covers what was actually missing: the one real bug, and the new admin-only surface.
+
+**The bug: `get_active_pool` silently ignored an admin's own session choice.** Before this
+fix, `get_active_pool` (`app/auth.py`) only honored `request.session["pid"]` when a
+`PoolMember` row existed for the signed-in user in that exact pool; otherwise it silently fell
+back to that user's *first* pool membership by id, with no error, no warning, nothing in the
+response that would tip anyone off. For an ordinary player this is fine and was always the
+intended behavior (one pool in practice). For a global admin it was a real, silent
+mis-routing bug: an admin is not necessarily a `PoolMember` of every league (any league
+created before this feature existed, or created for someone else and never personally
+joined), so clicking "view as commissioner" on league X would set the session pool id to X,
+then the very next request would discover the admin has no `PoolMember` row in X, discard
+that choice without a word, and quietly land the admin back in whatever their own first
+pool happened to be. The fix (`app/auth.py`, `get_active_pool`): when the signed-in user is
+a global admin, a session pool id is honored with a direct `db.get(Pool, pid)`, no
+`PoolMember` row required. A non-admin's path through the function is completely untouched,
+same membership check, same fallback, same session correction, exactly as it worked before
+this change. Proven two ways: `tests/test_app.py::test_get_active_pool_admin_honors_session_pool_with_no_membership_row`
+and `test_get_active_pool_non_admin_behavior_is_unchanged_by_a_bogus_session_pool` call
+`get_active_pool` directly (a tiny local `_FakeRequest` standing in for `Request`, since the
+function only ever touches `request.session`, a plain dict), and
+`test_admin_can_view_as_commissioner_of_a_pool_never_joined` proves the same fix end to end
+through the real router: an admin who is a member of neither pool (in one variant, a member
+of a different pool entirely) posts to `/admin/leagues/{id}/view-as` for a pool they have
+never joined, then loads `/admin` and gets that pool's own name back, not the other one's.
+
+**Where the new routes live, and why not `app/routers/admin.py`.** New file,
+`app/routers/leagues.py`, mounted at `/admin/leagues` (`GET` list, `GET`/`POST /new` to
+create, `POST /{pool_id}/view-as`), everything behind `require_admin`. `app/routers/admin.py`
+opens with "Everything here sits behind require_commissioner. A regular player cannot reach
+any of it," which is true today; adding a `require_admin` route to that file would either
+falsify that statement or force a reader auditing the commissioner boundary to notice one
+route quietly uses a stricter gate. A second file keeps the module-level docstring of each
+file a complete, accurate description of its own permission boundary, the same reasoning
+`app/routers/leaderboard.py`/`results.py`/`picks.py` already split along. `require_admin`
+itself (`app/auth.py`) already existed, already correct, wired up nowhere until now; its
+error message ("Commissioner access only") was stale copy from before this feature existed
+and is fixed to "Site admin access only" alongside wiring it up, since a regular commissioner
+now legitimately sees a different message than a site admin only route.
+
+**League creation form fields, and what was deliberately left out.** Name, join code
+(pre-filled with `generate_join_code()`, editable), season year, timezone, and an optional
+week 1 anchor date, the same set `/admin/settings` already edits for name/season/timezone/
+anchor, minus everything that is a slate-shape tuning knob (games per week, NFL/college
+targets, picks required, scoring mode, rivalries, payment settings, and so on). Every new
+`Pool` gets `num_games_per_week=20`, `target_nfl=8`, `target_ncaaf=12`, matching
+`seed_admin` in `app/cli.py` exactly (`DEFAULT_NUM_GAMES_PER_WEEK`/`DEFAULT_TARGET_NFL`/
+`DEFAULT_TARGET_NCAAF` in `app/routers/leagues.py`), because the brief was explicit that the
+commissioner tunes those later from the pool's own existing settings page and this form
+should not duplicate that form. `test_create_league_makes_a_pool_with_seed_admin_defaults`
+checks the 20/8/12 defaults land on a real row.
+
+**Existing users only, no new invitation flow (a deliberate scope decision).** The creation
+form's "Commissioners" field is a plain textarea, one email per line, parsed the same
+line-oriented way `admin.py`'s `_parse_rivalries` already parses its own textarea (skip
+blank lines, no hard failure on one bad line). Each email is looked up against `User.email`
+(`normalize_email`, already existing); a match becomes a `PoolMember` with
+`role_in_pool="commissioner"` immediately. An email with no matching account is reported back
+via flash ("No account found for: ...") and otherwise ignored: this feature does not create
+user accounts or send an invitation email, on purpose. The brief was explicit that building
+new-user invitation is a real scope expansion it does not ask for, and the app already has a
+working path for "a player who has since registered becomes a commissioner" --
+`POST /admin/members/{member_id}/role`, unmodified here -- so a commissioner named before
+they have an account is simply promoted from that pool's own Members page once they join
+with the pool's join code, the same as any other promotion.
+`test_create_league_attaches_an_existing_user_as_commissioner_by_email` proves the attach
+path (case-insensitive email match included); nothing tests account creation because nothing
+creates one.
+
+**The viewing-as-commissioner banner, and why it only checks `current_user.is_admin`.** Any
+signed-in admin viewing a pool through the existing commissioner routes in
+`app/routers/admin.py` (all of which set `active_nav="admin"` via that file's own `_base`
+helper) sees a small banner reusing the existing `.lockbar` styling verbatim (`app/templates/
+base.html`, no new CSS), "Viewing {pool.name} as commissioner" with an "Exit to leagues" link
+back to `/admin/leagues`. It is gated purely on `current_user.is_admin`, not on whether this
+particular pool happens to have a real `PoolMember` commissioner row for that same admin
+account (the seeded admin from `seed-admin` has exactly such a row for the default pool, and
+still sees the banner there): the brief's own wording gates it on `current_user.is_admin`
+being true, and functionally every admin session inside `/admin/*` is "viewing as
+commissioner" in the sense that matters here, a stance the admin can always exit via the
+banner regardless of how they arrived. It is scoped to `active_nav == "admin"` specifically
+(not just "any admin page under `/admin/*`"), so it does not render on the `/admin/leagues`
+portal itself, which sets its own `active_nav="admin_leagues"`: that portal is not a view of
+any single pool, and putting an "exit to leagues" link on the leagues page itself would be
+circular. A real commissioner (`role="player"`, `role_in_pool="commissioner"`) never sees it,
+since `current_user.is_admin` is false for that account regardless of their pool role.
+`test_viewing_as_commissioner_banner_shows_for_admin_and_never_for_a_real_commissioner` builds
+one pool with both a real (non-admin) commissioner and the seeded admin-as-commissioner,
+logs in as each, and checks the banner text is present only for the admin and absent both for
+the real commissioner's own `/admin` page and for `/admin/leagues` itself.
+
+**Nav.** One new conditional link, gated on `current_user.is_admin`, added twice: once in the
+desktop `.nav` next to the existing commissioner-only "Admin" link (a second, separate link
+rather than folding "Leagues" into "Admin", since they go to genuinely different places --
+one pool's dashboard versus every pool -- and conflating them under one label would be more
+confusing, not less, for the one account that ever sees both), and once in the mobile
+`site-menu` "more" panel (not the bottom `tabbar`, which is a four-item primary nav shared by
+every commissioner and would get crowded for the sake of a link only the site admin ever
+uses). No new icon needed for the desktop link (plain text, matching the existing "Admin"
+link's own styling); the mobile menu entry reuses the existing `flag` icon.
+
+**No schema change, no migration.** Every field this feature touches already exists on
+`Pool`, `PoolMember`, or `User`. `PoolMember.role_in_pool` already supports more than one
+commissioner per pool (a plain per-row flag, no unique constraint anywhere forcing exactly
+one), which is exactly what "commissioners, one per league, and maybe multiple
+co-commissioners" needed; nothing new was added to support it.
+
+**Verification.** `ruff check .`, `black .`, and `pytest -q` all clean, 806 passed, 0 failed
+(792 at the previous post-launch baseline, 14 net new tests: three parametrized boundary
+tests each covering three routes for a regular player and a non-admin pool commissioner (six
+cases total), plus one test each for the league list showing every pool, the league list
+showing a pool's commissioners, league creation with the 20/8/12 defaults, attaching an
+existing user by email, the admin-can-view-a-never-joined-pool end-to-end scenario, the two
+direct `get_active_pool` unit tests, and the viewing-as-commissioner banner). `grep -rn "—"
+app/` finds nothing new. No new icon beyond the existing `flag`/`settings` icons reused
+as-is, no emoji, no new dependency, no Tailwind or bundler, no new CSS (the banner reuses
+`.lockbar` exactly as it already renders on `picks.html`).

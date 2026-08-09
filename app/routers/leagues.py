@@ -1,0 +1,245 @@
+"""Global admin league management: list every pool in the system, create new ones, and
+"view as commissioner" to jump into one.
+
+Everything here sits behind require_admin, not require_commissioner. A pool's own
+commissioner, even one who runs several pools, never reaches this file: being the
+commissioner of your own league does not make you a site admin. Kept out of
+app/routers/admin.py on purpose, whose own module docstring says "Everything here sits
+behind require_commissioner" -- true today, and a second permission boundary living in the
+same file would either break that statement or bury a require_admin route in a file a reader
+scans expecting only one gate. Mounted at /admin/leagues, a sub-path of the existing
+commissioner portal, since this is still "the admin section" from a user's point of view, just
+one level more privileged; see DECISIONS.md, Post-launch fixes, for the fuller reasoning.
+
+Once "view as commissioner" (POST /admin/leagues/{pool_id}/view-as) sets the session's active
+pool, every existing require_commissioner route in app/routers/admin.py already treats the
+admin as that pool's commissioner (app.auth.is_commissioner already returns True for any
+user.is_admin, unconditionally). Nothing here duplicates the settings, slate, members or
+payouts screens: this file only ever adds the league list, league creation, and the view-as
+switch.
+"""
+
+from __future__ import annotations
+
+import datetime as dt
+
+from fastapi import APIRouter, Depends, Form, HTTPException, Request, status
+from fastapi.responses import RedirectResponse
+from sqlalchemy import func, select
+from sqlalchemy.orm import Session
+
+from app.auth import (
+    SESSION_POOL_KEY,
+    flash,
+    generate_join_code,
+    normalize_email,
+    normalize_join_code,
+    require_admin,
+)
+from app.db import get_db
+from app.models import Pool, PoolMember, User
+from app.templating import get_zone, render
+
+router = APIRouter(prefix="/admin/leagues", tags=["admin-leagues"])
+
+# Same defaults seed_admin (app/cli.py) writes for the one pool it creates. A league made
+# here starts identical, and the commissioner tunes games-per-week/targets later from that
+# pool's own existing /admin/settings, never re-entered on this creation form.
+DEFAULT_NUM_GAMES_PER_WEEK = 20
+DEFAULT_TARGET_NFL = 8
+DEFAULT_TARGET_NCAAF = 12
+
+TIMEZONES = [
+    "America/New_York",
+    "America/Chicago",
+    "America/Denver",
+    "America/Los_Angeles",
+    "America/Phoenix",
+    "UTC",
+]
+
+
+def _redirect(target: str = "/admin/leagues") -> RedirectResponse:
+    return RedirectResponse(target, status_code=303)
+
+
+def _base(user: User) -> dict:
+    # No single pool is "active" on these pages (the leagues list spans every pool), so
+    # pool is None here. is_commissioner is hard set True rather than run through
+    # app.auth.is_commissioner (which needs a concrete pool to check membership against):
+    # a global admin is a commissioner everywhere, pool or no pool, which is exactly why the
+    # nav's existing "Admin" link condition (is_commissioner) should still light up here.
+    # active_nav is deliberately its own value, distinct from "admin", so the
+    # viewing-as-commissioner banner (wired in base.html off active_nav == "admin") never
+    # renders on this section: this portal isn't a view of any single pool.
+    return {
+        "current_user": user,
+        "pool": None,
+        "is_commissioner": True,
+        "active_nav": "admin_leagues",
+    }
+
+
+def _parse_commissioner_emails(text: str) -> list[str]:
+    """One email per line (blank lines skipped), normalized. Order preserved, de-duplicated."""
+    seen: list[str] = []
+    for raw_line in text.splitlines():
+        email = normalize_email(raw_line)
+        if email and email not in seen:
+            seen.append(email)
+    return seen
+
+
+@router.get("")
+def leagues_page(
+    request: Request,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_admin),
+):
+    pools = list(db.scalars(select(Pool).order_by(Pool.name)))
+    member_counts = dict(
+        db.execute(
+            select(PoolMember.pool_id, func.count(PoolMember.id)).group_by(PoolMember.pool_id)
+        ).all()
+    )
+    commissioners_by_pool: dict[int, list[User]] = {}
+    rows = db.execute(
+        select(PoolMember, User)
+        .join(User, User.id == PoolMember.user_id)
+        .where(PoolMember.role_in_pool == "commissioner")
+        .order_by(User.display_name)
+    )
+    for member, player in rows:
+        commissioners_by_pool.setdefault(member.pool_id, []).append(player)
+
+    return render(
+        request,
+        "admin/leagues.html",
+        {
+            "pools": pools,
+            "member_counts": member_counts,
+            "commissioners_by_pool": commissioners_by_pool,
+        },
+        **_base(user),
+    )
+
+
+@router.get("/new")
+def league_new_page(
+    request: Request,
+    user: User = Depends(require_admin),
+):
+    return render(
+        request,
+        "admin/league_new.html",
+        {
+            "join_code_prefill": generate_join_code(),
+            "default_season_year": dt.date.today().year,
+            "timezones": TIMEZONES,
+            "num_games_per_week": DEFAULT_NUM_GAMES_PER_WEEK,
+            "target_nfl": DEFAULT_TARGET_NFL,
+            "target_ncaaf": DEFAULT_TARGET_NCAAF,
+        },
+        **_base(user),
+    )
+
+
+@router.post("/new")
+def league_new_save(
+    request: Request,
+    name: str = Form(...),
+    join_code: str = Form(...),
+    season_year: int = Form(...),
+    timezone: str = Form(...),
+    week1_anchor_date: str = Form(""),
+    commissioner_emails: str = Form(""),
+    db: Session = Depends(get_db),
+    user: User = Depends(require_admin),
+):
+    errors: list[str] = []
+    name = name.strip()
+    if not name:
+        errors.append("The league needs a name.")
+
+    code = normalize_join_code(join_code)
+    if len(code) < 4:
+        errors.append("A join code needs at least 4 characters.")
+    elif db.scalar(select(Pool).where(func.upper(Pool.join_code) == code)) is not None:
+        errors.append("Another league already uses that join code.")
+
+    try:
+        get_zone(timezone)
+    except Exception:
+        errors.append("That timezone is not recognised.")
+
+    anchor_date: dt.date | None = None
+    week1_anchor_date = week1_anchor_date.strip()
+    if week1_anchor_date:
+        try:
+            anchor_date = dt.date.fromisoformat(week1_anchor_date)
+        except ValueError:
+            errors.append("Week 1 anchor date is not a valid date.")
+
+    if errors:
+        for message in errors:
+            flash(request, message, "error")
+        return _redirect("/admin/leagues/new")
+
+    pool = Pool(
+        name=name,
+        join_code=code,
+        season_year=season_year,
+        num_games_per_week=DEFAULT_NUM_GAMES_PER_WEEK,
+        target_nfl=DEFAULT_TARGET_NFL,
+        target_ncaaf=DEFAULT_TARGET_NCAAF,
+        sports=["nfl", "ncaaf"],
+        timezone=timezone,
+        current_week=1,
+        week1_anchor_date=anchor_date,
+    )
+    db.add(pool)
+    db.flush()
+
+    emails = _parse_commissioner_emails(commissioner_emails)
+    attached: list[str] = []
+    missing: list[str] = []
+    for email in emails:
+        found = db.scalar(select(User).where(User.email == email))
+        if found is None:
+            missing.append(email)
+            continue
+        db.add(PoolMember(pool_id=pool.id, user_id=found.id, role_in_pool="commissioner"))
+        attached.append(found.display_name)
+
+    db.commit()
+
+    flash(request, f"Created {pool.name} with join code {pool.join_code}.")
+    if attached:
+        flash(request, f"Added as commissioner: {', '.join(attached)}.")
+    if missing:
+        flash(
+            request,
+            "No account found for: " + ", ".join(missing) + ". "
+            "Only existing users can be attached here; promote someone from the pool's "
+            "Members page once they have registered.",
+            "info",
+        )
+    return _redirect("/admin/leagues")
+
+
+@router.post("/{pool_id}/view-as")
+def view_as(
+    request: Request,
+    pool_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_admin),
+):
+    pool = db.get(Pool, pool_id)
+    if pool is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "No such league.")
+    request.session[SESSION_POOL_KEY] = pool.id
+    flash(request, f"Viewing {pool.name} as commissioner.")
+    return RedirectResponse("/admin", status_code=303)
+
+
+__all__ = ["router"]

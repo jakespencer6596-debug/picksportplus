@@ -39,6 +39,10 @@
           <a class="nav-link {{ 'is-active' if active_nav == 'admin' }}" href="/admin"
              {{ 'aria-current=page' if active_nav == 'admin' }}>Admin</a>
         {% endif %}
+        {% if current_user.is_admin %}
+          <a class="nav-link {{ 'is-active' if active_nav == 'admin_leagues' }}" href="/admin/leagues"
+             {{ 'aria-current=page' if active_nav == 'admin_leagues' }}>Leagues</a>
+        {% endif %}
       </nav>
 
       <div class="user-menu">
@@ -75,6 +79,9 @@
   <nav class="site-menu-nav" aria-label="More">
     {% if current_user %}
       <a href="/">{{ ic.icon("home", 18) }}<span>Back to the home page</span></a>
+      {% if current_user.is_admin %}
+        <a href="/admin/leagues">{{ ic.icon("flag", 18) }}<span>Leagues</span></a>
+      {% endif %}
     {% else %}
       <a href="/pricing">{{ ic.icon("dollar", 18) }}<span>Pricing</span></a>
       <a href="/how-it-works">{{ ic.icon("info", 18) }}<span>How it works</span></a>
@@ -83,6 +90,16 @@
     {% endif %}
   </nav>
 </div>
+
+{% if current_user and current_user.is_admin and active_nav == 'admin' and pool %}
+  <div class="lockbar" role="status">
+    <div class="lockbar-inner row">
+      {{ ic.icon("settings", 16) }}
+      <span>Viewing <strong>{{ pool.name }}</strong> as commissioner.</span>
+      <a class="lockbar-link" href="/admin/leagues">Exit to leagues</a>
+    </div>
+  </div>
+{% endif %}
 
 {% block subbar %}{% endblock %}
 
