@@ -172,7 +172,11 @@ def test_a_far_nfl_game_beats_a_closer_college_game_until_the_target_is_met():
 # A short league fills from the other one
 
 
-def test_a_short_nfl_week_is_filled_with_college_games():
+def test_a_short_nfl_week_is_filled_by_its_own_spreadless_games_first():
+    # Two NFL games have no posted line yet. They are still real, scheduled
+    # candidates, so they fill five of the eight target slots on their own
+    # (5 with a spread plus the 2 without), and college only has to make up
+    # the last one, not three.
     candidates = (
         pool("nfl", "nfl", steps(5, 3.0))
         + [
@@ -184,21 +188,23 @@ def test_a_short_nfl_week_is_filled_with_college_games():
     result = select_slate_by_targets(candidates, DEFAULT_TARGETS, total=DEFAULT_TOTAL, now=NOW)
 
     assert len(result.selected) == 20
-    assert result.per_league == {"nfl": 5, "ncaaf": 15}
-    assert result.shortfalls == {"nfl": 3}
-    assert result.filled_from_other == 3
+    assert result.per_league == {"nfl": 7, "ncaaf": 13}
+    assert result.shortfalls == {"nfl": 1}
+    assert result.filled_from_other == 1
     assert result.notes == [
-        "Only 5 NFL games had a resolvable spread, 3 short of the target of 8.",
-        "The gap was filled with the next closest college games.",
+        "Only 7 NFL games were scheduled this week, 1 short of the target of 8.",
+        "The gap was filled with the next closest college game.",
     ]
-    # The three extra college games are the next closest ones, 13 through 15.
-    assert {"cfb13", "cfb14", "cfb15"} <= set(keys(result))
-    assert "cfb16" not in keys(result)
+    assert {"nfl_no_line_a", "nfl_no_line_b"} <= set(keys(result))
+    by_key = {item.key: item for item in result.selected}
+    assert by_key["nfl_no_line_a"].closeness is None
+    assert by_key["nfl_no_line_b"].closeness is None
 
 
 def test_a_short_nfl_week_fills_in_exact_closeness_order():
-    # Identity, not just counts. A fill that walked the pool from the far end
-    # would still return 20 games and still report nfl 5 and ncaaf 15.
+    # Identity, not just counts. The spread-less NFL games rank dead last,
+    # after every game with a real spread, including the college games farther
+    # out than the one that fills the gap.
     candidates = (
         pool("nfl", "nfl", steps(5, 3.0))
         + [
@@ -228,12 +234,12 @@ def test_a_short_nfl_week_fills_in_exact_closeness_order():
         "cfb11",
         "cfb12",
         "cfb13",
-        "cfb14",
-        "cfb15",
+        "nfl_no_line_a",
+        "nfl_no_line_b",
     ]
-    # The three fill games are the closest ones left, 12.5, 13.5 and 14.5, not
-    # the farthest, 17.5, 18.5 and 19.5.
-    assert [item.closeness for item in result.selected[-3:]] == [12.5, 13.5, 14.5]
+    assert result.selected[-3].closeness == 12.5
+    assert result.selected[-2].closeness is None
+    assert result.selected[-1].closeness is None
 
 
 def test_a_short_college_week_is_filled_with_nfl_games():
@@ -256,9 +262,9 @@ def test_both_leagues_short_returns_fewer_than_the_total_and_says_so():
     assert result.shortfalls == {"nfl": 5, "ncaaf": 8}
     assert result.filled_from_other == 0
     assert result.notes == [
-        "Only 3 NFL games had a resolvable spread, 5 short of the target of 8.",
-        "Only 4 college games had a resolvable spread, 8 short of the target of 12.",
-        "The slate came up 13 games short of 20 because only 7 games had a " "resolvable spread.",
+        "Only 3 NFL games were scheduled this week, 5 short of the target of 8.",
+        "Only 4 college games were scheduled this week, 8 short of the target of 12.",
+        "The slate came up 13 games short of 20 because only 7 games were " "scheduled this week.",
     ]
 
 
@@ -272,16 +278,15 @@ def test_a_single_missing_game_reads_in_the_singular():
 
     assert result.shortfalls == {"ncaaf": 1}
     assert result.notes == [
-        "Only 1 college game had a resolvable spread, 1 short of the target of 2.",
-        "The slate came up 1 game short of 4 because only 3 games had a " "resolvable spread.",
+        "Only 1 college game was scheduled this week, 1 short of the target of 2.",
+        "The slate came up 1 game short of 4 because only 3 games were " "scheduled this week.",
     ]
 
 
 def test_a_league_short_because_its_games_kicked_off_does_not_blame_the_spread():
-    # Every NFL spread here is resolved. Three of the four games have simply
-    # started, which is the normal state of a Sunday afternoon rebuild. Saying
-    # the spread was missing would send the commissioner chasing a line that is
-    # sitting right there.
+    # Three of the four NFL games have simply started, which is the normal state
+    # of a Sunday afternoon rebuild. A resolvable spread is not the gate here,
+    # the clock is, and the note has to say so.
     candidates = (
         [game(f"nfl_done{index}", spread=float(index), hours=-20 - index) for index in (1, 2, 3)]
         + [game("nfl_next", spread=6.0, hours=4)]
@@ -292,26 +297,25 @@ def test_a_league_short_because_its_games_kicked_off_does_not_blame_the_spread()
     assert keys(result) == ["cfb01", "cfb02", "cfb03", "nfl_next"]
     assert result.shortfalls == {"nfl": 2}
     assert result.notes == [
-        "Only 1 NFL game had a spread and had not kicked off, 2 short of the " "target of 3.",
-        "The slate came up 2 games short of 6 because only 4 games had a spread "
-        "and had not kicked off.",
+        "Only 1 NFL game had not kicked off yet, 2 short of the target of 3.",
+        "The slate came up 2 games short of 6 because only 4 games had not " "kicked off yet.",
     ]
 
 
-def test_keeping_started_games_keeps_the_spread_wording():
-    # Nothing was taken by the clock here, so the note names the only cause left.
-    candidates = [
-        game("started", spread=0.0, hours=-8),
-        game("no_line", spread=None, hours=4),
-    ]
+def test_a_genuine_shortage_of_games_is_not_blamed_on_the_clock_or_the_spread():
+    # exclude_started is off, so the clock takes nothing, and the one game on offer
+    # has a real spread. The league is short purely because only one game exists
+    # for the window, which is the one remaining cause once a missing line stops
+    # being a gate.
+    candidates = [game("only_game", spread=0.0, hours=-8)]
     result = select_slate_by_targets(
         candidates, {"nfl": 2}, total=2, now=NOW, exclude_started=False
     )
 
-    assert keys(result) == ["started"]
+    assert keys(result) == ["only_game"]
     assert result.notes == [
-        "Only 1 NFL game had a resolvable spread, 1 short of the target of 2.",
-        "The slate came up 1 game short of 2 because only 1 game had a " "resolvable spread.",
+        "Only 1 NFL game was scheduled this week, 1 short of the target of 2.",
+        "The slate came up 1 game short of 2 because only 1 game was " "scheduled this week.",
     ]
 
 
@@ -380,7 +384,7 @@ def test_a_shortfall_is_measured_on_the_first_pass_not_on_the_trimmed_slate():
     assert result.per_league == {"nfl": 7, "ncaaf": 8}
     assert result.shortfalls == {"nfl": 2}
     assert result.notes == [
-        "Only 10 NFL games had a resolvable spread, 2 short of the target of 12.",
+        "Only 10 NFL games were scheduled this week, 2 short of the target of 12.",
         "The league targets add up to 24, which is more than the total of 15, "
         "so the 7 farthest games were dropped.",
     ]
@@ -501,6 +505,61 @@ def test_a_target_of_zero_leaves_a_league_to_the_fill_only():
     assert result.filled_from_other == 1
 
 
+# Eligibility no longer requires a spread
+
+
+def test_eligibility_never_requires_a_spread():
+    # 3 NFL games have a real spread, 2 do not. The target (6) is higher than the
+    # spread-bearing count (3), so the two spread-less games have to fill the rest
+    # of the way for the slate to get anywhere near six; there simply are not
+    # enough real games this week to hit six exactly.
+    candidates = pool("nfl", "nfl", steps(3, 1.0)) + [
+        game("no_line_a", spread=None, league="nfl", hours=10),
+        game("no_line_b", spread=None, league="nfl", hours=11),
+    ]
+    result = select_slate_by_targets(candidates, {"nfl": 6}, total=6, now=NOW)
+
+    assert len(result.selected) == 5
+    assert result.per_league == {"nfl": 5}
+    assert result.shortfalls == {"nfl": 1}
+    assert {"no_line_a", "no_line_b"} <= set(keys(result))
+
+
+def test_eligibility_reaches_the_full_target_once_enough_real_candidates_exist():
+    # Same shape, but this time there are enough real, scheduled games, with and
+    # without a spread, to reach the target exactly.
+    candidates = pool("nfl", "nfl", steps(3, 1.0)) + [
+        game(f"no_line_{index}", spread=None, league="nfl", hours=10 + index) for index in range(3)
+    ]
+    result = select_slate_by_targets(candidates, {"nfl": 6}, total=6, now=NOW)
+
+    assert len(result.selected) == 6
+    assert result.per_league == {"nfl": 6}
+    assert result.shortfalls == {}
+    assert {"no_line_0", "no_line_1", "no_line_2"} <= set(keys(result))
+
+
+def test_spread_bearing_candidates_always_sort_before_spread_less_ones():
+    # "far" carries a real, wide spread and still outranks both spread-less games:
+    # a known number, however unattractive, always beats not knowing at all. Among
+    # the two spread-less games, the ordinary kickoff-then-key tiebreak still holds.
+    candidates = [
+        game("no_line_a", spread=None, league="nfl", hours=1),
+        game("far", spread=20.0, league="nfl", hours=2),
+        game("no_line_b", spread=None, league="nfl", hours=3),
+        game("close", spread=1.0, league="nfl", hours=4),
+    ]
+    expected = ["close", "far", "no_line_a", "no_line_b"]
+
+    rng = random.Random(2026)
+    for _ in range(50):
+        shuffled = candidates[:]
+        rng.shuffle(shuffled)
+        result = select_slate_by_targets(shuffled, {"nfl": 4}, total=4, now=NOW)
+
+        assert keys(result) == expected
+
+
 # Pinned games
 
 
@@ -602,17 +661,23 @@ def test_pins_exactly_equal_to_the_total_do_not_raise():
     assert set(keys(result)) == {"a", "b"}
 
 
-def test_a_pin_with_no_resolvable_spread_is_not_eligible_to_force_inclusion():
-    # Selected.closeness needs a real number, so a pin cannot skip the ordinary eligibility
-    # filter; it is documented as a deliberate choice, not an oversight, in the module
-    # docstring and DECISIONS.md.
+def test_a_pin_with_no_resolvable_spread_still_forces_inclusion():
+    # A missing spread is no longer a gate, so a pin no longer needs one either. With only 2
+    # slots, closeness alone would never pick "no_line_pin" (it sorts dead last, closeness
+    # None); the pin forces it on anyway, displacing "close", the would-be 2nd closest game,
+    # while "closer" still wins its slot on the merits.
     candidates = [
-        game("no_line", spread=None, league="nfl", hours=1, pinned=True),
-        game("has_line", spread=5.0, league="nfl", hours=2),
+        game("no_line_pin", spread=None, league="nfl", hours=1, pinned=True),
+        game("close", spread=1.0, league="nfl", hours=2),
+        game("closer", spread=0.5, league="nfl", hours=3),
     ]
     result = select_slate_by_targets(candidates, {"nfl": 2}, total=2, now=NOW)
 
-    assert keys(result) == ["has_line"]
+    assert set(keys(result)) == {"closer", "no_line_pin"}
+    assert "close" not in keys(result)
+    by_key = {item.key: item for item in result.selected}
+    assert by_key["no_line_pin"].closeness is None
+    assert by_key["no_line_pin"].pinned is True
 
 
 def test_a_pin_that_has_already_kicked_off_is_not_eligible_to_force_inclusion():
@@ -699,16 +764,23 @@ def test_a_pick_em_ranks_first():
 
 
 @pytest.mark.parametrize("value", [None, float("nan"), float("inf"), float("-inf")])
-def test_a_candidate_without_a_usable_spread_is_excluded(value):
+def test_a_candidate_with_no_usable_spread_is_still_selected_when_there_is_room(value):
+    # None (no line posted yet), NaN and an infinity (an unparseable provider payload) all
+    # resolve to an unranked candidate, not a dropped one: eligibility never looks at the
+    # spread at all, only closeness_of's sort-time None does.
     candidates = [
-        game("bad", spread=value, league="nfl", hours=1),
+        game("no_number", spread=value, league="nfl", hours=1),
         game("good", spread=-6.5, league="nfl", hours=2),
     ]
     result = select_slate_by_targets(candidates, {"nfl": 2}, total=2, now=NOW)
 
-    assert keys(result) == ["good"]
-    assert result.shortfalls == {"nfl": 1}
-    assert "Only 1 NFL game had a resolvable spread, 1 short of the target of 2." in result.notes
+    assert set(keys(result)) == {"good", "no_number"}
+    assert result.shortfalls == {}
+    by_key = {item.key: item for item in result.selected}
+    assert by_key["no_number"].closeness is None
+    assert by_key["good"].closeness == 6.5
+    # The real spread always ranks first, whatever the other candidate's raw value was.
+    assert keys(result)[0] == "good"
 
 
 def test_a_non_finite_spread_cannot_reorder_the_slate():
@@ -871,7 +943,7 @@ def test_empty_candidates_return_an_empty_result():
     assert result.shortfalls == {}
     assert result.filled_from_other == 0
     assert result.notes == [
-        "The slate came up 20 games short of 20 because only 0 games had a " "resolvable spread."
+        "The slate came up 20 games short of 20 because only 0 games were " "scheduled this week."
     ]
 
 
@@ -883,7 +955,7 @@ def test_empty_candidates_report_every_target_as_a_shortfall():
     assert result.shortfalls == {"nfl": 8, "ncaaf": 12}
     assert result.filled_from_other == 0
     assert result.notes[0] == (
-        "Only 0 NFL games had a resolvable spread, 8 short of the target of 8."
+        "Only 0 NFL games were scheduled this week, 8 short of the target of 8."
     )
 
 
@@ -1017,10 +1089,12 @@ def test_shuffling_a_tie_heavy_three_league_pool_gives_an_identical_result():
     targets = {"nfl": 8, "ncaaf": 5}
     expected = select_slate_by_targets(tie_heavy_pool(), targets, total=12, now=NOW)
 
-    # Pinned by hand: the four xfl games all sit at 1.0 and tie on kickoff, so
-    # only xfl01 is taken, and every 3.0 game ties with every -3.0 game.
+    # Pinned by hand: every 3.0 game ties with every -3.0 game, so the key
+    # tiebreak alone decides cfb01..cfb08/nfl01..nfl06's order. "noline" has no
+    # spread but is still eligible, so it fills NFL's 7th slot on its own merits
+    # (there being only 6 real-spread NFL games), which leaves no room left over
+    # for xfl01 the way an actual cross league fill would have needed one.
     assert keys(expected) == [
-        "xfl01",
         "cfb01",
         "cfb02",
         "cfb03",
@@ -1032,13 +1106,16 @@ def test_shuffling_a_tie_heavy_three_league_pool_gives_an_identical_result():
         "nfl04",
         "nfl05",
         "nfl06",
+        "noline",
     ]
-    assert expected.per_league == {"nfl": 6, "ncaaf": 5, "xfl": 1}
-    assert expected.shortfalls == {"nfl": 2}
-    # Targeted leagues in the order the settings named them, then the fill only
-    # league. Neither alphabetical nor closeness order, so this pins the rule
-    # that makes the whole result reproducible and not merely equal.
-    assert list(expected.per_league) == ["nfl", "ncaaf", "xfl"]
+    assert expected.per_league == {"nfl": 7, "ncaaf": 5}
+    assert expected.shortfalls == {"nfl": 1}
+    by_key = {item.key: item for item in expected.selected}
+    assert by_key["noline"].closeness is None
+    # Targeted leagues in the order the settings named them. xfl never arrived,
+    # since the 7 real NFL games plus 5 college already reached the total of 12
+    # without any cross league fill running at all.
+    assert list(expected.per_league) == ["nfl", "ncaaf"]
 
     rng = random.Random(31337)
     for _ in range(100):

@@ -764,3 +764,10 @@ execution environment in this repo).
 **18 of 21 are real automated passes. 3 (items 6, 9, 17) require manual browser verification**
 because they are pure client-side JS/touch/viewport behavior with no browser automation tool
 available in this environment.
+
+## Post-launch fixes
+
+- [x] A resolvable spread now only ranks a game, it never gates slate eligibility. Fixed the
+  mandatory-spread gate in `app/slate.py` and `app/services/ingest.py` that was skewing the
+  real September 12, 2026 build to 13 NFL / 7 college; a rebuild against the same real pool now
+  reaches the full 8/12 target. See `DECISIONS.md`, Post-launch fixes.

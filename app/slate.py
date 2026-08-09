@@ -9,29 +9,32 @@ it is cheap to unit test and safe to re run as often as the cron fires.
 
 Selection is per league, not a single global top N. The week takes the closest
 target_nfl NFL games and the closest target_ncaaf college games, 8 and 12 by
-default for a total of 20. When a league has fewer games with a resolvable
-spread than its target, the gap is filled with the next closest games from the
-other league so the total still lands, and the shortfall is reported so the
-commissioner can see why the mix came out the way it did.
+default for a total of 20. A resolvable spread ranks a game, closest first, but
+it is never required for a game to be eligible: a real, scheduled game with no
+posted line yet is still a legitimate candidate, it simply sorts after every
+game whose spread is known. When a league has fewer eligible games than its
+target, the gap is filled with the next closest games from the other league so
+the total still lands, and the shortfall is reported so the commissioner can
+see why the mix came out the way it did.
 
 Vocabulary used throughout:
 
 - spread_home is home relative. Negative means the home team is favoured.
-- closeness is abs(spread_home). A pick em at 0.0 is the closest possible game.
+- closeness is abs(spread_home), or None when the spread is not yet known.
+  A pick em at 0.0 is the closest possible game.
 - slate_rank counts from 1, where 1 is the closest game on the slate.
 
 Pinned games (spec Section 6a, the rivalry feedback): a candidate can carry
 pinned=True, which guarantees it survives selection regardless of how wide its
-spread is. Pins are seeded into the first pass before the ordinary per league
-fill runs, so a pin already counts against its own league's target; the
-existing over/under total balancing (drop the farthest, fill from the other
-league) does the rest exactly as it already did for an ordinary shortfall. A
-pin still needs a resolvable spread and, when exclude_started is true, to not
-have already kicked off, the same as any other candidate: this function never
-invents a rank for a game with nothing to rank it by. Pinning itself (by a
-commissioner or by rivalry auto-pin) happens upstream, in
-app.services.ingest; this module only ever guarantees a pin already set on
-the input survives.
+spread is, or whether it has a spread at all. Pins are seeded into the first
+pass before the ordinary per league fill runs, so a pin already counts against
+its own league's target; the existing over/under total balancing (drop the
+farthest, fill from the other league) does the rest exactly as it already did
+for an ordinary shortfall. A pin only needs to not have already kicked off,
+when exclude_started is true, the same as any other candidate; a missing
+spread never disqualifies it. Pinning itself (by a commissioner or by rivalry
+auto-pin) happens upstream, in app.services.ingest; this module only ever
+guarantees a pin already set on the input survives.
 """
 
 from __future__ import annotations
@@ -94,7 +97,8 @@ class Selected:
     slate_rank: int
     """1 is the closest game."""
 
-    closeness: float
+    closeness: float | None
+    """abs(spread_home), or None when the game made the slate with no line yet."""
 
     pinned: bool = False
     """True when this game made the slate because it was pinned, not (only)
@@ -156,14 +160,20 @@ def _require_aware(value: object, label: str) -> datetime:
 def _sort_key(candidate: Candidate) -> tuple[float, datetime, str]:
     """Closest first, then earliest kickoff, then key.
 
+    A candidate with no resolvable spread sorts after every candidate with a real
+    one: float("inf") stands in for closeness here so "closest known spread
+    first" stays the default preference, but that stand-in is sort-only and never
+    leaks into Selected.closeness, which stores the honest closeness_of value
+    (None when there is nothing to rank the game by).
+
     The key tiebreak is what makes the whole selection stable: two games with the
-    same closeness and the same kickoff still have exactly one correct order, so
-    shuffling the input cannot change the output.
+    same closeness (including two spread-less games, which tie at infinity) and
+    the same kickoff still have exactly one correct order, so shuffling the input
+    cannot change the output.
     """
     closeness = closeness_of(candidate.spread_home)
-    if closeness is None:  # eligibility should already have dropped this game
-        raise ValueError(f"candidate {candidate.key!r} has no resolvable spread.")
-    return (closeness, candidate.kickoff, candidate.key)
+    sort_closeness = float("inf") if closeness is None else closeness
+    return (sort_closeness, candidate.kickoff, candidate.key)
 
 
 def _parse_targets(targets: Mapping[str, int] | None) -> dict[str, int]:
@@ -200,17 +210,18 @@ def _league_games(count: int, league: str) -> str:
     return f"{count} {_label(league)} {noun}"
 
 
-def _reason(started: int) -> str:
-    """Why the games that were left out could not be used.
+def _reason(started: int, count: int) -> str:
+    """Why a league's supply came up short of its target.
 
-    The started game filter runs on every live week, so a league can come up
-    short with every spread resolved, purely because its games have kicked off.
-    Blaming the spread there would send the commissioner hunting for a missing
-    line that is not missing. Worded to follow a count, singular or plural.
+    A resolvable spread is never required for eligibility, so a shortfall has
+    only two possible causes left: the started game filter removed enough of
+    that league's games, or the league genuinely does not have enough games
+    scheduled for the window at all. count is the supply the sentence's count
+    refers to, so "was"/"were" agrees with it; "had" needs no such split.
     """
     if started:
-        return "had a spread and had not kicked off"
-    return "had a resolvable spread"
+        return "had not kicked off yet"
+    return f"{'was' if count == 1 else 'were'} scheduled this week"
 
 
 def _join(labels: Sequence[str]) -> str:
@@ -240,9 +251,10 @@ def _build_notes(
     notes: list[str] = []
 
     for league, short in shortfalls.items():
+        supply = first_pass.get(league, 0)
         notes.append(
-            f"Only {_league_games(first_pass.get(league, 0), league)} "
-            f"{_reason(started.get(league, 0))}, {short} short of the target of "
+            f"Only {_league_games(supply, league)} "
+            f"{_reason(started.get(league, 0), supply)}, {short} short of the target of "
             f"{targets[league]}."
         )
 
@@ -272,7 +284,7 @@ def _build_notes(
     if final_count < total:
         notes.append(
             f"The slate came up {_games(total - final_count)} short of {total} "
-            f"because only {_games(eligible_count)} {_reason(started_total)}."
+            f"because only {_games(eligible_count)} {_reason(started_total, eligible_count)}."
         )
 
     return notes
@@ -296,10 +308,10 @@ def select_slate_by_targets(
     slate comes from that global fill.
 
     Returns at most total games. Fewer is valid and expected when supply is
-    genuinely short, for example a light week where most games have no
-    resolvable spread. Candidates are deduplicated on key, keeping the closest
-    entry, so a provider that reports one event twice cannot put it on the slate
-    twice.
+    genuinely short, for example a light week where a league simply does not
+    have enough games scheduled. Candidates are deduplicated on key, keeping the
+    closest entry, so a provider that reports one event twice cannot put it on
+    the slate twice.
 
     Raises ValueError for a total below 1, for a target that is not a
     non negative integer, and for any naive datetime.
@@ -326,14 +338,13 @@ def select_slate_by_targets(
     else:
         cutoff = None
 
-    # Games are dropped for two different reasons and the notes have to tell them
-    # apart, so count the ones the clock took rather than the bookmakers.
+    # A resolvable spread is never a gate, only a rank. The only thing that can
+    # drop a candidate here is the started game filter, so count those by league
+    # for the notes.
     eligible: list[Candidate] = []
     started: dict[str, int] = {}
     started_total = 0
     for candidate in candidates:
-        if closeness_of(candidate.spread_home) is None:
-            continue
         if cutoff is not None and candidate.kickoff <= cutoff:
             started[candidate.league] = started.get(candidate.league, 0) + 1
             started_total += 1
@@ -355,9 +366,9 @@ def select_slate_by_targets(
 
     # Pins are seeded into the first pass before the ordinary per league fill
     # runs, so a pin already counts against its own league's target. A pin
-    # with no resolvable spread, or one that has already kicked off, was
-    # already dropped by the eligibility filter above and so never reaches
-    # here; see the module docstring.
+    # that has already kicked off was already dropped by the eligibility
+    # filter above and so never reaches here; a missing spread does not drop
+    # it, see the module docstring.
     pinned_candidates = [candidate for candidate in ordered if candidate.pinned]
     if len(pinned_candidates) > total:
         raise ValueError(
@@ -412,7 +423,7 @@ def select_slate_by_targets(
         Selected(
             key=candidate.key,
             slate_rank=rank,
-            closeness=_sort_key(candidate)[0],
+            closeness=closeness_of(candidate.spread_home),
             pinned=candidate.pinned,
         )
         for rank, candidate in enumerate(chosen, start=1)

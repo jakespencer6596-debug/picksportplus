@@ -175,8 +175,7 @@
 {% if week %}
   {% set nfl_on = on_slate | selectattr("league", "equalto", "nfl") | list | length %}
   {% set ncaaf_on = on_slate | selectattr("league", "equalto", "ncaaf") | list | length %}
-  {% set swappable = candidates | rejectattr("spread_home", "none") | list %}
-  {% set swap_options = swappable[:40] %}
+  {% set swap_options = candidates[:40] %}
 
   <section class="section" aria-labelledby="week-title">
     <h2 class="section-title" id="week-title">{{ week.label }}</h2>
@@ -382,7 +381,8 @@
     <h2 class="section-title" id="candidates-title">Everything else this week</h2>
     <p class="form-hint">
       Every other NFL and college game in {{ week.label }} with its line, closest first, so you can
-      see exactly what is available. A game with no line cannot go on the slate until you set one.
+      see exactly what is available. A line ranks a game, closest first, but is not required: a
+      game with no line posted yet can still be added.
     </p>
 
     {% if candidates %}
@@ -408,19 +408,15 @@
                     <span class="badge badge-pinned">Pinned</span>
                   {% endif %}
                   {% if editable %}
-                    {% if game.spread_home is not none %}
-                      <form method="post" action="/admin/slate/game" class="inline-form">
-                        <input type="hidden" name="week_id" value="{{ week.id }}">
-                        <input type="hidden" name="game_id" value="{{ game.id }}">
-                        <input type="hidden" name="action" value="add">
-                        <button class="btn btn-primary btn-sm" type="submit">
-                          Add<span class="visually-hidden">
-                            {{ game.away_abbr }} at {{ game.home_abbr }} to the slate</span>
-                        </button>
-                      </form>
-                    {% else %}
-                      <span class="cell-note muted">Set a line to add this one.</span>
-                    {% endif %}
+                    <form method="post" action="/admin/slate/game" class="inline-form">
+                      <input type="hidden" name="week_id" value="{{ week.id }}">
+                      <input type="hidden" name="game_id" value="{{ game.id }}">
+                      <input type="hidden" name="action" value="add">
+                      <button class="btn btn-primary btn-sm" type="submit">
+                        Add<span class="visually-hidden">
+                          {{ game.away_abbr }} at {{ game.home_abbr }} to the slate</span>
+                      </button>
+                    </form>
                   {% else %}
                     <span class="cell-note muted">Picks are in, the slate is fixed.</span>
                   {% endif %}

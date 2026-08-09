@@ -495,6 +495,60 @@ def _picked_game(db, week: Week) -> Game:
     return game
 
 
+def _candidate_game(db, week: Week, event_id: str, **overrides) -> Game:
+    """A game in the pool, off the slate by default. spread_home defaults to None,
+    since that is exactly the shape add_to_slate/swap_slate_game must now accept."""
+    defaults = {
+        "week_id": week.id,
+        "league": "nfl",
+        "espn_event_id": event_id,
+        "start_time": dt.datetime(2026, 9, 13, 17, 0, tzinfo=UTC),
+        "home_team": "Home Team",
+        "away_team": "Away Team",
+        "home_abbr": "HOM",
+        "away_abbr": "AWY",
+        "canonical_home_key": f"nfl:home-{event_id}",
+        "canonical_away_key": f"nfl:away-{event_id}",
+        "spread_home": None,
+        "closeness": None,
+        "in_slate": False,
+    }
+    defaults.update(overrides)
+    game = Game(**defaults)
+    db.add(game)
+    db.flush()
+    return game
+
+
+# A resolvable spread ranks a game, it never gates eligibility (Post-launch fixes) -----------
+
+
+def test_add_to_slate_succeeds_for_a_game_with_no_resolved_spread(db):
+    pool = _pool(db, num_games_per_week=2, target_nfl=2, target_ncaaf=0, sports=["nfl"])
+    week = _week_row(db, pool)
+    candidate = _candidate_game(db, week, "no-line")
+
+    added = ingest.add_to_slate(db, week, candidate.id)
+
+    assert added.in_slate is True
+    assert added.spread_home is None
+
+
+def test_swap_slate_game_succeeds_when_the_incoming_game_has_no_resolved_spread(db):
+    pool = _pool(db, num_games_per_week=1, target_nfl=1, target_ncaaf=0, sports=["nfl"])
+    week = _week_row(db, pool)
+    out_game = _candidate_game(
+        db, week, "on-slate", spread_home=1.0, closeness=1.0, in_slate=True, slate_rank=1
+    )
+    in_game = _candidate_game(db, week, "no-line")
+
+    out_result, in_result = ingest.swap_slate_game(db, week, out_game.id, in_game.id)
+
+    assert out_result.in_slate is False
+    assert in_result.in_slate is True
+    assert in_result.spread_home is None
+
+
 def test_set_pinned_does_not_require_can_resize_slate(db):
     """Freeze rule check (spec point 7): pinning a game is always allowed, including once
     picks exist, because it only affects a future rebuild's proposal, it never resizes or

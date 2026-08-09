@@ -428,8 +428,9 @@ def resolve_spreads(
     still_missing = [g for g in games if g.event_id not in resolved]
     if still_missing:
         warnings.append(
-            f"{len(still_missing)} games have no resolvable spread and were left off the "
-            "slate. Review them below and set a line by hand if you want them included."
+            f"{len(still_missing)} games have no line posted yet. They can still be picked "
+            "for the slate, ranked after every game with a known spread. Review them below "
+            "and set a line by hand if you want one ranked higher."
         )
     return resolved, warnings
 
@@ -631,8 +632,6 @@ def add_to_slate(db: Session, week: Week, game_id: int) -> Game:
             "Picks already exist for this week, so the game count is fixed. "
             "You can still void a game."
         )
-    if game.spread_home is None:
-        raise ValueError("That game has no resolved spread. Set a line by hand before adding it.")
     game.in_slate = True
     reseat_ranks(db, week)
     recompute_lock(db, week)
@@ -668,8 +667,6 @@ def swap_slate_game(
         raise ValueError("That game is not on the slate.")
     if in_game.in_slate:
         raise ValueError("That game is already on the slate.")
-    if in_game.spread_home is None:
-        raise ValueError("That game has no resolved spread. Set a line by hand first.")
     out_game.in_slate = False
     out_game.slate_rank = None
     in_game.in_slate = True
@@ -732,16 +729,19 @@ def slate_reason(game: Game, pool: Pool) -> str:
 
     "Rivalry" when the game is pinned and its two teams match one of pool.rivalries's pairs
     in either home/away order, "Pinned" for any other commissioner set pin, and "Closest"
-    with the actual spread and source for a game that made the slate on closeness alone. No
-    separate pin_reason column (see app/models.py, Game.pinned): this stays correct even if
-    the commissioner edits the rivalry list after a game was pinned.
+    with the actual spread and source for a game that made the slate by closeness. A game
+    can make the slate with no line posted yet (a resolvable spread ranks a game, it never
+    gates eligibility), which reads as "Closest available (no line posted yet)" rather than a
+    blank or broken closeness number. No separate pin_reason column (see app/models.py,
+    Game.pinned): this stays correct even if the commissioner edits the rivalry list after a
+    game was pinned.
     """
     if game.pinned:
         if _rivalry_match(game.canonical_home_key, game.canonical_away_key, pool.rivalries):
             return "Rivalry"
         return "Pinned"
     if game.closeness is None:
-        return "Closest"
+        return "Closest available (no line posted yet)"
     source = SOURCE_LABELS.get(game.spread_source, "no source")
     return f"Closest (spread {game.closeness:.1f}, source {source})"
 

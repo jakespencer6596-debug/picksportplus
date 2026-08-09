@@ -1505,3 +1505,59 @@ of what any individual test does, and `app/services/demo.py` never calls `fetch_
 it reads `tests/fixtures` files directly off disk. An em dash search across `app/`, `SPEC.md`
 and `README.md` finds nothing; a code-point scan of every `.py`/`.html`/`.js`/`.css` file under
 `app/` for emoji finds nothing.
+
+## Post-launch fixes
+
+### A resolvable spread ranks a game, it never gates eligibility
+
+The product owner's own words: "line is not mandatory, its just a nice added feature." Before
+this fix, `select_slate_by_targets` dropped any candidate with no resolvable spread before it
+was even considered for the slate, and `add_to_slate`/`swap_slate_game` in
+`app/services/ingest.py` raised a `ValueError` if a commissioner tried to add or swap in a game
+with no line set. That was backwards: a spread should only affect ranking (closest games
+preferred when a line is known), never whether a real, scheduled game is a legitimate
+candidate at all.
+
+This was not a theoretical concern. A live build against the real September 12, 2026 slate
+(`join_code=WEEK1VERIFY`, `season_year=2026`, `week1_anchor_date=2026-09-12`, pool id 1) came
+back skewed 13 NFL / 7 college against a target of 8/12, because only 23 of 102 real candidate
+games had a posted spread that early, almost all NFL: college books post lines much closer to
+kickoff than NFL books do. The mandatory-spread gate was silently dropping 79 genuine,
+scheduled college games from consideration.
+
+**The fix**, entirely in `app/slate.py`:
+
+- `_sort_key` no longer raises when `closeness_of` returns `None`. `float("inf")` stands in as
+  the sort-only value, so a spread-less candidate always sorts after every candidate with a
+  real spread, but that stand-in never leaks into stored data.
+- The eligibility loop in `select_slate_by_targets` no longer calls `closeness_of` at all. The
+  only thing that can now drop a candidate is the started-game filter
+  (`exclude_started`/`cutoff`). This applies uniformly to `None`, `NaN`, and infinite spreads:
+  none of them are a special case for eligibility any more, they simply all sort last.
+- `Selected.closeness` is now `float | None`. The `Selected` list is built from the honest
+  `closeness_of(candidate.spread_home)`, never from the `float("inf")` sort-only stand-in.
+  `Game.closeness` (already a nullable column) needed no change: `upsert_games` already set it
+  to `None` whenever `spread_home` is `None`, so it was already consistent with this.
+- A pin (or rivalry auto-pin) no longer needs a resolvable spread to force its way onto the
+  slate. It only needs to not have already kicked off, the same as any other candidate.
+- `_reason()` and the note text in `_build_notes` no longer blame "no resolvable spread" for a
+  shortfall, since that can no longer happen. The two remaining, real causes are the
+  started-game filter, and a league genuinely not having enough games scheduled for the window
+  at all ("were scheduled this week" / "had not kicked off yet").
+- `app/services/ingest.py`: removed the two `if game.spread_home is None: raise ValueError(...)`
+  gates in `add_to_slate` and `swap_slate_game`. `slate_reason()` now reads "Closest available
+  (no line posted yet)" for a spread-less pick instead of a bare "Closest" with nothing to back
+  it up. The `resolve_spreads` warning text no longer says a spread-less game was "left off the
+  slate," since it no longer is.
+- `app/templates/admin/slate.html`: the swap dropdown and the "Add" button in the candidate
+  pool no longer require `spread_home is not none`; a spread-less game is exactly as addable or
+  swappable as any other now.
+- `SPEC.md` Section 5e, 6 and 6a updated to describe the real rule (a resolvable spread ranks,
+  it never gates) instead of the old mandatory-spread language.
+
+**Verification.** Re-running the exact build that exposed this
+(`python -m app.cli build-slate --week 1 --year 2026 --pool 1`) against the same real, cached
+September 12, 2026 candidate pool went from "College 7, NFL 13" to "College 12, NFL 8", the
+full 8/12 target, entirely from real games (5 of the 20 slate games have no posted line yet and
+are correctly present, ranked after every game with a known spread). `ruff check .`, `black .`,
+and `pytest -q` all clean, 786 passed, 0 failed. No schema change, so no Alembic migration.
