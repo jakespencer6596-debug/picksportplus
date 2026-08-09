@@ -5,6 +5,12 @@
 
   var reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 
+  /* True while SortableJS owns an active drag (set in initSortable's onStart/onEnd).
+     regroupDivider reads this to avoid moving game rows itself while Sortable is mid-drag,
+     since Sortable is also moving DOM nodes in real time during that window and the two
+     fighting over the same rows could corrupt the drag. */
+  var dragActive = false;
+
   /* ---------------------------------------------------------------- ranking */
 
   /* Sets one row's confidence display: the hidden input the form actually posts, the
@@ -84,25 +90,44 @@
      SortableJS (handle: ".game-grip") can never pick it up to drag, but a row CAN still be
      dropped on either side of it. That is fine on purpose. A row's picked state is driven
      only by whether its team is tapped, never by which side of this line it visually ends
-     up on after a drag, so the divider never has to be perfectly in sync mid drag, only
-     repositioned here afterward, purely for readability. See DECISIONS.md, Phase 4. */
+     up on after a drag. See DECISIONS.md, Phase 4.
+
+     Fixed post launch: this used to only slide the divider marker to sit before whichever
+     row was first, in unchanged DOM order, to have no team picked. A plain tap never moves
+     a row, only a drag or "Reorder to inputs" does, so tapping picks in anything other than
+     top to bottom slate order (very natural now that a fresh pick gets an immediate
+     confidence number, see nextAvailableConfidence) could leave a picked, numbered row
+     sitting under the "Not picked" label, and an unpicked row sitting above it. Now this
+     actually groups every picked row before every unpicked one, not just the marker. */
   function regroupDivider(list) {
     var divider = list.querySelector("[data-divider]");
     if (!divider) return;
     var rows = Array.prototype.slice.call(list.querySelectorAll(".game-row"));
-    var firstUnpicked = null;
-    for (var i = 0; i < rows.length; i++) {
-      if (!rows[i].querySelector(".team-btn.is-picked")) {
-        firstUnpicked = rows[i];
-        break;
-      }
+    var picked = [];
+    var unpicked = [];
+    rows.forEach(function (row) {
+      (row.querySelector(".team-btn.is-picked") ? picked : unpicked).push(row);
+    });
+    divider.hidden = unpicked.length === 0;
+
+    /* Skip the DOM move entirely when the rows are already correctly grouped (the common
+       case: most taps do not change which side of the line a row belongs on), so an
+       ordinary pick never reflows the whole list for no reason. Also skip the full move
+       while a drag is active: Sortable is moving these same nodes live as the row travels
+       over others, and reparenting them out from under it here would fight that. The
+       divider still slides to sit at the picked/unpicked boundary during the drag, it just
+       does not force a full regroup until the drag actually ends. */
+    var alreadyGrouped = picked.every(function (row, i) { return rows[i] === row; });
+    if (alreadyGrouped || dragActive) {
+      list.insertBefore(divider, unpicked[0] || null);
+      return;
     }
-    divider.hidden = !firstUnpicked;
-    if (firstUnpicked) {
-      list.insertBefore(divider, firstUnpicked);
-    } else {
-      list.appendChild(divider);
-    }
+
+    var frag = document.createDocumentFragment();
+    picked.forEach(function (row) { frag.appendChild(row); });
+    frag.appendChild(divider);
+    unpicked.forEach(function (row) { frag.appendChild(row); });
+    list.appendChild(frag);
   }
 
   /* Stage 2. Sorts the picked-with-a-valid-typed-value rows to the top, highest value
@@ -587,10 +612,14 @@
          just onEnd, so the point values update while you are still dragging instead of
          only once you drop. onEnd still fires last (onChange does not fire for the final
          drop position on some input methods), so keep both. */
+      onStart: function () {
+        dragActive = true;
+      },
       onChange: function () {
         renumber(list);
       },
       onEnd: function () {
+        dragActive = false;
         renumber(list);
         markDirty();
       }
