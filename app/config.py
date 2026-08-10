@@ -55,6 +55,10 @@ class Settings(BaseSettings):
     # it is running behind Render's proxy rather than on a laptop.
     render_external_hostname: str = ""
     render_external_url: str = ""
+    # Comma separated. For a custom domain pointed at this service (picksportplus.com, say),
+    # since Render's own auto-injected hostname above only ever covers the *.onrender.com
+    # address, never a domain bought elsewhere and pointed here after the fact.
+    extra_allowed_hosts: str = ""
 
     default_pool_name: str = "PickSportPlus"
     default_join_code: str = "make-one-up"
@@ -156,6 +160,7 @@ class Settings(BaseSettings):
             host = self.render_external_url.split("://")[-1].split("/")[0]
             if host:
                 hosts.append(host)
+        hosts.extend(h.strip() for h in self.extra_allowed_hosts.split(",") if h.strip())
         return hosts
 
     @property
