@@ -14,10 +14,10 @@
         {% if commissioner_pool %}
           You are creating a commissioner account for {{ commissioner_pool.name }}. Once you sign
           up you will land on that league's admin dashboard, ready to set it up.
-        {% elif open_registration %}
-          Registration is open. A join code puts you straight into a pool.
         {% else %}
-          This pool is private. You need the join code from the commissioner.
+          Have a join code from your commissioner? Enter it below to go straight into your
+          league. No code yet? Create your account anyway, you can look around and join
+          later.
         {% endif %}
       </p>
 
@@ -55,12 +55,11 @@
         {% else %}
           <div class="field">
             <label class="field-label" for="join_code">
-              Join code{% if open_registration %} <span class="muted">(optional)</span>{% endif %}
+              Join code <span class="muted">(optional)</span>
             </label>
             <input class="input input-code" type="text" id="join_code" name="join_code"
                    value="{{ join_code or form.join_code or '' }}"
-                   autocomplete="off" spellcheck="false"
-                   {% if not open_registration %}required{% endif %}>
+                   autocomplete="off" spellcheck="false">
           </div>
         {% endif %}
 

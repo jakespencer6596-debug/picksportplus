@@ -197,10 +197,16 @@ def register_submit(
         commissioner_pool = _find_pool_by_commissioner_code(db, commissioner_code)
         if commissioner_pool is None:
             errors.append("That commissioner link is not valid. Check it with the site admin.")
-    elif join_code.strip() or not settings.open_registration:
+    elif join_code.strip():
         pool = _find_pool_by_code(db, join_code)
         if pool is None:
             errors.append("That join code does not match a pool. Check it with the commissioner.")
+    # A blank join_code (and no commissioner_code) is always allowed, regardless of
+    # open_registration: the account is created with no pool, and lands on the read only
+    # preview slate until a real join code is entered later (Post-launch fixes, see
+    # DECISIONS.md). open_registration historically gated whether an account could be
+    # created at all without a code; now that a codeless account is always a safe, poolless
+    # preview rather than membership in anything, there is nothing left for it to block here.
 
     if not errors and db.scalar(select(User).where(User.email == address)) is not None:
         errors.append("An account already uses that email. Sign in instead.")
@@ -252,8 +258,8 @@ def register_submit(
     if pool is not None:
         flash(request, f"You are in. Welcome to {pool.name}.")
         return RedirectResponse("/picks", status_code=303)
-    flash(request, "Account created. Enter a join code to get into a pool.", "info")
-    return RedirectResponse("/join", status_code=303)
+    flash(request, "Account created. Look around, then join a league whenever you're ready.")
+    return RedirectResponse("/picks", status_code=303)
 
 
 # Joining an additional pool -------------------------------------------------

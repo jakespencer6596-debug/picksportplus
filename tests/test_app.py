@@ -2350,17 +2350,18 @@ def test_register_with_an_invalid_commissioner_code_is_rejected(client, world, s
 
 def test_register_with_no_commissioner_code_is_unchanged_from_todays_behavior(client, world):
     """Omitting commissioner_code entirely (every pre-existing registration request) must
-    behave exactly as before: private mode still requires a real join code, and a normal
-    join code still works."""
-    private_mode_rejected = client.post(
+    behave exactly as before for a real join code, and a blank join code must always succeed
+    poolless (Post-launch fixes, see DECISIONS.md: open_registration no longer gates this,
+    a codeless account is always a safe read only preview, never membership in anything)."""
+    poolless = client.post(
         "/register",
         data={
             "display_name": "Plain Player",
-            "email": "plainplayer@example.com",
+            "email": "poollessplayer@example.com",
             "password": "hunter2hunter2!",
         },
     )
-    assert private_mode_rejected.status_code == 400
+    assert poolless.status_code == 303
 
     joined = client.post(
         "/register",
