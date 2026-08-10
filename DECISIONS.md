@@ -2280,3 +2280,179 @@ tests/test_app.py` finds only the literal em dash inside the pre-existing
 that checks for its absence, nothing in any real copy. No emoji anywhere touched. No new
 Tailwind or bundler, no SPA; every template change reuses existing design tokens and classes
 except the one small `.invite-banner` block described above.
+
+### Password policy, a real contact form, and a poolless preview slate
+
+Three unrelated pieces of work from the product owner, taken together in one pass.
+
+**Password policy.** `app/routers/auth.py`'s `MIN_PASSWORD_LEN` (8) gained a second check,
+`_PASSWORD_SYMBOL_RE = re.compile(r"[^A-Za-z0-9]")`: at least one character that is not a
+letter or a digit, checked against the raw password with `.search()`, no narrow allow list
+that could reject a reasonable symbol (space, unicode punctuation, anything). Both rules
+collapse into the one existing `errors.append(...)` call in `register_submit`, one sentence:
+"Use a password of at least 8 characters, including one symbol (anything that is not a letter
+or a number)." `app/templates/auth/register.html`'s hint text changed from "At least 8
+characters." to "At least 8 characters, including one symbol (like ! or #)."; its
+`minlength="8"` attribute is untouched, since HTML cannot express the symbol rule and the
+server side check is what is actually authoritative. Every existing test that registers a new
+account through `POST /register` used the fixture password `"hunter2hunter2"`, which has no
+symbol; updated the eight call sites that expected success to `"hunter2hunter2!"` (the two
+call sites that only use it to sign in through `/login`, or that expect a 400 for an unrelated
+reason such as a bad join code, were left alone). New tests:
+`test_register_rejects_a_password_missing_a_symbol`,
+`test_register_accepts_a_password_with_a_symbol`.
+
+**A real contact form, replacing the old bare mailto link.** New `ContactSubmission` model
+(`app/models.py`): `name`, `email`, `message`, `submitted_at`, nothing else. Kept deliberately
+minimal, a lead capture form, not a support ticket system, per the brief; no league-size or
+context field was added since name, email and a free text message already cover what a
+commissioner-to-be needs to say. Migration `e58c1a9f7d23_add_contact_submissions`, on top of
+`a3f7c9d21b46` (below). `POST /contact` (`app/routers/public.py`) validates a non-blank name, a
+non-blank message, and the email address using `app.auth.is_valid_email_format`, a small
+function extracted from what was previously an inline check duplicated nowhere else; `POST
+/register` was updated to call the same function rather than keep its own copy, so there is
+exactly one email-format rule in this codebase now, not two that could drift apart. A valid
+submission is stored and the page redirects back to `/contact` with a flash: "Thanks, that's
+in. We will get back to you within 24 hours." An invalid one re-renders the same page with the
+entered values and an error list, the same pattern `register_submit` already uses, rather than
+a flash-and-redirect that would lose what the visitor typed.
+
+**No email address shown on the page, by direct product owner instruction mid-build.** The
+original brief left "keep the existing SUPPORT_EMAIL mailto fallback... your call" open; the
+form was first built with one, then the product owner clarified directly: "the contact side
+should be a contact form field so my email isn't public facing." The `SUPPORT_EMAIL` fallback
+section was removed from `app/templates/public/contact.html` before this ever shipped (git
+history has no commit with it present), and the now-unused `.contact-card`/`.contact-icon`/
+`.contact-email` CSS in `app/static/app.css` was deleted rather than left dead, since nothing
+references it any more. The page's only path to reach the product owner is the form.
+
+**No email is sent by any of this, anywhere, on purpose.** `POST /contact` writes a database
+row and nothing else; the 24 hour reply promise is fulfilled by the product owner reading
+`GET /admin/contacts` and writing back from their own email client, not by this code. New test
+`test_contact_route_never_imports_or_calls_a_mail_library` greps the loaded router module's
+own source for `smtplib`/`sendgrid`/`ses_client`/`boto3` as a real, automated version of the
+manual self-check the brief asked for, not just a one-time grep that could silently go stale.
+
+**The admin-only submissions list: its own file, not a tab bolted onto `/admin/leagues`.**
+New `app/routers/admin_contacts.py`, mounted at `/admin/contacts`, `require_admin`, following
+the exact reasoning `app/routers/leagues.py` already documents for keeping a `require_admin`
+surface out of `app/routers/admin.py` (whose docstring is scoped to `require_commissioner`):
+a second file keeps that boundary a fact a reader can see at the top of the file, not
+something to double check route by route. A plain read only table, newest first, name, email,
+message, submitted date, `app/templates/admin/contacts.html`, built entirely from existing
+`.table`/`.table-wrap`/`.empty-state` classes, no new CSS. No reply-from-here control, no
+status column, no assignment: intentionally as small as the brief asked for. Linked from
+`/admin/leagues`'s page head as a second button next to "Create league" (`app/templates/admin/
+leagues.html`), the natural admin hub, rather than adding a new item to the global nav that
+only the site admin would ever use, which would have been the kind of clutter the product
+owner explicitly asked to avoid. `test_admin_contacts_page_refused_for_a_non_admin_commissioner`,
+`test_admin_contacts_page_refused_for_a_regular_player`, and
+`test_admin_contacts_page_shows_submissions_for_the_site_admin` cover the gate and the listing.
+
+**The poolless preview slate: reusing `build_slate`, never a second pipeline.** New
+`Pool.is_preview` column (`app/models.py`, `Boolean`, default `False`, `server_default="false"`
+kept in the schema itself rather than dropped after backfill, unlike most other columns in
+this codebase, so the column stays self evidently false for any row written outside the ORM
+too), migration `a3f7c9d21b46_add_is_preview_to_pools`, on top of the current head
+`947d228f154d`. New `app/services/preview.py`: `get_preview_pool(db)` (read only, safe inside
+a request handler, returns the one `is_preview=True` pool or `None`) and
+`ensure_preview_pool(db)` (find-or-create, same 20/8/12 defaults `seed_admin` uses for
+`num_games_per_week`/`target_nfl`/`target_ncaaf`, the real `settings.season_year`, and
+`settings.week1_anchor_date` when one is configured, exactly `seed_admin`'s own pattern). No
+`PoolMember` row is ever created for it, by anyone: the pool exists purely to hold `Week`/
+`Game` rows through the ordinary slate pipeline.
+
+**Never built or refreshed from inside a request.** `ensure_preview_pool` is only ever called
+from the new `python -m app.cli seed-preview` command (`app/cli.py`, following `seed_admin`/
+`seed_demo`'s own conventions), which finds or creates the pool and then calls the exact same
+`build_slate`/`detect_week` every real pool's slate already goes through, with `publish=True`
+so the built week is immediately `"open"` and visible. `GET /picks` (the poolless landing
+route, see below) only ever calls the read only `get_preview_pool`, never `ensure_preview_pool`
+and never `build_slate`, so an anonymous or poolless visitor's page load can never itself
+create the pool or spend a metered provider credit. Also excluded from every other automatic
+trigger this codebase has: `run-cron`'s pool loop (`app/cli.py`) now filters
+`Pool.is_preview.is_(False)`, since a scheduled cron run is exactly the kind of automatic
+trigger the brief says must never touch it; `_resolve_pool` (the default-pool lookup every
+other CLI command falls back to when `--pool` is omitted) and `doctor`'s own default pool
+lookup got the same filter, so an operator command run without an explicit `--pool` can never
+silently land on the hidden preview pool either. Actually run against the live dev database:
+`python -m app.cli seed-preview` hit the real ESPN and Odds API endpoints and produced a real
+20 game week 1 slate (College 12, NFL 8, spread sources `espn`, one metered Odds API credit
+spent), confirmed by querying the row directly, not just trusting the command's own summary
+line: real matchups (Oklahoma at Michigan, Ohio State at Texas, Buffalo at Houston, ...), real
+September 12 to 13, 2026 kickoff times, real spreads.
+
+**The route: `GET /picks` itself, not a separate URL.** `get_active_pool`
+(`app/auth.py`) is completely untouched, byte for byte: no other route's behavior changes.
+`picks_page` (`app/routers/picks.py`) now calls `get_active_pool(request, db, user)` directly
+instead of through `Depends`, wrapped in a `try`/`except HTTPException`; the one 403 that
+function already raises for a poolless user ("You are not a member of a pool yet.") is caught
+and answered with a new `_preview_page` helper instead of propagating to the client, any other
+`HTTPException` (there are none today, but the `except` only swallows a 403 specifically) is
+re-raised unchanged. `/standings` and `/results` still depend on `get_active_pool` exactly as
+before and still 403 a poolless user exactly as before, unmodified, per the brief's own "do not
+touch any route other than the new preview view." `_preview_page` reuses `current_week` and
+`slate_games`, the exact same lookups the real picks page uses (prefer the open week, else the
+most recent locked or scored one), against `get_preview_pool`'s result, so "current week" means
+the same thing here as everywhere else in the app, and a preview pool whose current week is
+still `"draft"` (built but not yet published) correctly falls through to the same honest
+"not ready yet" empty state as one that has not been built at all.
+
+**The template: one new state in `picks.html`, reusing `readonly_list`.** `picks.html`'s
+existing seven-state doc comment gained an eighth, state 0, checked first in the `{% if %}`
+chain (every other state's own condition only gets evaluated once state 0 is false, so nothing
+about states 1 through 7 needed to change). It renders a `.panel.notice` banner ("This is a
+preview...") with the two ways forward in the product owner's own words: a link to `/join`
+(the existing join-code flow, no new join mechanism), and a link to `/pricing` (start a
+league; `/admin/leagues/new` stays admin-only, unchanged, per the earlier "admin can never be
+a league member" decision). Below that, the slate itself is rendered with the same
+`readonly_list(games, picks_by_game, tz, label)` macro state 4 (the real, pool wide time lock)
+already uses, with an empty `picks_by_game`, so every team button renders through the same
+`team_button` macro with `locked=true`: disabled, no `aria-pressed` state that could look
+pickable, no hidden `winner-{id}`/`confidence-{id}` inputs, no `<form action="/picks">`, no
+`data-sortable`, nothing `app/static/app.js`'s pick-handling code could ever attach to. This is
+the same reasoning the brief itself gave for reuse: the preview visually matches the real
+product exactly because it is, literally, the same markup a real locked week already ships.
+The page head's `pool.name` eyebrow is guarded with `preview_mode` (reads "Preview" instead),
+since `pool` is `None` in this branch; the subbar lockbar block is suppressed for the same
+reason, since "picks lock in..." copy would misleadingly imply picking is possible here.
+
+**Server side enforcement, proven, not just hidden in the UI.** `POST /picks` (`_save_picks`)
+is completely untouched: it still depends on `get_active_pool` through the ordinary `Depends`
+path, which still raises the same 403 for a poolless user regardless of what the request body
+contains, since the route never reads a client-supplied pool id at all, only the session-backed
+`get_active_pool`. `test_poolless_user_cannot_submit_a_pick_even_against_the_preview_pool`
+proves a poolless user's hand crafted `POST /picks`, aimed at the preview pool's own built
+week and games, is refused with a 403 and writes no `Pick` row, not merely that the UI hides
+the controls. `_find_pool_by_code` (`app/routers/auth.py`) was additionally narrowed to exclude
+`is_preview` pools, defense in depth so even a guessed or leaked preview join code can never
+register or join against it, even though nothing in the app currently exposes that code
+anywhere a real visitor could find it.
+
+**Excluded from every league listing and switcher.** `leagues_page`
+(`app/routers/leagues.py`) now filters `Pool.is_preview.is_(False)`, so the preview pool never
+appears in `/admin/leagues`'s table, its member count, or its commissioner list, even once it
+has a real slate built (`test_preview_pool_never_appears_in_admin_leagues_listing`, built with
+real games). The multi-league switcher (`app/routers/admin.py`'s `_commissioner_pools`) needed
+no equivalent filter: it is driven entirely by a real `PoolMember` row, and the preview pool
+structurally never has one, matching this codebase's own standing rule against adding
+speculative checks for a state that cannot occur
+(`test_preview_pool_never_appears_in_a_commissioners_multi_league_switcher`).
+
+**Verification.** `ruff check .`, `black .`, and `pytest -q` all clean, 861 passed, 0 failed
+(844 at the previous post-launch baseline, 17 net new tests across `tests/test_app.py` and
+`tests/test_cli.py`, covering the password rule, the contact form's happy and error paths and
+its no-mail-library self-check, the admin contacts gate and listing, the poolless preview
+slate rendering with no functioning pick markup, the honest empty state before a build,
+`/standings` and `/results` staying blocked, the direct-POST enforcement proof, the two
+listing/switcher exclusion tests, and `ensure_preview_pool`'s creation and idempotency).
+Migrations `a3f7c9d21b46` and `e58c1a9f7d23` both applied cleanly against the live dev database
+(`alembic upgrade head`), and a full downgrade/upgrade round trip was verified against the same
+database before committing. `python -m app.cli seed-preview` was actually run against the live
+dev database (not just unit tested) and produced the real slate described above.
+`grep -rn "—"` and `grep -rn "smtplib\|sendgrid\|ses_client\|boto3"` across every file touched
+in this pass find only the literal strings inside the two tests that assert their own absence,
+nothing in any real copy or code path. No emoji anywhere touched. No new dependency, no
+Tailwind or bundler, no SPA; every template change reuses existing classes and design tokens,
+and the only CSS change was deleting the now-dead `.contact-card`/`.contact-icon`/
+`.contact-email` block.

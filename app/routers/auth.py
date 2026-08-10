@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import re
+
 from fastapi import APIRouter, Depends, Form, Request
 from fastapi.responses import RedirectResponse
 from sqlalchemy import func, select
@@ -12,6 +14,7 @@ from app.auth import (
     generate_join_code,
     get_current_user,
     hash_password,
+    is_valid_email_format,
     login_user,
     logout_user,
     normalize_email,
@@ -27,6 +30,9 @@ from app.templating import render
 router = APIRouter(tags=["auth"])
 
 MIN_PASSWORD_LEN = 8
+# One character that is not a letter or digit. Permissive on purpose: any symbol counts,
+# there is no narrow allow list to accidentally reject a reasonable choice.
+_PASSWORD_SYMBOL_RE = re.compile(r"[^A-Za-z0-9]")
 
 
 def _safe_next(raw: str | None) -> str:
@@ -40,7 +46,12 @@ def _find_pool_by_code(db: Session, code: str) -> Pool | None:
     code = normalize_join_code(code)
     if not code:
         return None
-    return db.scalar(select(Pool).where(func.upper(Pool.join_code) == code))
+    # is_preview pools never gain a real member, by construction (Post-launch fixes, see
+    # DECISIONS.md): excluded here so even a guessed or leaked preview join code can never
+    # register or join against it.
+    return db.scalar(
+        select(Pool).where(func.upper(Pool.join_code) == code, Pool.is_preview.is_(False))
+    )
 
 
 def _find_pool_by_commissioner_code(db: Session, code: str) -> Pool | None:
@@ -166,10 +177,13 @@ def register_submit(
         errors.append("Enter the name you want on the leaderboard.")
     elif len(form["display_name"]) > 80:
         errors.append("That display name is too long. Keep it under 80 characters.")
-    if "@" not in address or "." not in address.split("@")[-1]:
+    if not is_valid_email_format(address):
         errors.append("Enter a valid email address.")
-    if len(password) < MIN_PASSWORD_LEN:
-        errors.append(f"Use a password of at least {MIN_PASSWORD_LEN} characters.")
+    if len(password) < MIN_PASSWORD_LEN or not _PASSWORD_SYMBOL_RE.search(password):
+        errors.append(
+            f"Use a password of at least {MIN_PASSWORD_LEN} characters, including one "
+            "symbol (anything that is not a letter or a number)."
+        )
     elif len(password.encode("utf-8")) > 72:
         errors.append("That password is too long. Keep it to 72 characters.")
 

@@ -1,0 +1,52 @@
+{% extends "base.html" %}
+{% import "components/icons.html" as ic %}
+{% block title %}Contact submissions. {{ APP_NAME }}{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <div>
+    <p class="eyebrow">Site admin</p>
+    <h1 class="page-title">Contact submissions</h1>
+  </div>
+  <a class="btn btn-secondary" href="/admin/leagues">
+    {{ ic.icon("flag", 18) }}<span>Leagues</span>
+  </a>
+</div>
+
+<section class="section" aria-labelledby="contacts-title">
+  <h2 class="section-title" id="contacts-title">Newest first</h2>
+
+  {% if submissions %}
+    <div class="table-wrap">
+      <table class="table">
+        <thead>
+          <tr>
+            <th scope="col">Name</th>
+            <th scope="col">Email</th>
+            <th scope="col">Message</th>
+            <th scope="col">Submitted</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for s in submissions %}
+            <tr>
+              <td data-label="Name">{{ s.name }}</td>
+              <td data-label="Email"><a href="mailto:{{ s.email }}">{{ s.email }}</a></td>
+              <td data-label="Message">{{ s.message }}</td>
+              <td data-label="Submitted">
+                {{ s.submitted_at | shortdate(tz) }}, {{ (s.submitted_at | localtime(tz)).year }}
+              </td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  {% else %}
+    <div class="empty-state">
+      {{ ic.icon("mail", 28) }}
+      <h3 class="empty-state-title">No submissions yet</h3>
+      <p>Messages from the contact page show up here, newest first.</p>
+    </div>
+  {% endif %}
+</section>
+{% endblock %}

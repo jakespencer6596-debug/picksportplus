@@ -149,6 +149,16 @@ class Pool(Base):
     # Per pool override of the OPEN_REGISTRATION env default, owned by the commissioner.
     open_registration: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     current_week: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+    # True for exactly one hidden, non-customer pool in a given deployment (Post-launch
+    # fixes): it holds a real, live game slate through the ordinary build_slate pipeline, for
+    # a signed in visitor who has not joined a league yet to preview, read only. It is its own
+    # third thing, never a customer league and never the marketing demo: no commissioner, no
+    # PoolMember rows, ever, and excluded from every league listing and switcher. See
+    # app/services/preview.py and app/cli.py's seed-preview command, the only place its slate
+    # is ever built or refreshed.
+    is_preview: Mapped[bool] = mapped_column(
+        Boolean, default=False, nullable=False, server_default="false"
+    )
     # The commissioner-set Saturday that pool week 1 anchors to for the season. Pool week N's
     # own anchor is week1_anchor_date + (N - 1) weeks. Nullable because a pool created before
     # this feature, or one nobody has configured yet, has none: see app/services/ingest.py
@@ -511,6 +521,25 @@ class PayoutRule(Base):
     label: Mapped[str | None] = mapped_column(String(120), nullable=True)  # "1st place", optional
 
     pool: Mapped[Pool] = relationship(back_populates="payout_rules")
+
+
+class ContactSubmission(Base):
+    """One submission from the public /contact page (Post-launch fixes: a real contact form,
+    replacing the old bare mailto link). A lead capture form, not a support ticket system: no
+    status, no assignment, no reply-from-here feature. The site admin reads these from
+    GET /admin/contacts and replies to the submitter directly, over their own normal email
+    client, within 24 hours. No email is ever sent by this model or by POST /contact.
+    """
+
+    __tablename__ = "contact_submissions"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    name: Mapped[str] = mapped_column(String(120), nullable=False)
+    email: Mapped[str] = mapped_column(String(255), nullable=False)
+    message: Mapped[str] = mapped_column(Text, nullable=False)
+    submitted_at: Mapped[dt.datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, server_default=func.now(), nullable=False
+    )
 
 
 class FeedCache(Base):

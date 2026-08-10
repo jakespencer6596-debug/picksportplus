@@ -10,22 +10,47 @@
   </div>
 </div>
 
-<div class="contact-card">
-  <span class="contact-icon">{{ ic.icon("mail", 22) }}</span>
-  <p>
-    Questions about {{ APP_NAME }}, setting up a league, or anything else. We would like to
-    hear from you.
-  </p>
-  {% if SUPPORT_EMAIL %}
-    <a class="contact-email" href="mailto:{{ SUPPORT_EMAIL }}">{{ SUPPORT_EMAIL }}</a>
-    <a class="btn btn-primary" href="mailto:{{ SUPPORT_EMAIL }}">
-      {{ ic.icon("mail", 18) }}<span class="btn-label">Send an email</span>
-    </a>
-  {% else %}
-    <p class="muted">
-      A public contact address is not set up yet. If you are already in a pool, your
-      commissioner is the fastest way to reach us.
-    </p>
-  {% endif %}
-</div>
+<section class="section">
+  <div class="card">
+    <div class="card-body">
+      <p class="muted">
+        Tell us about your league and we will get back to you within 24 hours with pricing
+        and how to get set up.
+      </p>
+
+      {% if errors %}
+        <div class="form-error" role="alert">
+          <ul class="error-list">
+            {% for e in errors %}<li>{{ e }}</li>{% endfor %}
+          </ul>
+        </div>
+      {% endif %}
+
+      <form method="post" action="/contact" class="stack" novalidate>
+        <div class="field">
+          <label class="field-label" for="name">Name</label>
+          <input class="input" type="text" id="name" name="name"
+                 value="{{ form.name or '' }}" autocomplete="name" required>
+        </div>
+
+        <div class="field">
+          <label class="field-label" for="email">Email</label>
+          <input class="input" type="email" id="email" name="email"
+                 value="{{ form.email or '' }}" autocomplete="email" required>
+        </div>
+
+        <div class="field">
+          <label class="field-label" for="message">Message</label>
+          <textarea class="input" id="message" name="message" rows="5" required
+                    placeholder="How many players, which sports, and anything else that helps."
+                    >{{ form.message or '' }}</textarea>
+        </div>
+
+        <button class="btn btn-primary" type="submit">
+          {{ ic.icon("send", 18) }}<span>Send message</span>
+        </button>
+      </form>
+    </div>
+  </div>
+</section>
 {% endblock %}

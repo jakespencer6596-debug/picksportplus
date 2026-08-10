@@ -21,6 +21,7 @@ from app.auth import (
 from app.db import get_db
 from app.models import Game, Pick, Pool, PoolMember, User, Week, WeekEntry
 from app.scoring import PickInput, validate_picks
+from app.services.preview import get_preview_pool
 from app.templating import render
 
 router = APIRouter(tags=["picks"])
@@ -92,8 +93,19 @@ def picks_page(
     request: Request,
     db: Session = Depends(get_db),
     user: User = Depends(require_user),
-    pool: Pool = Depends(get_active_pool),
 ):
+    # get_active_pool is called directly rather than through Depends here, so a poolless
+    # user's real 403 (raised by get_active_pool, unchanged, see app/auth.py) can be caught
+    # right here and answered with the read only preview instead. No other route does this:
+    # /standings and /results still depend on get_active_pool exactly as before and still
+    # 403 a poolless user exactly as before (Post-launch fixes, see DECISIONS.md).
+    try:
+        pool = get_active_pool(request, db, user)
+    except HTTPException as exc:
+        if exc.status_code == status.HTTP_403_FORBIDDEN:
+            return _preview_page(request, db, user)
+        raise
+
     week = current_week(db, pool)
     games: list[Game] = []
     picks_by_game: dict[int, Pick] = {}
@@ -176,6 +188,41 @@ def _next_unpublished_week(db: Session, pool: Pool) -> Week | None:
             Week.status == "draft",
         )
         .order_by(Week.week_number)
+    )
+
+
+def _preview_page(request: Request, db: Session, user: User):
+    """Read only view for a signed in user with no real pool: the preview pool's current,
+    published week, if one has been built (see app/services/preview.py and app/cli.py's
+    seed-preview command, the only place its slate is ever built). Nothing here can ever
+    trigger a build itself, so a poolless visitor's page load never spends a metered credit.
+
+    Reuses current_week/slate_games, the exact same lookups a real pool's picks page uses, so
+    "current week" means the same thing here as it does everywhere else: prefer the open week,
+    then the most recent locked or scored one. A preview pool is only ever published (open) by
+    the CLI command, so an unbuilt or still-draft week correctly falls through to the honest
+    "not ready yet" empty state in picks.html rather than showing nothing at all.
+    """
+    preview_pool = get_preview_pool(db)
+    week = current_week(db, preview_pool) if preview_pool else None
+    games = slate_games(db, week) if week else []
+    return render(
+        request,
+        "picks.html",
+        {
+            "preview_mode": True,
+            "week": week,
+            "games": games,
+            "picks_by_game": {},
+            "n": 0,
+            "submitted_count": 0,
+            "has_full_entry": False,
+            "next_week": None,
+        },
+        current_user=user,
+        pool=None,
+        is_commissioner=False,
+        active_nav="picks",
     )
 
 

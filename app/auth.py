@@ -40,6 +40,12 @@ def normalize_email(email: str) -> str:
     return (email or "").strip().lower()
 
 
+def is_valid_email_format(email: str) -> bool:
+    """A deliberately loose shape check, not a real deliverability check. The one email
+    format rule this codebase uses everywhere an address is submitted (register, contact)."""
+    return "@" in email and "." in email.split("@")[-1]
+
+
 def hash_password(raw: str) -> str:
     # bcrypt silently truncates at 72 bytes. Reject rather than accept a weakened password.
     if len(raw.encode("utf-8")) > 72:

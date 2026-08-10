@@ -96,6 +96,7 @@ def health():
 # Routers are imported after app creation so they can import from app.main if needed.
 from app.routers import (  # noqa: E402
     admin,
+    admin_contacts,
     auth,
     leaderboard,
     leagues,
@@ -111,6 +112,7 @@ app.include_router(leaderboard.router)
 app.include_router(results.router)
 app.include_router(admin.router)
 app.include_router(leagues.router)
+app.include_router(admin_contacts.router)
 app.include_router(legal.router)
 app.include_router(public.router)
 

@@ -4,7 +4,13 @@
 {#
   This Week. The core screen (Spec Section 8).
 
-  Seven states, all handled below:
+  Eight states, all handled below:
+    0. poolless preview           signed in, no real pool yet (Post-launch fixes): the hidden
+                                   preview pool's current week, fully read only, no pick
+                                   controls rendered at all, a join code field and a link to
+                                   start a league. Checked first, before pool/week/games mean
+                                   anything else on this page; see picks_page's own try/except
+                                   around get_active_pool.
     1. no week and no next week   season has not started
     2. no week, next week drafted the slate opens soon
     3. week open, not locked      the three stage ranking UI (Phase 4)
@@ -112,7 +118,7 @@
 {# ------------------------------------------------------------------ lockbar #}
 
 {% block subbar %}
-{% if week and games %}
+{% if week and games and not preview_mode %}
   {% if locked %}
   <div class="lockbar lockbar-strong">
     <div class="lockbar-inner row">
@@ -149,7 +155,7 @@
 
 <div class="page-head">
   <div>
-    <p class="eyebrow">{{ pool.name }}</p>
+    <p class="eyebrow">{% if preview_mode %}Preview{% else %}{{ pool.name }}{% endif %}</p>
     <h1 class="page-title">
       {%- if week %}{{ week.label }}{% elif next_week %}{{ next_week.label }}{% else %}This week{% endif -%}
     </h1>
@@ -171,7 +177,42 @@
 </div>
 
 
-{% if not week %}
+{% if preview_mode %}
+{# ------------------------------------------- 0: poolless preview, read only #}
+<section class="section">
+  <div class="panel notice" role="status">
+    {{ ic.icon("info", 20) }}
+    <div class="notice-body">
+      <p class="notice-title">This is a preview</p>
+      <p>
+        A real, live slate, picked the same way a league's own is, but not tied to any
+        league. Join one to make picks, see standings, and follow results.
+      </p>
+      <div class="row">
+        <a class="btn btn-primary" href="/join">
+          {{ ic.icon("check", 18) }}<span>Enter a join code</span>
+        </a>
+        <a class="btn btn-secondary" href="/pricing">
+          {{ ic.icon("flag", 18) }}<span>Start your own league</span>
+        </a>
+      </div>
+    </div>
+  </div>
+
+  {% if week and games %}
+    <h2 class="section-title">{{ week.label }} preview slate</h2>
+    {{ readonly_list(games, picks_by_game, tz, week.label ~ " preview slate") }}
+  {% else %}
+    <div class="empty-state">
+      {{ ic.icon("calendar", 28) }}
+      <h2 class="empty-state-title">This week's preview is not ready yet.</h2>
+      <p>Check back soon.</p>
+    </div>
+  {% endif %}
+</section>
+
+
+{% elif not week %}
 {# ----------------------------------------------- 1 and 2: nothing open yet #}
 <section class="section">
   <div class="empty-state">

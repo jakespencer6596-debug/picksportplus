@@ -116,7 +116,10 @@ def leagues_page(
     db: Session = Depends(get_db),
     user: User = Depends(require_admin),
 ):
-    pools = list(db.scalars(select(Pool).order_by(Pool.name)))
+    # is_preview pools are never a customer league (Post-launch fixes, see DECISIONS.md): the
+    # one hidden preview pool never appears here, never gets a commissioner from this page,
+    # and is never counted alongside the real leagues a site admin manages.
+    pools = list(db.scalars(select(Pool).where(Pool.is_preview.is_(False)).order_by(Pool.name)))
     member_counts = dict(
         db.execute(
             select(PoolMember.pool_id, func.count(PoolMember.id)).group_by(PoolMember.pool_id)

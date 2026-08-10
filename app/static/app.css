@@ -4155,39 +4155,6 @@ a.toggle-btn { text-decoration: none; }
 
 .refer-card p { margin: 0; color: var(--text-muted); }
 
-/* -- Contact ---------------------------------------------------------------- */
-
-.contact-card {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-4);
-  max-width: 44ch;
-  padding: var(--space-6);
-  background: var(--bg-surface);
-  border: var(--hairline);
-  border-radius: var(--radius);
-  box-shadow: var(--shadow);
-  text-align: center;
-}
-
-.contact-icon {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 48px;
-  height: 48px;
-  margin: 0 auto;
-  background: var(--accent-tint);
-  border-radius: var(--radius-pill);
-  color: var(--accent);
-}
-
-.contact-email {
-  font-family: var(--font-display);
-  font-size: var(--fs-md);
-  font-weight: 600;
-}
-
 
 /* ==========================================================================
    RESPONSIVE. Breakpoints at 640px, 768px and 1024px.

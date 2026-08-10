@@ -18,7 +18,18 @@ from sqlalchemy.pool import StaticPool
 from app.auth import hash_password
 from app.db import get_db
 from app.main import app
-from app.models import Base, Game, PayoutRule, Pick, Pool, PoolMember, User, Week, WeekEntry
+from app.models import (
+    Base,
+    ContactSubmission,
+    Game,
+    PayoutRule,
+    Pick,
+    Pool,
+    PoolMember,
+    User,
+    Week,
+    WeekEntry,
+)
 
 UTC = dt.UTC
 
@@ -92,6 +103,31 @@ def _make_pool(
         timezone="America/New_York",
         current_week=5,
         payment_required_to_pick=payment_required_to_pick,
+    )
+    db.add(pool)
+    db.flush()
+    return pool
+
+
+def _make_preview_pool(db: Session, *, num_games: int = 4) -> Pool:
+    """The hidden is_preview pool (Post-launch fixes), built directly rather than through the
+    real seed-preview CLI command: that command calls build_slate, which would hit ESPN, and
+    force_offline_mode (tests/conftest.py) refuses that outright. Router tests only need a
+    real Week and real Game rows sitting behind is_preview=True, exactly what build_slate
+    would have produced."""
+    pool = Pool(
+        name="PickSportPlus Preview",
+        join_code="PREVIEWX",
+        season_year=2025,
+        num_games_per_week=num_games,
+        target_nfl=2,
+        target_ncaaf=2,
+        sports=["nfl", "ncaaf"],
+        auto_publish=True,
+        open_registration=False,
+        timezone="America/New_York",
+        current_week=5,
+        is_preview=True,
     )
     db.add(pool)
     db.flush()
@@ -296,7 +332,7 @@ def test_register_requires_a_valid_join_code_in_private_mode(client, world):
         data={
             "display_name": "New Person",
             "email": "new@example.com",
-            "password": "hunter2hunter2",
+            "password": "hunter2hunter2!",
             "join_code": "NOPE",
         },
     )
@@ -310,7 +346,7 @@ def test_register_with_the_right_code_joins_the_pool(client, world, session_fact
         data={
             "display_name": "New Person",
             "email": "new@example.com",
-            "password": "hunter2hunter2",
+            "password": "hunter2hunter2!",
             "join_code": "testcode",  # case insensitive on purpose
         },
     )
@@ -1275,7 +1311,7 @@ def test_join_code_rotation_invalidates_the_old_code(client, world, session_fact
         data={
             "display_name": "Too Late",
             "email": "late@example.com",
-            "password": "hunter2hunter2",
+            "password": "hunter2hunter2!",
             "join_code": "TESTCODE",
         },
     )
@@ -2275,7 +2311,7 @@ def test_register_with_a_valid_commissioner_code_creates_a_commissioner_not_an_a
         data={
             "display_name": "New Commissioner",
             "email": "newcommish@example.com",
-            "password": "hunter2hunter2",
+            "password": "hunter2hunter2!",
             "commissioner_code": "commish1",  # case insensitive, same convention as join codes
         },
     )
@@ -2300,7 +2336,7 @@ def test_register_with_an_invalid_commissioner_code_is_rejected(client, world, s
         data={
             "display_name": "Nope",
             "email": "nope@example.com",
-            "password": "hunter2hunter2",
+            "password": "hunter2hunter2!",
             "commissioner_code": "NOTREAL1",
         },
     )
@@ -2321,7 +2357,7 @@ def test_register_with_no_commissioner_code_is_unchanged_from_todays_behavior(cl
         data={
             "display_name": "Plain Player",
             "email": "plainplayer@example.com",
-            "password": "hunter2hunter2",
+            "password": "hunter2hunter2!",
         },
     )
     assert private_mode_rejected.status_code == 400
@@ -2331,7 +2367,7 @@ def test_register_with_no_commissioner_code_is_unchanged_from_todays_behavior(cl
         data={
             "display_name": "Plain Player",
             "email": "plainplayer@example.com",
-            "password": "hunter2hunter2",
+            "password": "hunter2hunter2!",
             "join_code": "TESTCODE",
         },
     )
@@ -2369,7 +2405,7 @@ def test_rotating_commissioner_invite_code_never_touches_join_code_and_vice_vers
         data={
             "display_name": "Too Late",
             "email": "toolate@example.com",
-            "password": "hunter2hunter2",
+            "password": "hunter2hunter2!",
             "commissioner_code": "OLDCOMM1",
         },
     )
@@ -2759,3 +2795,245 @@ def test_co_commissioner_of_two_pools_sees_the_switcher_and_can_switch(client, s
 
     after = client.get("/admin")
     assert "Second Co Pool" in after.text
+
+
+# Post-launch fixes: password policy, contact form, poolless preview slate -----
+
+
+def test_register_rejects_a_password_missing_a_symbol(client, world):
+    response = client.post(
+        "/register",
+        data={
+            "display_name": "No Symbol",
+            "email": "nosymbol@example.com",
+            "password": "plainpassword8",
+            "join_code": "TESTCODE",
+        },
+    )
+    assert response.status_code == 400
+    assert "symbol" in response.text.lower()
+
+    db_check = client.get("/login")  # sanity: no account leaked through on a rejected submit
+    assert db_check.status_code == 200
+
+
+def test_register_accepts_a_password_with_a_symbol(client, world, session_factory):
+    response = client.post(
+        "/register",
+        data={
+            "display_name": "Has Symbol",
+            "email": "hassymbol@example.com",
+            "password": "hunter2hunter2!",
+            "join_code": "TESTCODE",
+        },
+    )
+    assert response.status_code == 303
+
+    db = session_factory()
+    user = db.scalar(select(User).where(User.email == "hassymbol@example.com"))
+    assert user is not None
+    db.close()
+
+
+def test_contact_submit_creates_a_submission_and_shows_confirmation(client, session_factory):
+    response = client.post(
+        "/contact",
+        data={
+            "name": "Prospective Commissioner",
+            "email": "lead@example.com",
+            "message": "I run a 12 person league, how do we get set up?",
+        },
+    )
+    assert response.status_code == 303
+
+    db = session_factory()
+    submission = db.scalar(
+        select(ContactSubmission).where(ContactSubmission.email == "lead@example.com")
+    )
+    assert submission is not None
+    assert submission.name == "Prospective Commissioner"
+    assert "12 person league" in submission.message
+    db.close()
+
+    confirmation = client.get("/contact")
+    assert confirmation.status_code == 200
+    assert "24 hours" in confirmation.text
+
+
+def test_contact_submit_rejects_missing_fields_and_writes_nothing(client, session_factory):
+    response = client.post("/contact", data={"name": "", "email": "not-an-email", "message": ""})
+    assert response.status_code == 400
+
+    db = session_factory()
+    assert db.scalar(select(ContactSubmission)) is None
+    db.close()
+
+
+def test_contact_route_never_imports_or_calls_a_mail_library():
+    """No email or text message is ever sent by this feature. Self-check as a real test
+    rather than only a manual grep: fails the moment anyone wires an outbound mail library
+    into the contact route."""
+    import inspect
+
+    from app.routers import public as public_router
+
+    source = inspect.getsource(public_router)
+    for forbidden in ("smtplib", "sendgrid", "ses_client", "boto3"):
+        assert forbidden not in source
+
+
+def test_admin_contacts_page_refused_for_a_non_admin_commissioner(client, session_factory):
+    db = session_factory()
+    pool = _make_pool(db)
+    _make_pool_commissioner_who_is_not_admin(db, pool)
+    db.commit()
+    db.close()
+
+    _login(client, "commish@example.com")
+    response = client.get("/admin/contacts")
+    assert response.status_code == 403
+
+
+def test_admin_contacts_page_refused_for_a_regular_player(client, world):
+    _login(client, "player@example.com")
+    response = client.get("/admin/contacts")
+    assert response.status_code == 403
+
+
+def test_admin_contacts_page_shows_submissions_for_the_site_admin(client, world, session_factory):
+    db = session_factory()
+    db.add(ContactSubmission(name="Lead One", email="lead1@example.com", message="Tell me more."))
+    db.commit()
+    db.close()
+
+    _login(client, "boss@example.com")  # world's boss is role="admin"
+    response = client.get("/admin/contacts")
+    assert response.status_code == 200
+    assert "Lead One" in response.text
+    assert "lead1@example.com" in response.text
+    assert "Tell me more." in response.text
+
+
+def test_poolless_user_sees_the_preview_slate_read_only(client, session_factory):
+    db = session_factory()
+    preview_pool = _make_preview_pool(db)
+    week = _make_week(db, preview_pool)
+    games = _make_games(db, week)
+    _make_user(db, "newbie@example.com", "Newbie Player")
+    db.commit()
+    game_ids = [g.id for g in games]
+    home_team = games[0].home_team
+    away_team = games[0].away_team
+    db.close()
+
+    _login(client, "newbie@example.com")
+    response = client.get("/picks")
+    assert response.status_code == 200
+    assert "preview" in response.text.lower()
+    assert home_team in response.text
+    assert away_team in response.text
+    # Every preview game rendered, using the same readonly_list macro a real locked week
+    # already uses, not a parallel row template.
+    assert response.text.count('class="game-row is-complete"') == len(game_ids)
+
+    # No functioning pick-submission markup: no save form, no sortable list, no hidden
+    # winner/confidence inputs naming any of these games.
+    assert 'action="/picks"' not in response.text
+    assert "data-sortable" not in response.text
+    for gid in game_ids:
+        assert f'name="winner-{gid}"' not in response.text
+        assert f'name="confidence-{gid}"' not in response.text
+
+    # Both ways forward the product owner asked for.
+    assert 'href="/join"' in response.text
+    assert 'href="/pricing"' in response.text
+
+
+def test_poolless_user_with_no_preview_slate_built_sees_an_honest_empty_state(
+    client, session_factory
+):
+    db = session_factory()
+    _make_preview_pool(db)  # exists, but no Week/Game rows built yet
+    _make_user(db, "newbie4@example.com", "Newbie Four")
+    db.commit()
+    db.close()
+
+    _login(client, "newbie4@example.com")
+    response = client.get("/picks")
+    assert response.status_code == 200
+    assert "not ready yet" in response.text.lower()
+
+
+@pytest.mark.parametrize("path", ["/standings", "/results"])
+def test_poolless_user_is_still_blocked_from_standings_and_results(client, session_factory, path):
+    """Unchanged from before this feature: the preview is specifically and only the game
+    slate view. get_active_pool still 403s a poolless user for every other route."""
+    db = session_factory()
+    _make_user(db, "newbie3@example.com", "Newbie Three")
+    db.commit()
+    db.close()
+
+    _login(client, "newbie3@example.com")
+    response = client.get(path)
+    assert response.status_code == 403
+
+
+def test_poolless_user_cannot_submit_a_pick_even_against_the_preview_pool(client, session_factory):
+    """The read only claim is enforced server side, not just hidden in the UI: /picks POST
+    never reads a client supplied pool id at all, it only ever trusts get_active_pool, which
+    still refuses a poolless, non-admin user regardless of what a hand crafted request sends."""
+    db = session_factory()
+    preview_pool = _make_preview_pool(db)
+    week = _make_week(db, preview_pool)
+    games = _make_games(db, week)
+    _make_user(db, "newbie2@example.com", "Newbie Two")
+    db.commit()
+    week_id = week.id
+    game_ids = [g.id for g in games]
+    db.close()
+
+    _login(client, "newbie2@example.com")
+    response = client.post("/picks", data=_valid_submission(game_ids))
+    assert response.status_code == 403
+
+    db = session_factory()
+    assert db.scalar(select(Pick).where(Pick.week_id == week_id)) is None
+    db.close()
+
+
+def test_preview_pool_never_appears_in_admin_leagues_listing(client, world, session_factory):
+    db = session_factory()
+    preview_pool = _make_preview_pool(db)
+    week = _make_week(db, preview_pool)
+    _make_games(db, week)  # even with a real, built slate
+    db.commit()
+    preview_name = preview_pool.name
+    db.close()
+
+    _login(client, "boss@example.com")
+    response = client.get("/admin/leagues")
+    assert response.status_code == 200
+    assert "Test Pool" in response.text  # the real league still shows
+    assert preview_name not in response.text
+
+
+def test_preview_pool_never_appears_in_a_commissioners_multi_league_switcher(
+    client, session_factory
+):
+    """The switcher is driven entirely by real PoolMember rows (app/routers/admin.py's
+    _commissioner_pools). The preview pool never has one, by construction: nothing in this
+    codebase can ever attach a member to an is_preview pool, so a commissioner running one
+    real league plus the (invisible to them) preview pool still sees the plain single-league
+    view, never a switcher with the preview pool as an option."""
+    db = session_factory()
+    pool = _make_pool(db)
+    _make_pool_commissioner_who_is_not_admin(db, pool)
+    _make_preview_pool(db)
+    db.commit()
+    db.close()
+
+    _login(client, "commish@example.com")
+    response = client.get("/admin")
+    assert response.status_code == 200
+    assert "data-league-switcher" not in response.text
+    assert "PickSportPlus Preview" not in response.text

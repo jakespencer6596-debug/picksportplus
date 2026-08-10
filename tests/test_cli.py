@@ -121,3 +121,46 @@ def test_seed_admin_is_idempotent_and_leaves_auto_publish_alone_on_a_rerun(
         assert pool.auto_publish is True
     finally:
         session.close()
+
+
+def test_ensure_preview_pool_creates_a_hidden_pool_with_seed_admin_defaults(isolated_db):
+    """seed-preview's own build step needs the network (ESPN), which this offline test suite
+    never touches (tests/conftest.py's force_offline_mode). ensure_preview_pool itself is
+    pure database work, so it is exercised directly here rather than through the full CLI
+    command."""
+    from app.services.preview import ensure_preview_pool, get_preview_pool
+
+    session = isolated_db()
+    try:
+        assert get_preview_pool(session) is None
+
+        pool = ensure_preview_pool(session)
+        session.commit()
+
+        assert pool.is_preview is True
+        assert pool.num_games_per_week == 20
+        assert pool.target_nfl == 8
+        assert pool.target_ncaaf == 12
+        memberships = session.scalars(select(PoolMember).where(PoolMember.pool_id == pool.id)).all()
+        assert memberships == []
+    finally:
+        session.close()
+
+
+def test_ensure_preview_pool_is_idempotent(isolated_db):
+    from app.services.preview import ensure_preview_pool
+
+    session = isolated_db()
+    try:
+        first = ensure_preview_pool(session)
+        session.commit()
+        first_id = first.id
+
+        again = ensure_preview_pool(session)
+        session.commit()
+
+        assert again.id == first_id
+        assert session.scalar(select(Pool).where(Pool.is_preview.is_(True))) is not None
+        assert len(list(session.scalars(select(Pool).where(Pool.is_preview.is_(True))))) == 1
+    finally:
+        session.close()

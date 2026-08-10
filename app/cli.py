@@ -37,7 +37,11 @@ def _resolve_pool(db, pool_id: int | None = None) -> Pool:
         if pool is None:
             raise typer.BadParameter(f"No pool with id {pool_id}.")
         return pool
-    pool = db.scalars(select(Pool).order_by(Pool.id)).first()
+    # is_preview excluded from the default pool lookup (Post-launch fixes, see
+    # DECISIONS.md): an operator command run without an explicit --pool must never silently
+    # land on the hidden preview pool. Passing --pool explicitly still works, for seed-preview
+    # itself and for anyone who genuinely wants to target it by id.
+    pool = db.scalars(select(Pool).where(Pool.is_preview.is_(False)).order_by(Pool.id)).first()
     if pool is None:
         raise typer.Exit(code=_fail("No pool exists yet. Run: python -m app.cli seed-admin"))
     return pool
@@ -181,6 +185,46 @@ def seed_demo(
         _echo(line)
 
 
+@app.command("seed-preview")
+def seed_preview_cmd(
+    week: int | None = typer.Option(
+        None, "--week", "-w", help="Pool's own week number. Defaults to the detected current week."
+    ),
+    no_metered: bool = typer.Option(
+        False, "--no-metered", help="ESPN only. Spends no Odds API or CFBD credits."
+    ),
+) -> None:
+    """Create the preview pool if it does not exist yet, and build (and publish) its current
+    week's slate.
+
+    The only way the preview pool's games are ever built or refreshed: never automatic, never
+    triggered by a page view, only this explicit, human-triggered command. Safe to re-run;
+    reuses the same is_preview pool every time and rebuilds whichever week is current.
+    """
+    from app.services.ingest import build_slate, detect_week
+    from app.services.preview import ensure_preview_pool
+
+    with session_scope() as db:
+        pool = ensure_preview_pool(db)
+        db.flush()
+        week_number = week or detect_week(db, pool) or pool.current_week
+        report = build_slate(
+            db,
+            pool,
+            pool.season_year,
+            week_number,
+            allow_metered=not no_metered,
+            publish=True,
+        )
+        pool_id, pool_name = pool.id, pool.name
+    _echo(f"Preview pool: {pool_name} (id {pool_id})")
+    _echo(report.summary())
+    for note in report.notes:
+        _echo(f"  note: {note}")
+    for warning in report.warnings:
+        typer.secho(f"  warning: {warning}", fg=typer.colors.YELLOW)
+
+
 # Weekly lifecycle -----------------------------------------------------------
 
 
@@ -318,7 +362,10 @@ def run_cron(
 
     started = dt.datetime.now(dt.UTC)
     with session_scope() as db:
-        pools = list(db.scalars(select(Pool).order_by(Pool.id)))
+        # is_preview excluded (Post-launch fixes, see DECISIONS.md): run-cron is exactly the
+        # kind of automatic, scheduled trigger the preview pool must never be refreshed by.
+        # Its slate is only ever built by the explicit seed-preview command.
+        pools = list(db.scalars(select(Pool).where(Pool.is_preview.is_(False)).order_by(Pool.id)))
         if pool_id:
             pools = [p for p in pools if p.id == pool_id]
         if not pools:
@@ -435,7 +482,11 @@ def doctor(
 
     with session_scope() as db:
         pool = (
-            db.get(Pool, pool_id) if pool_id else db.scalars(select(Pool).order_by(Pool.id)).first()
+            db.get(Pool, pool_id)
+            if pool_id
+            else db.scalars(
+                select(Pool).where(Pool.is_preview.is_(False)).order_by(Pool.id)
+            ).first()
         )
         if pool is None:
             _echo("")
