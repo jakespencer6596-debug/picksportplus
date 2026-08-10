@@ -6,7 +6,12 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, Request
 from sqlalchemy.orm import Session
 
-from app.auth import get_active_pool, is_commissioner, require_user
+from app.auth import (
+    get_active_pool,
+    has_pending_co_commissioner_invite,
+    is_commissioner,
+    require_user,
+)
 from app.db import get_db
 from app.models import Pool, User
 from app.services import payouts as payout_service
@@ -52,6 +57,7 @@ def standings_page(
         pool=pool,
         is_commissioner=is_commissioner(db, user, pool),
         active_nav="standings",
+        pending_co_commissioner_invite=has_pending_co_commissioner_invite(db, user, pool),
     )
 
 

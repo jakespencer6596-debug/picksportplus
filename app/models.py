@@ -225,9 +225,29 @@ class PoolMember(Base):
     user_id: Mapped[int] = mapped_column(
         ForeignKey("users.id", ondelete="CASCADE"), index=True, nullable=False
     )
+    # "member" (default), "commissioner" (full power, including managing other
+    # commissioners), or "co_commissioner" (Post-launch fixes: everything a commissioner can
+    # do operationally, slate, settings, members, marking paid, but never promote, demote,
+    # remove a commissioner or co-commissioner, or see/share/rotate
+    # Pool.commissioner_invite_code). No DB level enum, see the module note above, so this
+    # third value needed no migration of its own for the column itself. See is_commissioner
+    # below and app.auth.require_full_commissioner for the operational-versus-roster-
+    # management split.
     role_in_pool: Mapped[str] = mapped_column(String(16), default="member", nullable=False)
     joined_at: Mapped[dt.datetime] = mapped_column(
         DateTime(timezone=True), default=utcnow, server_default=func.now(), nullable=False
+    )
+    # Set the moment a full commissioner invites this still-plain member to become a
+    # co-commissioner (POST /admin/members/{id}/co-commissioner/invite). role_in_pool stays
+    # "member" until the invited member accepts it themselves (POST
+    # /admin/co-commissioner/accept), which sets role_in_pool = "co_commissioner" and clears
+    # this back to null; declining (POST /admin/co-commissioner/decline) also clears it to
+    # null with no other change. Unlike the site admin's existing instant member_role toggle,
+    # a full commissioner's promotion never takes effect on its own, exactly the confirmation
+    # step the product owner asked for. Null the rest of the time: no invite pending. See
+    # DECISIONS.md, Post-launch fixes.
+    co_commissioner_invited_at: Mapped[dt.datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
     )
     # Set the moment a commissioner marks this member paid (POST /admin/members/{id}/paid or
     # the bulk action), cleared to unmark. Null means unpaid, the only state the Venmo gate
@@ -255,7 +275,14 @@ class PoolMember(Base):
 
     @property
     def is_commissioner(self) -> bool:
-        return self.role_in_pool == "commissioner"
+        """True for both a full commissioner and a co-commissioner: both can operate the pool
+        equally (slate editor, settings, members, marking paid). Every existing route gated on
+        this property, or on app.auth.is_commissioner/require_commissioner, needed no change
+        to treat a co-commissioner as a working commissioner. The narrower power a
+        co-commissioner does not get, managing anyone's commissioner status, is its own check,
+        app.auth.is_full_commissioner/require_full_commissioner, which tests role_in_pool ==
+        "commissioner" exactly rather than this property."""
+        return self.role_in_pool in ("commissioner", "co_commissioner")
 
 
 class Week(Base):

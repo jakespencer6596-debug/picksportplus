@@ -2315,6 +2315,50 @@ button.team-btn:not([disabled]):not(.is-picked):hover {
 
 .lockbar-strong svg { color: var(--text-invert); }
 
+/* -- Co-commissioner invite banner ---------------------------------------
+   Shown near the top of a member's own pages (picks, standings, results)
+   while they have a pending co-commissioner invite (Post-launch fixes:
+   co-commissioner self-service invites with confirmation). Deliberately not
+   .lockbar above: that is the site admin borrowing commissioner power for a
+   league they do not run, drawn full bleed and sticky in gold to read as
+   "you are here on borrowed authority". This is the opposite message, an
+   invite into the viewer's own account that they can accept or decline, so
+   it sits in normal document flow, in the same understated maroon accent
+   .flash already uses for its border-left treatment, with its own
+   Accept/Decline actions instead of a single exit link.
+   ------------------------------------------------------------------------ */
+
+.invite-banner {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2) var(--space-4);
+  padding: var(--space-3) var(--space-4);
+  margin-bottom: var(--space-5);
+  background: var(--bg-surface);
+  border: var(--hairline);
+  border-left: 4px solid var(--accent-2);
+  border-radius: var(--radius-sm);
+  font-size: var(--fs-sm);
+  color: var(--text);
+}
+
+.invite-banner svg {
+  width: 18px;
+  height: 18px;
+  stroke-width: 2;
+  color: var(--accent-2);
+  flex-shrink: 0;
+}
+
+.invite-banner span { flex: 1 1 260px; }
+
+.invite-banner-actions {
+  display: flex;
+  gap: var(--space-2);
+  flex-shrink: 0;
+}
+
 /* -- Flash messages ------------------------------------------------------ */
 
 /* The container the base template renders flashes into. */

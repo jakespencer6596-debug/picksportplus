@@ -2155,3 +2155,128 @@ dependency, no Tailwind or bundler, no SPA; the only new CSS is the small
 `app/static/app.css`, built from the same design tokens and the same native
 `<details>`/`<summary>` disclosure pattern `.invite-details` already established, not a new
 visual language.
+
+### Co-commissioner self-service invites with confirmation
+
+The product owner's own words: "There should also be the ability for the commissioner to add
+co-commissioner, they can invite them via link or give them permissions within the portal
+itself, just upgrading folks they must confirm. The co-commissioner cannot promote any other
+co-commissioners or remove any other commissioner, but has the same privileges like picking
+games, marking who has paid or not."
+
+**The new `co_commissioner` role value, and why `is_commissioner` treats it as fully
+operational.** `PoolMember.role_in_pool` (`app/models.py`) is a plain string with no DB level
+enum, so the third value needed no migration of its own for the column. `is_commissioner`
+(the model property) now returns `True` for both `"commissioner"` and `"co_commissioner"`,
+since the product owner was explicit that a co-commissioner has "the same privileges like
+picking games, marking who has paid or not": every existing route already gated on
+`is_commissioner`/`app.auth.is_commissioner`/`require_commissioner` (the slate editor,
+settings, members, marking paid) needed zero changes to keep working correctly for a
+co-commissioner. The one narrower power a co-commissioner does not get, managing anyone's
+commissioner status, is its own new check, `app.auth.is_full_commissioner` /
+`require_full_commissioner`, which tests `role_in_pool == "commissioner"` exactly rather than
+the broader property. It gates exactly five things: `member_role` (now also reachable by a
+real full commissioner, not just the site admin, but a non-admin caller may only demote,
+`role="member"`, never promote directly to `"commissioner"`, since a full commissioner's own
+promotion path is the confirmed invite below), the new
+`co_commissioner_invite`/`co_commissioner_cancel` routes, and the new self-service
+`rotate_commissioner_invite_code_self` route (`POST /admin/commissioner-code`). The site
+admin's own instant, unconfirmed `member_role` power is completely unaffected: `user.is_admin`
+still always satisfies `is_full_commissioner`, and the promote-only-by-admin check inside
+`member_role` never applies to it.
+
+**The confirm-required promotion design, and the new `co_commissioner_invited_at` column.**
+Unlike the admin's existing instant toggle, a full commissioner inviting a co-commissioner
+(`POST /admin/members/{id}/co-commissioner/invite`) never changes `role_in_pool` on its own.
+It sets a new, nullable `PoolMember.co_commissioner_invited_at: dt.datetime | None` column
+(migration `947d228f154d_add_co_commissioner_invited_at`, on top of the current head), leaving
+`role_in_pool` at `"member"`. The invited member sees a small banner near the top of their own
+pages (base.html, gated on a new `pending_co_commissioner_invite` context key that
+`picks.py`, `leaderboard.py`, and `results.py` each pass through, the three pages a plain
+member actually visits before they have any admin access at all) and accepts (`POST
+/admin/co-commissioner/accept`, sets `role_in_pool = "co_commissioner"` and clears the column)
+or declines (`POST /admin/co-commissioner/decline`, only clears the column, no other state
+change). Both routes act on the caller's own `PoolMember` row in their active pool and are
+deliberately not gated by `require_commissioner` or `require_full_commissioner`: the whole
+point is that the caller is still a plain member at the moment they act. A full commissioner
+can also see and cancel a pending invite from `admin/members.html`'s roster table (`POST
+.../co-commissioner/cancel`), and sending a second invite to an already-pending member is a
+no-op with an informational flash rather than an error, matching `member_paid_toggle`'s own
+"nobody selected was still unpaid" tone elsewhere on the same page. `member_role` also clears
+this column on any direct role change, so a role set by hand never leaves a stale invite
+behind offering a role that no longer makes sense. Demotion (a full commissioner removing a
+commissioner or co-commissioner from that role) stays instant with no confirmation step,
+exactly like the admin's existing path, since the product owner's confirmation requirement was
+specifically about upgrading someone, not downgrading them.
+
+**Why invite-link visibility is restricted to full commissioners only.** Sharing
+`Pool.commissioner_invite_code` (`b5e550e`) is functionally identical to creating a new full
+commissioner directly, no confirmation step needed because registering with it is itself the
+new commissioner's own consent, exactly the reasoning `b5e550e` already established. A full
+commissioner now sees and can rotate their own pool's link from `admin/members.html` (chosen
+over `admin/settings.html`: this page already holds the parallel player join-code and "Invite
+players" panels from `b5e550e`, so the commissioner invite link reads as a third, familiar
+member of the same family rather than a new concept on a different page), reusing
+`app/routers/leagues.py`'s existing `_fresh_commissioner_invite_code` rather than a second
+generator. Rotation was included, not just viewing: the brief left it as a judgment call, and
+a full commissioner who can already create a new commissioner outright by sharing the link has
+no meaningful additional exposure from also being able to retire a leaked or misused one
+themselves, the same trust level the admin already extends to them elsewhere on this page (the
+join code rotate control right above it). A co-commissioner never sees this panel at all
+(`can_manage_commissioners`, computed once in `admin.py`'s `_base()` via
+`is_full_commissioner`, gates the whole section) and every route behind it 403s a
+co-commissioner the same way `member_role` does.
+
+**The layout choice that avoids the table-whitespace problem flagged in visual QA.** The
+admin's commissioner invite panel on `/admin/leagues` nests a `<details>` disclosure inside a
+table `<td>`, which a same-day visual QA pass flagged: expanding it leaves a large dead gap
+above the revealed content because the table row's height does not reflow cleanly around block
+content in a cell. This feature avoids that shape entirely. The commissioner invite link on
+`/admin/members` is its own standalone `<section>`/`<card>` above the roster table, always
+rendered open (no `<details>` at all), the same pattern the pre-existing "Join code" and
+"Invite players" sections on that same page already use, so there is no collapse/expand
+transition to misbehave. Inside the roster table itself, the per-row co-commissioner controls
+(invite, cancel, an "Invite pending" badge) are plain buttons and a badge, never a disclosure,
+so no table row can grow the way the flagged one did. The invited member's own accept/decline
+controls live in a banner outside any table entirely (`base.html`, see above). New CSS is one
+small `.invite-banner`/`.invite-banner-actions` block in `app/static/app.css`, deliberately
+not `.lockbar`: that reads as the site admin operating on borrowed authority (full bleed,
+sticky, gold), this reads as an invitation into the viewer's own account they can accept or
+decline (in normal document flow, the same understated maroon accent `.flash` already uses),
+with its own Accept/Decline actions rather than a single exit link. Everything else reuses
+existing `.card`, `.section`, `.badge`, `.form-hint`, `.row`, and `.btn` classes.
+
+**Two small, "obviously necessary" adjustments elsewhere, per the brief.** `_commissioner_pools`
+and `POST /admin/switch-league` (`app/routers/admin.py`) both filtered strictly on
+`role_in_pool == "commissioner"`; both now also match `"co_commissioner"`, so a co-commissioner
+running more than one pool sees and can use the same multi-league switcher (`8fe4b71`) a full
+commissioner would, since operating a pool day to day, not managing its commissioner roster, is
+the bar for that switch.
+
+**Deliberately left untouched.** `/admin/leagues.html`'s admin-only commissioner invite panel
+and its `commissioners_by_pool` query (`app/routers/leagues.py`) still only lists real
+`"commissioner"` rows, not co-commissioners; the brief did not ask for that list to change, and
+widening it was left out to keep this change bounded to what was asked. `member_remove` (full
+removal from the pool) also keeps its existing `require_commissioner` gate, unchanged: the
+brief's "cannot ... remove a commissioner or co-commissioner" is about the commissioner role
+specifically (`member_role`'s demote path), not full removal from the pool, which was already,
+and remains, open to any operating commissioner including a co-commissioner.
+
+**Verification.** `ruff check .`, `black .`, and `pytest -q` all clean, 844 passed, 0 failed
+(823 at the previous post-launch baseline, 21 net new tests: the invite/accept/decline round
+trip, a second invite to an already-pending member being a no-op, a co-commissioner refused on
+every commissioner-management action in one parametrized test plus a dedicated invite-link
+visibility check, a full commissioner rotating their own invite link, a full commissioner
+demoting a co-commissioner and a peer commissioner instantly with no confirmation step, a
+co-commissioner reaching every operational admin page and marking a member paid and unpaid, a
+site admin regression check proving instant promote/demote is unaffected, and a co-commissioner
+of two pools seeing and using the multi-league switcher). Migration `947d228f154d` applies
+cleanly on top of the current head against the live dev database. `grep -rn "—" app/models.py
+app/auth.py app/routers/admin.py app/routers/picks.py app/routers/leaderboard.py
+app/routers/results.py app/templates/base.html app/templates/admin/members.html
+app/static/app.css alembic/versions/947d228f154d_add_co_commissioner_invited_at.py
+tests/test_app.py` finds only the literal em dash inside the pre-existing
+`test_members_page_shows_the_invite_link_and_a_working_mailto` test's own assertion string
+that checks for its absence, nothing in any real copy. No emoji anywhere touched. No new
+Tailwind or bundler, no SPA; every template change reuses existing design tokens and classes
+except the one small `.invite-banner` block described above.

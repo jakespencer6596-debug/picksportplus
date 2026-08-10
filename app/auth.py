@@ -186,3 +186,41 @@ def require_commissioner(
     if not is_commissioner(db, user, pool):
         raise HTTPException(status.HTTP_403_FORBIDDEN, "Commissioner access only.")
     return pool
+
+
+def is_full_commissioner(db: Session, user: User, pool: Pool) -> bool:
+    """True for the site admin or a real, full "commissioner" of this pool, never a
+    "co_commissioner" (Post-launch fixes: co-commissioner self-service invites with
+    confirmation). Narrower than is_commissioner/PoolMember.is_commissioner, which treats a
+    commissioner and a co-commissioner as equally able to operate the pool day to day; this is
+    the one check for the roster-management powers a co-commissioner never gets: promoting or
+    demoting anyone, removing a commissioner or co-commissioner from that role, inviting or
+    canceling a co-commissioner invite, and seeing, sharing or rotating
+    Pool.commissioner_invite_code."""
+    if user.is_admin:
+        return True
+    member = membership_for(db, user, pool)
+    return bool(member and member.role_in_pool == "commissioner")
+
+
+def require_full_commissioner(
+    db: Session = Depends(get_db),
+    user: User = Depends(require_user),
+    pool: Pool = Depends(get_active_pool),
+) -> Pool:
+    if not is_full_commissioner(db, user, pool):
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "Full commissioner access only.")
+    return pool
+
+
+def has_pending_co_commissioner_invite(db: Session, user: User, pool: Pool) -> bool:
+    """True when this user's own membership in pool is still a plain member with a
+    co-commissioner invite awaiting their accept or decline. Drives the small banner
+    base.html renders near the top of a member's own pages (picks.py, leaderboard.py,
+    results.py each pass this through); never true once a commissioner or co-commissioner
+    already, since PoolMember.co_commissioner_invited_at is cleared the moment either route
+    resolves it."""
+    member = membership_for(db, user, pool)
+    return bool(
+        member and member.role_in_pool == "member" and member.co_commissioner_invited_at is not None
+    )

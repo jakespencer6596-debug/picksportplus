@@ -100,6 +100,46 @@ See you on the leaderboard.
   </div>
 </section>
 
+{% if can_manage_commissioners %}
+<section class="section" aria-labelledby="commissioner-invite-title">
+  <h2 class="section-title" id="commissioner-invite-title">Commissioner invite link</h2>
+
+  <div class="card">
+    <div class="card-body">
+      <p class="eyebrow">Add another commissioner</p>
+      {% if pool.commissioner_invite_code %}
+        <label class="field-label" for="commissioner-link">
+          Link for a new commissioner<span class="visually-hidden">, {{ pool.name }}</span>
+        </label>
+        <input class="input" type="text" id="commissioner-link" readonly
+               value="{{ base_url }}/register?commissioner_code={{ pool.commissioner_invite_code }}">
+        <div class="row">
+          <button type="button" class="btn btn-secondary btn-sm" data-copy="#commissioner-link">
+            Copy link
+          </button>
+          <form method="post" action="/admin/commissioner-code" class="inline-form">
+            <button class="btn btn-ghost btn-sm" type="submit">Generate a new link</button>
+          </form>
+        </div>
+        <p class="form-hint">
+          Anyone who opens this link creates their own commissioner account for {{ pool.name }},
+          with the same full powers you have. No approval step here, since making their own
+          account is itself the confirmation. For someone who should help you run this pool
+          with narrower power instead, invite them as a co-commissioner from the roster below:
+          that needs their acceptance first, and they can never manage another commissioner.
+        </p>
+      {% else %}
+        <form method="post" action="/admin/commissioner-code" class="inline-form">
+          <button class="btn btn-secondary btn-sm" type="submit">
+            Create a commissioner invite link
+          </button>
+        </form>
+      {% endif %}
+    </div>
+  </div>
+</section>
+{% endif %}
+
 <section class="section" aria-labelledby="roster-title">
   <h2 class="section-title" id="roster-title">The roster</h2>
 
@@ -162,12 +202,17 @@ See you on the leaderboard.
                 <a class="member-email" href="mailto:{{ player.email }}">{{ player.email }}</a>
               </td>
               <td data-label="Role">
-                {% if member.is_commissioner %}
+                {% if member.role_in_pool == "commissioner" %}
                   <span class="badge badge-commissioner">Commissioner</span>
+                {% elif member.role_in_pool == "co_commissioner" %}
+                  <span class="badge badge-commissioner">Co-commissioner</span>
                 {% else %}
                   <span class="badge badge-member">Member</span>
                 {% endif %}
                 {% if player.role == "admin" %}<span class="pill">Site admin</span>{% endif %}
+                {% if member.role_in_pool == "member" and member.co_commissioner_invited_at %}
+                  <span class="badge badge-locked">Invite pending</span>
+                {% endif %}
               </td>
               <td data-label="Paid">
                 {% if member.paid_at %}
@@ -199,14 +244,40 @@ See you on the leaderboard.
                 {{ member.joined_at | shortdate(tz) }}, {{ (member.joined_at | localtime(tz)).year }}
               </td>
               <td data-label="Actions" class="cell-actions">
-                <form method="post" action="/admin/members/{{ member.id }}/role" class="inline-form">
-                  <input type="hidden" name="role"
-                         value="{% if member.is_commissioner %}member{% else %}commissioner{% endif %}">
-                  <button class="btn btn-secondary btn-sm" type="submit">
-                    {% if member.is_commissioner %}Make a member{% else %}Make commissioner{% endif %}
-                    <span class="visually-hidden">, {{ player.display_name }}</span>
-                  </button>
-                </form>
+                {% if current_user.is_admin %}
+                  <form method="post" action="/admin/members/{{ member.id }}/role" class="inline-form">
+                    <input type="hidden" name="role"
+                           value="{% if member.is_commissioner %}member{% else %}commissioner{% endif %}">
+                    <button class="btn btn-secondary btn-sm" type="submit">
+                      {% if member.is_commissioner %}Make a member{% else %}Make commissioner{% endif %}
+                      <span class="visually-hidden">, {{ player.display_name }}</span>
+                    </button>
+                  </form>
+                {% elif can_manage_commissioners %}
+                  {% if member.is_commissioner %}
+                    <form method="post" action="/admin/members/{{ member.id }}/role" class="inline-form">
+                      <input type="hidden" name="role" value="member">
+                      <button class="btn btn-secondary btn-sm" type="submit">
+                        Make a member<span class="visually-hidden">, {{ player.display_name }}</span>
+                      </button>
+                    </form>
+                  {% elif member.co_commissioner_invited_at %}
+                    <form method="post" action="/admin/members/{{ member.id }}/co-commissioner/cancel"
+                          class="inline-form">
+                      <button class="btn btn-ghost btn-sm" type="submit">
+                        Cancel invite<span class="visually-hidden">, {{ player.display_name }}</span>
+                      </button>
+                    </form>
+                  {% else %}
+                    <form method="post" action="/admin/members/{{ member.id }}/co-commissioner/invite"
+                          class="inline-form">
+                      <button class="btn btn-secondary btn-sm" type="submit">
+                        Invite as co-commissioner
+                        <span class="visually-hidden">, {{ player.display_name }}</span>
+                      </button>
+                    </form>
+                  {% endif %}
+                {% endif %}
 
                 {% if is_me %}
                   <span class="cell-note muted">You cannot remove yourself from the pool.</span>

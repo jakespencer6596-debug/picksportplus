@@ -2436,3 +2436,326 @@ def test_members_page_shows_the_invite_link_and_a_working_mailto(client, world):
     assert "TESTCODE" in response.text
     # No em dash anywhere in the generated invite copy.
     assert "—" not in response.text
+
+
+# Co-commissioner self-service invites with confirmation (post-launch) --------
+#
+# "world"'s only commissioner (boss@example.com) is deliberately also the site admin, which is
+# realistic for the one seeded account but not what these boundary tests need (see the comment
+# above the leagues admin-routes tests), so these build their own pools with a real, non-admin
+# full commissioner, reusing _make_pool_commissioner_who_is_not_admin (defined above) exactly
+# the way the leagues admin-routes tests already do.
+
+
+def _make_co_commissioner_world(db: Session) -> dict:
+    """A pool with a real, non-admin full commissioner ("commish@example.com") and one plain
+    member, ready for the invite/accept/decline round trip."""
+    pool = _make_pool(db)
+    _make_pool_commissioner_who_is_not_admin(db, pool)
+    member = _make_user(db, "member1@example.com", "Plain Member")
+    member_row = PoolMember(pool_id=pool.id, user_id=member.id, role_in_pool="member")
+    db.add(member_row)
+    db.commit()
+    return {"pool_id": pool.id, "member_pool_member_id": member_row.id}
+
+
+def _make_co_commissioner_operational_world(db: Session) -> dict:
+    """A pool with a real full commissioner, an already-accepted co-commissioner
+    ("coco@example.com"), and one plain member, for testing the operational-versus-
+    roster-management boundary a co-commissioner sits on."""
+    pool = _make_pool(db)
+    commish = _make_pool_commissioner_who_is_not_admin(db, pool)
+    coco = _make_user(db, "coco@example.com", "Co Commissioner")
+    coco_row = PoolMember(pool_id=pool.id, user_id=coco.id, role_in_pool="co_commissioner")
+    db.add(coco_row)
+    member = _make_user(db, "member2@example.com", "Plain Member Two")
+    member_row = PoolMember(pool_id=pool.id, user_id=member.id, role_in_pool="member")
+    db.add(member_row)
+    week = _make_week(db, pool)
+    _make_games(db, week)
+    db.commit()
+    commish_member_id = db.scalar(
+        select(PoolMember).where(PoolMember.pool_id == pool.id, PoolMember.user_id == commish.id)
+    ).id
+    return {
+        "pool_id": pool.id,
+        "commish_member_id": commish_member_id,
+        "coco_member_id": coco_row.id,
+        "member_id": member_row.id,
+        "week_id": week.id,
+    }
+
+
+def test_full_commissioner_invite_does_not_promote_the_member_immediately(client, session_factory):
+    db = session_factory()
+    w = _make_co_commissioner_world(db)
+    db.close()
+
+    _login(client, "commish@example.com")
+    response = client.post(f"/admin/members/{w['member_pool_member_id']}/co-commissioner/invite")
+    assert response.status_code == 303
+
+    db = session_factory()
+    member = db.get(PoolMember, w["member_pool_member_id"])
+    assert member.role_in_pool == "member"
+    assert member.co_commissioner_invited_at is not None
+    db.close()
+
+
+def test_invited_member_accepting_becomes_a_co_commissioner(client, session_factory):
+    db = session_factory()
+    w = _make_co_commissioner_world(db)
+    db.close()
+
+    _login(client, "commish@example.com")
+    client.post(f"/admin/members/{w['member_pool_member_id']}/co-commissioner/invite")
+    client.post("/logout")
+
+    _login(client, "member1@example.com")
+    response = client.post("/admin/co-commissioner/accept")
+    assert response.status_code == 303
+
+    db = session_factory()
+    member = db.get(PoolMember, w["member_pool_member_id"])
+    assert member.role_in_pool == "co_commissioner"
+    assert member.co_commissioner_invited_at is None
+    db.close()
+
+
+def test_invited_member_declining_stays_a_plain_member(client, session_factory):
+    db = session_factory()
+    w = _make_co_commissioner_world(db)
+    db.close()
+
+    _login(client, "commish@example.com")
+    client.post(f"/admin/members/{w['member_pool_member_id']}/co-commissioner/invite")
+    client.post("/logout")
+
+    _login(client, "member1@example.com")
+    response = client.post("/admin/co-commissioner/decline")
+    assert response.status_code == 303
+
+    db = session_factory()
+    member = db.get(PoolMember, w["member_pool_member_id"])
+    assert member.role_in_pool == "member"
+    assert member.co_commissioner_invited_at is None
+    db.close()
+
+
+def test_a_second_invite_to_an_already_pending_member_is_a_no_op(client, session_factory):
+    db = session_factory()
+    w = _make_co_commissioner_world(db)
+    db.close()
+
+    _login(client, "commish@example.com")
+    first = client.post(f"/admin/members/{w['member_pool_member_id']}/co-commissioner/invite")
+    assert first.status_code == 303
+
+    db = session_factory()
+    first_invited_at = db.get(PoolMember, w["member_pool_member_id"]).co_commissioner_invited_at
+    db.close()
+
+    second = client.post(f"/admin/members/{w['member_pool_member_id']}/co-commissioner/invite")
+    assert second.status_code == 303
+
+    db = session_factory()
+    member = db.get(PoolMember, w["member_pool_member_id"])
+    assert member.role_in_pool == "member"
+    assert member.co_commissioner_invited_at == first_invited_at
+    db.close()
+
+
+@pytest.mark.parametrize(
+    "method,path,data",
+    [
+        ("post", "/admin/members/{member_id}/co-commissioner/invite", None),
+        ("post", "/admin/members/{member_id}/role", {"role": "commissioner"}),
+        ("post", "/admin/members/{commish_member_id}/role", {"role": "member"}),
+        ("post", "/admin/members/{coco_member_id}/role", {"role": "member"}),
+        ("post", "/admin/members/{coco_member_id}/co-commissioner/cancel", None),
+        ("post", "/admin/commissioner-code", None),
+    ],
+)
+def test_co_commissioner_cannot_manage_anyones_commissioner_status(
+    client, session_factory, method, path, data
+):
+    """Every commissioner-roster-management action is refused for a co-commissioner: inviting
+    a new one, promoting a member directly, demoting a fellow full commissioner or another
+    co-commissioner, canceling someone else's invite, and rotating the commissioner invite
+    link. is_commissioner (broad) says yes to a co-commissioner everywhere else; only
+    is_full_commissioner (narrow) gates these."""
+    db = session_factory()
+    w = _make_co_commissioner_operational_world(db)
+    db.close()
+
+    _login(client, "coco@example.com")
+    target = path.format(**w)
+    response = (
+        getattr(client, method)(target, data=data) if data else getattr(client, method)(target)
+    )
+    assert response.status_code == 403
+
+
+def test_co_commissioner_cannot_see_the_commissioner_invite_link(client, session_factory):
+    db = session_factory()
+    w = _make_co_commissioner_operational_world(db)
+    pool = db.get(Pool, w["pool_id"])
+    pool.commissioner_invite_code = "COCOCODE"
+    db.commit()
+    db.close()
+
+    _login(client, "coco@example.com")
+    response = client.get("/admin/members")
+    assert response.status_code == 200
+    assert "commissioner_code=COCOCODE" not in response.text
+    assert "Commissioner invite link" not in response.text
+    client.post("/logout")
+
+    _login(client, "commish@example.com")
+    response = client.get("/admin/members")
+    assert response.status_code == 200
+    assert "commissioner_code=COCOCODE" in response.text
+    assert "Commissioner invite link" in response.text
+
+
+def test_full_commissioner_can_rotate_their_own_commissioner_invite_link(client, session_factory):
+    db = session_factory()
+    pool = _make_pool(db)
+    _make_pool_commissioner_who_is_not_admin(db, pool)
+    pool.commissioner_invite_code = "OLDSELF1"
+    db.commit()
+    pool_id = pool.id
+    db.close()
+
+    _login(client, "commish@example.com")
+    response = client.post("/admin/commissioner-code")
+    assert response.status_code == 303
+
+    db = session_factory()
+    pool = db.get(Pool, pool_id)
+    assert pool.commissioner_invite_code is not None
+    assert pool.commissioner_invite_code != "OLDSELF1"
+    db.close()
+
+
+def test_full_commissioner_can_demote_a_co_commissioner_instantly(client, session_factory):
+    db = session_factory()
+    w = _make_co_commissioner_operational_world(db)
+    db.close()
+
+    _login(client, "commish@example.com")
+    response = client.post(f"/admin/members/{w['coco_member_id']}/role", data={"role": "member"})
+    assert response.status_code == 303
+
+    db = session_factory()
+    member = db.get(PoolMember, w["coco_member_id"])
+    assert member.role_in_pool == "member"
+    db.close()
+
+
+def test_full_commissioner_can_demote_another_commissioner_instantly(client, session_factory):
+    db = session_factory()
+    pool = _make_pool(db)
+    _make_pool_commissioner_who_is_not_admin(db, pool)
+    peer = _make_user(db, "peer.commish@example.com", "Peer Commissioner")
+    peer_row = PoolMember(pool_id=pool.id, user_id=peer.id, role_in_pool="commissioner")
+    db.add(peer_row)
+    db.commit()
+    peer_member_id = peer_row.id
+    db.close()
+
+    _login(client, "commish@example.com")
+    response = client.post(f"/admin/members/{peer_member_id}/role", data={"role": "member"})
+    assert response.status_code == 303
+
+    db = session_factory()
+    member = db.get(PoolMember, peer_member_id)
+    assert member.role_in_pool == "member"
+    db.close()
+
+
+@pytest.mark.parametrize("path", ["/admin", "/admin/slate", "/admin/members", "/admin/settings"])
+def test_co_commissioner_reaches_the_same_operational_admin_pages_as_a_commissioner(
+    client, session_factory, path
+):
+    db = session_factory()
+    _make_co_commissioner_operational_world(db)
+    db.close()
+
+    _login(client, "coco@example.com")
+    response = client.get(path)
+    assert response.status_code == 200, response.text[:800]
+
+
+def test_co_commissioner_can_mark_a_member_paid_and_unpaid(client, session_factory):
+    db = session_factory()
+    w = _make_co_commissioner_operational_world(db)
+    db.close()
+
+    _login(client, "coco@example.com")
+    response = client.post(f"/admin/members/{w['member_id']}/paid")
+    assert response.status_code == 303
+
+    db = session_factory()
+    member = db.get(PoolMember, w["member_id"])
+    assert member.paid_at is not None
+    db.close()
+
+    response = client.post(f"/admin/members/{w['member_id']}/paid")
+    assert response.status_code == 303
+    db = session_factory()
+    member = db.get(PoolMember, w["member_id"])
+    assert member.paid_at is None
+    db.close()
+
+
+def test_admin_promote_and_demote_power_is_unaffected_by_co_commissioner_work(
+    client, world, session_factory
+):
+    """Regression check (Post-launch fixes): the site admin's existing instant, unconfirmed
+    member_role power, across any pool, still works exactly as it did before this feature."""
+    db = session_factory()
+    player_member_id = db.scalar(
+        select(PoolMember).where(
+            PoolMember.pool_id == world["pool_id"], PoolMember.user_id == world["player_id"]
+        )
+    ).id
+    db.close()
+
+    _login(client, "boss@example.com")
+    promote = client.post(f"/admin/members/{player_member_id}/role", data={"role": "commissioner"})
+    assert promote.status_code == 303
+    db = session_factory()
+    assert db.get(PoolMember, player_member_id).role_in_pool == "commissioner"
+    db.close()
+
+    demote = client.post(f"/admin/members/{player_member_id}/role", data={"role": "member"})
+    assert demote.status_code == 303
+    db = session_factory()
+    assert db.get(PoolMember, player_member_id).role_in_pool == "member"
+    db.close()
+
+
+def test_co_commissioner_of_two_pools_sees_the_switcher_and_can_switch(client, session_factory):
+    """The multi-league switcher (8fe4b71) filtered strictly on role_in_pool ==
+    "commissioner"; a co-commissioner running more than one pool needs the same switcher."""
+    db = session_factory()
+    pool_a = _make_pool(db)
+    pool_b = _make_other_pool(db, name="Second Co Pool", join_code="COCOPOOL")
+    coco = _make_user(db, "multi.coco@example.com", "Multi Coco")
+    db.add(PoolMember(pool_id=pool_a.id, user_id=coco.id, role_in_pool="co_commissioner"))
+    db.add(PoolMember(pool_id=pool_b.id, user_id=coco.id, role_in_pool="co_commissioner"))
+    db.commit()
+    pool_b_id = pool_b.id
+    db.close()
+
+    _login(client, "multi.coco@example.com")
+    response = client.get("/admin")
+    assert response.status_code == 200
+    assert "data-league-switcher" in response.text
+
+    switch = client.post("/admin/switch-league", data={"pool_id": pool_b_id})
+    assert switch.status_code == 303
+
+    after = client.get("/admin")
+    assert "Second Co Pool" in after.text

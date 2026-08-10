@@ -11,7 +11,12 @@ from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.auth import get_active_pool, is_commissioner, require_user
+from app.auth import (
+    get_active_pool,
+    has_pending_co_commissioner_invite,
+    is_commissioner,
+    require_user,
+)
 from app.db import get_db
 from app.models import Game, Pick, Pool, PoolMember, User, Week, WeekEntry
 from app.routers.picks import week_is_locked
@@ -246,6 +251,7 @@ def results_page(
         pool=pool,
         is_commissioner=is_commissioner(db, user, pool),
         active_nav="results",
+        pending_co_commissioner_invite=has_pending_co_commissioner_invite(db, user, pool),
     )
 
 

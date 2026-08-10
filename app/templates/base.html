@@ -105,6 +105,25 @@
 
 <main id="main" class="shell">
   <div class="container">
+    {% if pending_co_commissioner_invite and pool %}
+      <div class="invite-banner" role="status">
+        {{ ic.icon("users", 18) }}
+        <span>
+          You've been invited to become a co-commissioner of {{ pool.name }}. You'd be able to
+          build slates, edit settings and mark payments, just like a commissioner, but you
+          could never manage another commissioner.
+        </span>
+        <div class="invite-banner-actions">
+          <form method="post" action="/admin/co-commissioner/accept" class="inline-form">
+            <button class="btn btn-primary btn-sm" type="submit">Accept</button>
+          </form>
+          <form method="post" action="/admin/co-commissioner/decline" class="inline-form">
+            <button class="btn btn-ghost btn-sm" type="submit">Decline</button>
+          </form>
+        </div>
+      </div>
+    {% endif %}
+
     {% with flashes = flashes or [] %}
       {% if flashes %}
         <div class="flash-stack" role="status" aria-live="polite">

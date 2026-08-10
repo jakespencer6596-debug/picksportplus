@@ -10,7 +10,14 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 from starlette.concurrency import run_in_threadpool
 
-from app.auth import flash, get_active_pool, is_commissioner, membership_for, require_user
+from app.auth import (
+    flash,
+    get_active_pool,
+    has_pending_co_commissioner_invite,
+    is_commissioner,
+    membership_for,
+    require_user,
+)
 from app.db import get_db
 from app.models import Game, Pick, Pool, PoolMember, User, Week, WeekEntry
 from app.scoring import PickInput, validate_picks
@@ -156,6 +163,7 @@ def picks_page(
         pool=pool,
         is_commissioner=is_commissioner(db, user, pool),
         active_nav="picks",
+        pending_co_commissioner_invite=has_pending_co_commissioner_invite(db, user, pool),
     )
 
 

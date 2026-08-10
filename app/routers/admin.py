@@ -1,11 +1,23 @@
 """Commissioner tools: pool settings, the slate editor, members, and manual job triggers.
 
-Everything here sits behind require_commissioner, except switch_league (POST
-/admin/switch-league), which deliberately is not: require_commissioner resolves the pool from
+Everything here sits behind require_commissioner, with three exceptions. switch_league (POST
+/admin/switch-league) deliberately is not: require_commissioner resolves the pool from
 whatever is already active in session, and the whole point of that route is picking a
 different one. It is gated by require_user plus its own direct check, against the requested
-pool_id, for a real PoolMember row with role_in_pool == "commissioner". A regular player still
-cannot reach it for any pool they do not commission.
+pool_id, for a real PoolMember row with role_in_pool in ("commissioner", "co_commissioner"). A
+regular player still cannot reach it for any pool they do not commission.
+
+co_commissioner_accept and co_commissioner_decline (POST /admin/co-commissioner/accept and
+/decline, Post-launch fixes: co-commissioner self-service invites with confirmation) are the
+other two: the whole point is that the invited person is still a plain "member" at the moment
+they act, not yet any kind of commissioner, so require_commissioner would refuse them. Both are
+gated by require_user plus get_active_pool and act only on the caller's own PoolMember row,
+never anyone else's.
+
+A handful of routes (member_role, the co-commissioner invite/cancel routes, and the
+commissioner invite link) sit behind the narrower require_full_commissioner instead of
+require_commissioner: a co-commissioner can operate this pool like a commissioner everywhere
+else, but never manage anyone's commissioner status. See app.auth.require_full_commissioner.
 """
 
 from __future__ import annotations
@@ -23,8 +35,12 @@ from app.auth import (
     Pool,
     flash,
     generate_join_code,
+    get_active_pool,
+    is_full_commissioner,
+    membership_for,
     normalize_join_code,
     require_commissioner,
+    require_full_commissioner,
     require_user,
 )
 from app.config import Settings, settings
@@ -42,6 +58,7 @@ from app.models import (
 )
 from app.providers.http import provider_warnings, usage_report
 from app.providers.teams import canonical_key, display_name
+from app.routers.leagues import _fresh_commissioner_invite_code
 from app.services import ingest
 from app.services import payouts as payout_service
 from app.templating import get_zone, render
@@ -67,17 +84,23 @@ def _week_or_none(db: Session, pool: Pool, week_number: int | None) -> Week | No
 
 def _commissioner_pools(db: Session, user: User) -> list[Pool]:
     """Every pool this user really commissions (a PoolMember row, role_in_pool ==
-    "commissioner"), not the global admin's "view as commissioner" case, which never leaves a
-    row behind. Used only to decide whether the league switcher has anything to switch
-    between; a site admin always gets an empty list here, since /admin/leagues, not this
-    switcher, is how an admin moves between pools."""
+    "commissioner" or "co_commissioner"), not the global admin's "view as commissioner" case,
+    which never leaves a row behind. Used only to decide whether the league switcher has
+    anything to switch between; a site admin always gets an empty list here, since
+    /admin/leagues, not this switcher, is how an admin moves between pools. A co-commissioner
+    running more than one pool sees the same switcher a full commissioner would (Post-launch
+    fixes), since is_commissioner already treats both roles as equally able to operate a
+    pool."""
     if user.is_admin:
         return []
     return list(
         db.scalars(
             select(Pool)
             .join(PoolMember, PoolMember.pool_id == Pool.id)
-            .where(PoolMember.user_id == user.id, PoolMember.role_in_pool == "commissioner")
+            .where(
+                PoolMember.user_id == user.id,
+                PoolMember.role_in_pool.in_(("commissioner", "co_commissioner")),
+            )
             .order_by(Pool.name)
         )
     )
@@ -96,6 +119,11 @@ def _base(db: Session, user: User, pool: Pool) -> dict:
         # DECISIONS.md); admin/index.html only renders the league switcher when this has more
         # than one pool in it, so the common single-league case shows nothing extra.
         "commissioner_pools": _commissioner_pools(db, user),
+        # True for the site admin or a real full commissioner, never a co-commissioner
+        # (Post-launch fixes). Gates the commissioner invite link panel and the role-management
+        # actions on admin/members.html: a co-commissioner reaches every admin page but sees
+        # none of that.
+        "can_manage_commissioners": is_full_commissioner(db, user, pool),
     }
 
 
@@ -205,12 +233,14 @@ def switch_league(
     cannot switch into pool B just by knowing its id. Separate concept from the site admin's
     "view as commissioner" (POST /admin/leagues/{pool_id}/view-as, app/routers/leagues.py):
     that lets an admin borrow commissioner powers for a league they don't run; this lets an
-    actual commissioner move between leagues they do."""
+    actual commissioner move between leagues they do. A co-commissioner counts here too
+    (Post-launch fixes), same as a full commissioner, since operating a pool day to day is the
+    bar for this switch, not managing its commissioner roster."""
     member = db.scalar(
         select(PoolMember).where(
             PoolMember.pool_id == pool_id,
             PoolMember.user_id == user.id,
-            PoolMember.role_in_pool == "commissioner",
+            PoolMember.role_in_pool.in_(("commissioner", "co_commissioner")),
         )
     )
     if member is None:
@@ -664,20 +694,139 @@ def member_role(
     role: str = Form(...),
     db: Session = Depends(get_db),
     user: User = Depends(require_user),
-    pool: Pool = Depends(require_commissioner),
+    pool: Pool = Depends(require_full_commissioner),
 ):
-    if not user.is_admin:
-        raise HTTPException(
-            status.HTTP_403_FORBIDDEN, "Only the site admin can change a commissioner role."
-        )
+    """The site admin's instant, unconfirmed promote/demote power (Post-launch fixes), now
+    also reachable by a real full commissioner of their own pool, gated by
+    require_full_commissioner so a co-commissioner is refused a 403 either way (it checks
+    role_in_pool == "commissioner" exactly, never the broader is_commissioner). A non-admin
+    full commissioner may only demote (role="member"): promoting straight to "commissioner"
+    stays site-admin-only, since a full commissioner's own promotion path is the confirmed
+    co-commissioner invite below, not this instant toggle. Setting role_in_pool through here
+    always clears any pending co_commissioner_invited_at, so a role changed by hand never
+    leaves a stale invite behind for someone to accept later into a role they no longer make
+    sense to be offered."""
     member = db.get(PoolMember, member_id)
     if member is None or member.pool_id != pool.id:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "That member is not in this pool.")
     if role not in ("commissioner", "member"):
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Unknown role.")
+    if role == "commissioner" and not user.is_admin:
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN,
+            "Only the site admin can promote directly. Invite a co-commissioner instead; "
+            "they will need to accept it.",
+        )
     member.role_in_pool = role
+    member.co_commissioner_invited_at = None
     db.commit()
     flash(request, "Member role updated.")
+    return _redirect("/admin/members")
+
+
+@router.post("/members/{member_id}/co-commissioner/invite")
+def co_commissioner_invite(
+    request: Request,
+    member_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_user),
+    pool: Pool = Depends(require_full_commissioner),
+):
+    """A full commissioner inviting a plain member to become a co-commissioner. Unlike
+    member_role above, this never changes role_in_pool on its own: it only sets
+    co_commissioner_invited_at, and the invited member's own accept (POST
+    /admin/co-commissioner/accept) is what actually promotes them. See DECISIONS.md,
+    Post-launch fixes."""
+    member = db.get(PoolMember, member_id)
+    if member is None or member.pool_id != pool.id:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "That member is not in this pool.")
+    if member.role_in_pool != "member":
+        flash(request, "That person is already a commissioner or co-commissioner.", "info")
+        return _redirect("/admin/members")
+    if member.co_commissioner_invited_at is not None:
+        flash(request, "There is already a co-commissioner invite pending for them.", "info")
+        return _redirect("/admin/members")
+    member.co_commissioner_invited_at = utcnow()
+    db.commit()
+    flash(request, "Co-commissioner invite sent. It takes effect once they accept it.")
+    return _redirect("/admin/members")
+
+
+@router.post("/members/{member_id}/co-commissioner/cancel")
+def co_commissioner_cancel(
+    request: Request,
+    member_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_user),
+    pool: Pool = Depends(require_full_commissioner),
+):
+    member = db.get(PoolMember, member_id)
+    if member is None or member.pool_id != pool.id:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "That member is not in this pool.")
+    member.co_commissioner_invited_at = None
+    db.commit()
+    flash(request, "Co-commissioner invite canceled.")
+    return _redirect("/admin/members")
+
+
+@router.post("/co-commissioner/accept")
+def co_commissioner_accept(
+    request: Request,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_user),
+    pool: Pool = Depends(get_active_pool),
+):
+    """The invited member's own confirmation step, not the commissioner who sent the invite
+    (that is co_commissioner_invite above). Deliberately not gated by require_commissioner or
+    require_full_commissioner: the whole point is that the caller is still a plain member at
+    this moment. Acts only on the caller's own PoolMember row in their active pool, never
+    anyone else's."""
+    member = membership_for(db, user, pool)
+    if member is None or member.co_commissioner_invited_at is None:
+        flash(request, "There is no pending co-commissioner invite to accept.", "error")
+        return _redirect("/picks")
+    member.role_in_pool = "co_commissioner"
+    member.co_commissioner_invited_at = None
+    db.commit()
+    flash(request, f"You are now a co-commissioner of {pool.name}.")
+    return _redirect("/admin")
+
+
+@router.post("/co-commissioner/decline")
+def co_commissioner_decline(
+    request: Request,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_user),
+    pool: Pool = Depends(get_active_pool),
+):
+    """Clears the pending invite and nothing else: role_in_pool stays "member"."""
+    member = membership_for(db, user, pool)
+    if member is None or member.co_commissioner_invited_at is None:
+        flash(request, "There is no pending co-commissioner invite to decline.", "error")
+        return _redirect("/picks")
+    member.co_commissioner_invited_at = None
+    db.commit()
+    flash(request, "Co-commissioner invite declined.")
+    return _redirect("/picks")
+
+
+@router.post("/commissioner-code")
+def rotate_commissioner_invite_code_self(
+    request: Request,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_user),
+    pool: Pool = Depends(require_full_commissioner),
+):
+    """A full commissioner's self-service view of Pool.commissioner_invite_code (Post-launch
+    fixes), the same link and rotation the site admin already manages from /admin/leagues
+    (app/routers/leagues.py). Gated require_full_commissioner, not require_commissioner: a
+    co-commissioner never sees or rotates this link, since sharing it is functionally
+    identical to creating a new full commissioner outright, no confirmation step involved.
+    Reuses leagues.py's own _fresh_commissioner_invite_code, never a second generator, the
+    same collision-avoidance shape rotate_join_code (above, in this same file) already uses."""
+    pool.commissioner_invite_code = _fresh_commissioner_invite_code(db, exclude_pool_id=pool.id)
+    db.commit()
+    flash(request, "New commissioner invite link generated. The old link no longer works.")
     return _redirect("/admin/members")
 
 
