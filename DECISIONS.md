@@ -2456,3 +2456,19 @@ nothing in any real copy or code path. No emoji anywhere touched. No new depende
 Tailwind or bundler, no SPA; every template change reuses existing classes and design tokens,
 and the only CSS change was deleting the now-dead `.contact-card`/`.contact-icon`/
 `.contact-email` block.
+
+**Follow-up fix, same day.** Manual QA of the preview slate found it was unreachable through the
+real registration form: `open_registration=false` (the setting on both the local dev instance
+and production) made `register_submit` require a resolvable `join_code` even when the field was
+left blank, so a codeless signup returned a 400 instead of creating a poolless account. Fixed by
+dropping the `or not settings.open_registration` clause from the pool-resolution branch: a blank
+`join_code` (with no `commissioner_code`) is now always allowed, unconditionally, since a
+codeless account is always a safe, read only preview, never membership in anything.
+`open_registration` historically decided whether an account could be created at all without a
+code; that no longer applies now that a codeless account has a well defined, harmless landing
+spot. Also changed the post-registration redirect for this case from `/join` (a bare code entry
+form) to `/picks` (the preview itself, with its own "enter a join code" and "start your own
+league" calls to action), and updated `register.html`'s copy and the join code field so it is
+always optional rather than conditionally required. Verified end to end in the browser: a fresh
+account with no code lands directly on a real, live preview slate; `/standings` and `/results`
+still 403 as before; a direct `POST /picks` against the preview pool's own games still 403s.
