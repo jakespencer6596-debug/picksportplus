@@ -2012,6 +2012,60 @@ def test_create_league_attaches_an_existing_user_as_commissioner_by_email(client
     db.close()
 
 
+def test_create_league_rejects_the_site_admins_own_email_but_still_attaches_others(
+    client, session_factory
+):
+    """The site admin can never hold a PoolMember row, structurally (Post-launch fixes, see
+    DECISIONS.md). Submitting the admin's own email alongside a real user's must not fail the
+    whole form: the real user still gets attached, and the admin's address is skipped with a
+    clear flash explaining why."""
+    db = session_factory()
+    admin = _make_user(db, "siteguard@example.com", "Site Admin Guard", role="admin")
+    real_commish = _make_user(db, "real.commish@example.com", "Real Commissioner")
+    db.commit()
+    admin_email = admin.email
+    admin_id = admin.id
+    real_commish_id = real_commish.id
+    db.close()
+
+    _login(client, "siteguard@example.com")
+    response = client.post(
+        "/admin/leagues/new",
+        data={
+            "name": "Guarded League",
+            "join_code": "GUARDED1",
+            "season_year": "2025",
+            "timezone": "America/New_York",
+            "commissioner_emails": f"{admin_email}\nREAL.COMMISH@example.com\n",
+        },
+    )
+    assert response.status_code == 303
+
+    # The redirect target renders and pops the flashes. Jinja autoescapes the apostrophe in
+    # "can't" to &#39;, so the assertion checks the text either side of it rather than the
+    # literal punctuation.
+    leagues_page = client.get("/admin/leagues")
+    assert leagues_page.status_code == 200
+    assert f"{admin_email} is the site admin and can" in leagues_page.text
+    assert "t be added as a commissioner." in leagues_page.text
+
+    db = session_factory()
+    pool = db.scalar(select(Pool).where(Pool.name == "Guarded League"))
+    assert pool is not None
+    admin_member = db.scalar(
+        select(PoolMember).where(PoolMember.pool_id == pool.id, PoolMember.user_id == admin_id)
+    )
+    assert admin_member is None
+    real_member = db.scalar(
+        select(PoolMember).where(
+            PoolMember.pool_id == pool.id, PoolMember.user_id == real_commish_id
+        )
+    )
+    assert real_member is not None
+    assert real_member.role_in_pool == "commissioner"
+    db.close()
+
+
 def test_admin_can_view_as_commissioner_of_a_pool_never_joined(client, session_factory):
     """The bug that mattered most: get_active_pool used to silently fall back to the
     admin's own first membership instead of honoring the session pool it was just told to
@@ -2114,6 +2168,76 @@ def test_viewing_as_commissioner_banner_shows_for_admin_and_never_for_a_real_com
     leagues_response = client.get("/admin/leagues")
     assert leagues_response.status_code == 200
     assert "Exit to leagues" not in leagues_response.text
+
+
+# Multi-league commissioner switcher (Post-launch fixes) ----------------------
+# A commissioner who runs only one league sees the plain, existing pool-name text; a
+# commissioner of more than one gets a small switcher, and POST /admin/switch-league is the
+# only way to move between them, only for pools they actually commission.
+
+
+def test_single_league_commissioner_sees_no_switcher(client, world, session_factory):
+    db = session_factory()
+    _make_pool_commissioner_who_is_not_admin(db, db.get(Pool, world["pool_id"]))
+    db.commit()
+    db.close()
+
+    _login(client, "commish@example.com")
+    response = client.get("/admin")
+    assert response.status_code == 200
+    assert "data-league-switcher" not in response.text
+
+
+def test_two_league_commissioner_sees_switcher_and_can_switch(client, session_factory):
+    db = session_factory()
+    pool_a = _make_pool(db)
+    pool_b = _make_other_pool(db, name="Second League", join_code="SECONDLG")
+    commish = _make_user(db, "multi.commish@example.com", "Multi Commissioner")
+    db.add(PoolMember(pool_id=pool_a.id, user_id=commish.id, role_in_pool="commissioner"))
+    db.add(PoolMember(pool_id=pool_b.id, user_id=commish.id, role_in_pool="commissioner"))
+    db.commit()
+    pool_a_name = pool_a.name
+    pool_b_id = pool_b.id
+    db.close()
+
+    _login(client, "multi.commish@example.com")
+    response = client.get("/admin")
+    assert response.status_code == 200
+    assert "data-league-switcher" in response.text
+    assert pool_a_name in response.text  # first PoolMember by id is the active pool at login
+
+    switch = client.post("/admin/switch-league", data={"pool_id": pool_b_id})
+    assert switch.status_code == 303
+    assert switch.headers["location"] == "/admin"
+
+    after = client.get("/admin")
+    assert after.status_code == 200
+    assert "Second League" in after.text
+
+
+def test_switch_league_rejects_a_pool_the_user_does_not_commission(client, session_factory):
+    db = session_factory()
+    pool_a = _make_pool(db)
+    pool_b = _make_other_pool(db, name="Not Mine League", join_code="NOTMINE1")
+    commish = _make_user(db, "onlya.commish@example.com", "Only A Commissioner")
+    db.add(PoolMember(pool_id=pool_a.id, user_id=commish.id, role_in_pool="commissioner"))
+    db.commit()
+    pool_a_name = pool_a.name
+    pool_b_id = pool_b.id
+    db.close()
+
+    _login(client, "onlya.commish@example.com")
+    before = client.get("/admin")
+    assert before.status_code == 200
+    assert pool_a_name in before.text
+
+    switch = client.post("/admin/switch-league", data={"pool_id": pool_b_id})
+    assert switch.status_code == 303
+
+    after = client.get("/admin")
+    assert after.status_code == 200
+    assert pool_a_name in after.text
+    assert "Not Mine League" not in after.text
 
 
 # Commissioner invite links (Post-launch fixes) -------------------------------

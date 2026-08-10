@@ -8,7 +8,24 @@
     <p class="eyebrow">Commissioner</p>
     <h1 class="page-title">Admin overview</h1>
   </div>
-  <p class="muted">{{ pool.name }}, {{ pool.season_year }} season, {{ zone_label(pool.timezone) }}</p>
+  {% if commissioner_pools | length > 1 %}
+    <details class="league-switcher" data-league-switcher>
+      <summary>
+        <span class="muted">Managing</span> <strong>{{ pool.name }}</strong>{{ ic.icon("down", 14) }}
+      </summary>
+      <div class="league-switcher-panel">
+        <p class="league-switcher-label">Switch league</p>
+        {% for other in commissioner_pools if other.id != pool.id %}
+          <form method="post" action="/admin/switch-league" class="inline-form">
+            <input type="hidden" name="pool_id" value="{{ other.id }}">
+            <button class="league-switcher-option" type="submit">{{ other.name }}</button>
+          </form>
+        {% endfor %}
+      </div>
+    </details>
+  {% else %}
+    <p class="muted">{{ pool.name }}, {{ pool.season_year }} season, {{ zone_label(pool.timezone) }}</p>
+  {% endif %}
 </div>
 
 <nav class="subnav" aria-label="Commissioner tools">

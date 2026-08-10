@@ -3705,6 +3705,79 @@ a.toggle-btn { text-decoration: none; }
   font-family: var(--font-body);
 }
 
+/* -- League switcher (multi-league commissioner) -------------------------
+   Native <details>, same disclosure pattern as .invite-details above. Only
+   rendered when a real commissioner (never the site admin) runs more than
+   one league, so the common single-league case stays the plain text it
+   always was. A separate, deliberately understated concept from .lockbar,
+   the site admin's "viewing as commissioner" banner: this is a commissioner
+   picking between leagues they actually run, not an admin borrowing powers
+   for a league they don't. */
+
+.league-switcher { position: relative; }
+
+.league-switcher summary {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  cursor: pointer;
+  list-style: none;
+  font-size: var(--fs-sm);
+  color: var(--text);
+}
+
+.league-switcher summary::-webkit-details-marker { display: none; }
+
+.league-switcher summary svg {
+  width: 14px;
+  height: 14px;
+  stroke-width: 2;
+  color: var(--text-muted);
+}
+
+.league-switcher[open] summary svg { transform: rotate(180deg); }
+
+.league-switcher-panel {
+  position: absolute;
+  right: 0;
+  top: calc(100% + var(--space-2));
+  z-index: var(--z-menu);
+  min-width: 220px;
+  padding: var(--space-2);
+  background: var(--bg-surface);
+  border: var(--hairline);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+}
+
+.league-switcher-label {
+  padding: var(--space-1) var(--space-3);
+  font-size: var(--fs-xs);
+  font-weight: 500;
+  letter-spacing: var(--track-eyebrow);
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.league-switcher-option {
+  display: block;
+  width: 100%;
+  min-height: var(--tap);
+  padding: var(--space-2) var(--space-3);
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: none;
+  text-align: left;
+  font-size: var(--fs-sm);
+  color: var(--text);
+  cursor: pointer;
+}
+
+.league-switcher-option:hover {
+  background: var(--bg-surface-alt);
+  text-decoration: none;
+}
+
 /* -- Slate tables -------------------------------------------------------- */
 
 .matchup {

@@ -177,20 +177,25 @@ templates.env.globals.update(
 def render(request, template_name: str, context: dict | None = None, **base):
     """Render a page with the context every template expects.
 
-    base accepts current_user, pool, is_commissioner and active_nav. Flash messages are
-    drained here so a page never has to remember to do it.
+    Every key in base reaches the template, not just a fixed allow list: current_user, pool,
+    is_commissioner and active_nav always default in even when a caller omits them, and
+    anything else a caller's own _base() helper wants every one of its templates to see (for
+    example base_url, commissioner_pools) passes through untouched. status_code is the one
+    key pulled out rather than forwarded, since it belongs to the response, not the template.
+    Flash messages are drained here so a page never has to remember to do it.
     """
     from app.auth import pop_flashes
 
+    status_code = base.pop("status_code", 200)
     ctx = {
         "request": request,
-        "current_user": base.get("current_user"),
-        "pool": base.get("pool"),
-        "is_commissioner": base.get("is_commissioner", False),
-        "active_nav": base.get("active_nav"),
+        "current_user": None,
+        "pool": None,
+        "is_commissioner": False,
+        "active_nav": None,
+        **base,
         "flashes": pop_flashes(request),
         "tz": (base.get("pool").timezone if base.get("pool") else settings.timezone),
     }
     ctx.update(context or {})
-    status_code = base.get("status_code", 200)
     return templates.TemplateResponse(request, template_name, ctx, status_code=status_code)

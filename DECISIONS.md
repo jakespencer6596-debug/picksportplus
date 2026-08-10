@@ -2056,3 +2056,102 @@ touched. No new dependency, no Tailwind or bundler, no SPA; the only new CSS is 
 `.invite-details`/`.invite-panel`/`.invite-message` block in `app/static/app.css`, built from
 existing design tokens and reusing `.card`, `.field-label`, `.input`, `.row`, and `.form-hint`
 rather than inventing parallel classes for the same shapes.
+
+### The admin can never be a league member, and a multi-league commissioner switcher
+
+Two fixes the product owner asked for after using the admin/commissioner split day to day: the
+site admin was still technically capable of ending up as a `PoolMember` (the exact shape of
+today's one real production league, where the admin is currently the sole commissioner), and a
+commissioner running more than one league had no way to see, or change, which one was active.
+
+**`seed_admin` (`app/cli.py`) no longer enrolls the admin as a `PoolMember`.** It still creates
+the admin `User` and the default pool from `.env` exactly as before (some deploys may depend
+on `seed_admin` producing a starter pool, so pool creation itself is untouched); it just stops
+adding `PoolMember(pool_id=pool.id, user_id=user.id, role_in_pool="commissioner")` for that
+user afterward. The pool it creates now starts with zero members and waits for a real
+commissioner to be attached from `/admin/leagues`, either by email or by that pool's
+commissioner invite link. The trailing `_echo` lines were reworded to say so plainly instead
+of claiming the admin was added as commissioner.
+
+**`POST /admin/leagues/new`'s "attach an existing user by email" flow now skips the admin's
+own address.** This is the one real code path where an existing, arbitrary user, including the
+site admin, could get attached to a pool as commissioner. `league_new_save`
+(`app/routers/leagues.py`) now checks `found.is_admin` for every resolved email; a match is
+skipped and reported back with its own flash ("`{email}` is the site admin and can't be added
+as a commissioner.") rather than failing the whole submission, so any other valid email in the
+same textarea still gets attached normally. `/register?commissioner_code=` (today's earlier
+commit) needed no equivalent guard: `register_submit` always creates a brand new
+`User(role="player")` on that path, so it can never resolve to an existing admin account, there
+is no existing-admin case there to block.
+
+**`app/routers/admin.py`'s `member_role` gets no new defensive check.** It only ever changes
+`role_in_pool` on an existing `PoolMember` row; it cannot create one, so it was never a path
+that could enroll the admin. Once the two fixes above land, no fresh `PoolMember` row can ever
+belong to an admin, which makes a "what if this member is the admin" branch here dead code for
+a state that cannot occur going forward, not a real defense. Added per the standing rule
+against speculative checks for states that cannot happen.
+
+**Deliberately left undone: the existing production `PoolMember` row.** The product owner's
+real, live league currently has the admin account as its sole commissioner, a row this work
+does not touch. No data migration was written to delete or reassign it. That cleanup needs the
+product owner's own confirmation first (who the real commissioner should be, and what happens
+to the admin's current picks or standings history in that pool, if any); it is explicitly out
+of scope here and is not something this commit should be read as having done. The two fixes
+above only stop this from happening again, in fresh installs and in every new league created
+from now on.
+
+**The multi-league commissioner switcher.** `POST /admin/switch-league`
+(`app/routers/admin.py`), gated `require_user` plus its own direct check, not
+`require_commissioner`: `require_commissioner` resolves the pool to check *from* the session's
+current active pool, which is exactly the value this route needs to change, so reusing it would
+make switching to a second league impossible by construction. Instead it looks up a real
+`PoolMember` row for the requested `pool_id` and the signed-in user with `role_in_pool ==
+"commissioner"`; a match sets `request.session[SESSION_POOL_KEY]` and redirects to `/admin`, no
+match flashes "You don't commission that league." and redirects without changing anything.
+`_base()` now also carries `commissioner_pools`, every pool the current user really commissions
+(empty for the site admin, always, since an admin's cross-league movement is `/admin/leagues`,
+not this switcher). `admin/index.html` renders a small `<details>`/`<summary>` control ("Managing:
+{pool name}" with a chevron, `data-league-switcher` for tests to hook) only when
+`commissioner_pools` has more than one entry; a commissioner of exactly one league still sees
+the plain pool-name text it always showed, unchanged, matching "I want this interface to be
+super clean" by not cluttering the common case with a control that would only ever have one
+option. This is a deliberately different concept, and deliberately different looking, from the
+site admin's existing "view as commissioner" banner (`95ff1b4`, the gold `.lockbar` reading
+"Viewing X as commissioner, Exit to leagues"): that lets an admin borrow commissioner powers for
+a league they do not run, this lets a real commissioner move between leagues they actually do
+run. The switcher reuses the `.invite-details`/`<details>` disclosure pattern, not `.lockbar`,
+and its own copy never says "viewing" or "as commissioner."
+
+**One real bug fixed along the way: `render()` (`app/templating.py`) was silently dropping
+every `**base` keyword except `current_user`, `pool`, `is_commissioner` and `active_nav`.**
+`base_url`, added to `_base()` in both `app/routers/admin.py` and `app/routers/leagues.py`
+earlier today for the commissioner invite link, was never actually reaching any template
+through that path; every `{{ base_url }}` in `admin/leagues.html` and `admin/members.html` was
+silently rendering as an empty string, and no existing test caught it because Jinja renders an
+undefined variable as `""` rather than raising, and the existing assertions only checked for
+the URL's path suffix, never its host. This went unnoticed until `commissioner_pools`, added to
+that same `_base()` dict for the switcher above, hit the identical fate and made the switcher
+never render even when there were two real leagues to switch between. `render()` now forwards
+every key in `base` into the template context (`status_code` is still pulled out separately,
+since it belongs to the response, not the template), rather than only an allow list of four.
+Fixed centrally rather than by adding `base_url`/`commissioner_pools` a second time into every
+route's own page-specific `context` dict, since the whole point of `_base()` is one shared
+place a page's common context lives.
+
+**No schema change, no migration.** Every field this touches (`User.role`, `User.is_admin`,
+`PoolMember.role_in_pool`) already exists.
+
+**Verification.** `ruff check .`, `black .`, and `pytest -q` all clean, 823 passed, 0 failed
+(818 at the previous post-launch baseline, 5 net new tests: `seed_admin` leaving the admin with
+zero pool memberships, the admin-email guard on league creation proving both the rejection and
+that a second, valid email in the same submission still attaches, a single-league commissioner
+seeing no switcher, a two-league commissioner seeing the switcher and successfully switching
+with `GET /admin` reflecting the new pool afterward, and a commissioner of one pool being
+refused when posting a different pool's id with their own active pool left unchanged).
+`grep -rn "—" app/cli.py app/routers/leagues.py app/routers/admin.py app/templates/admin/index.html
+app/static/app.css app/templating.py` finds nothing. No emoji anywhere touched. No new
+dependency, no Tailwind or bundler, no SPA; the only new CSS is the small
+`.league-switcher`/`.league-switcher-panel`/`.league-switcher-option` block in
+`app/static/app.css`, built from the same design tokens and the same native
+`<details>`/`<summary>` disclosure pattern `.invite-details` already established, not a new
+visual language.

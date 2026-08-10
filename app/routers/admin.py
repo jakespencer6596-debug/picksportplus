@@ -1,6 +1,11 @@
 """Commissioner tools: pool settings, the slate editor, members, and manual job triggers.
 
-Everything here sits behind require_commissioner. A regular player cannot reach any of it.
+Everything here sits behind require_commissioner, except switch_league (POST
+/admin/switch-league), which deliberately is not: require_commissioner resolves the pool from
+whatever is already active in session, and the whole point of that route is picking a
+different one. It is gated by require_user plus its own direct check, against the requested
+pool_id, for a real PoolMember row with role_in_pool == "commissioner". A regular player still
+cannot reach it for any pool they do not commission.
 """
 
 from __future__ import annotations
@@ -14,6 +19,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.auth import (
+    SESSION_POOL_KEY,
     Pool,
     flash,
     generate_join_code,
@@ -59,6 +65,24 @@ def _week_or_none(db: Session, pool: Pool, week_number: int | None) -> Week | No
     ) or db.scalar(query.order_by(Week.week_number.desc()))
 
 
+def _commissioner_pools(db: Session, user: User) -> list[Pool]:
+    """Every pool this user really commissions (a PoolMember row, role_in_pool ==
+    "commissioner"), not the global admin's "view as commissioner" case, which never leaves a
+    row behind. Used only to decide whether the league switcher has anything to switch
+    between; a site admin always gets an empty list here, since /admin/leagues, not this
+    switcher, is how an admin moves between pools."""
+    if user.is_admin:
+        return []
+    return list(
+        db.scalars(
+            select(Pool)
+            .join(PoolMember, PoolMember.pool_id == Pool.id)
+            .where(PoolMember.user_id == user.id, PoolMember.role_in_pool == "commissioner")
+            .order_by(Pool.name)
+        )
+    )
+
+
 def _base(db: Session, user: User, pool: Pool) -> dict:
     return {
         "current_user": user,
@@ -68,6 +92,10 @@ def _base(db: Session, user: User, pool: Pool) -> dict:
         # Absolute origin for the player invite link and its mailto template, built the same
         # way app/routers/public.py already builds base_url for pricing.html's mailto link.
         "base_url": settings.base_url,
+        # Only populated for a real, non-admin commissioner (Post-launch fixes, see
+        # DECISIONS.md); admin/index.html only renders the league switcher when this has more
+        # than one pool in it, so the common single-league case shows nothing extra.
+        "commissioner_pools": _commissioner_pools(db, user),
     }
 
 
@@ -161,6 +189,35 @@ def dashboard(
         },
         **_base(db, user, pool),
     )
+
+
+@router.post("/switch-league")
+def switch_league(
+    request: Request,
+    pool_id: int = Form(...),
+    db: Session = Depends(get_db),
+    user: User = Depends(require_user),
+):
+    """A real commissioner of more than one league picking which one is active. Deliberately
+    not gated by require_commissioner, which resolves the pool from the session's current
+    active pool: the whole point here is choosing a different one. Instead this checks the
+    requested pool_id directly against a real PoolMember row, so a commissioner of pool A
+    cannot switch into pool B just by knowing its id. Separate concept from the site admin's
+    "view as commissioner" (POST /admin/leagues/{pool_id}/view-as, app/routers/leagues.py):
+    that lets an admin borrow commissioner powers for a league they don't run; this lets an
+    actual commissioner move between leagues they do."""
+    member = db.scalar(
+        select(PoolMember).where(
+            PoolMember.pool_id == pool_id,
+            PoolMember.user_id == user.id,
+            PoolMember.role_in_pool == "commissioner",
+        )
+    )
+    if member is None:
+        flash(request, "You don't commission that league.", "error")
+        return _redirect("/admin")
+    request.session[SESSION_POOL_KEY] = pool_id
+    return _redirect("/admin")
 
 
 # Pool settings --------------------------------------------------------------

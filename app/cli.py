@@ -15,7 +15,7 @@ from sqlalchemy import func, select
 
 from app.config import settings
 from app.db import engine, session_scope
-from app.models import Base, Pool, PoolMember, User, Week
+from app.models import Base, Pool, User, Week
 from app.providers import espn
 from app.providers.http import usage_report
 
@@ -147,16 +147,16 @@ def seed_admin() -> None:
         else:
             _echo(f"Pool {pool.name} already exists with join code {pool.join_code}.")
 
-        member = db.scalar(
-            select(PoolMember).where(PoolMember.pool_id == pool.id, PoolMember.user_id == user.id)
-        )
-        if member is None:
-            db.add(PoolMember(pool_id=pool.id, user_id=user.id, role_in_pool="commissioner"))
-            _echo("Added the admin as commissioner of the pool.")
+        # The admin is never enrolled as a PoolMember here (Post-launch fixes, see
+        # DECISIONS.md): the site admin manages every league from /admin/leagues but never
+        # runs one, structurally, not just by convention. The pool created above still needs
+        # a real commissioner attached, either by email from /admin/leagues/new or by sharing
+        # its commissioner invite link, before anyone can manage it day to day.
 
     _echo("")
     _echo(f"Sign in at http://localhost:8000/login as {email}")
-    _echo(f"Share the join code {code} with your players.")
+    _echo(f"{pool.name} has no commissioner yet. Attach one from the admin portal, either by")
+    _echo("email at /admin/leagues/new or with that league's commissioner invite link.")
 
 
 @app.command("seed-demo")

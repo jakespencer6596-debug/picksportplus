@@ -16,7 +16,7 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from app.config import settings
-from app.models import Base, Pool, User
+from app.models import Base, Pool, PoolMember, User
 
 
 @pytest.fixture
@@ -66,6 +66,30 @@ def test_seed_admin_creates_a_pool_with_auto_publish_off(isolated_db, monkeypatc
         user = session.scalar(select(User).where(User.email == "commissioner@example.com"))
         assert user is not None
         assert user.is_admin
+    finally:
+        session.close()
+
+
+def test_seed_admin_leaves_the_admin_with_zero_pool_memberships(isolated_db, monkeypatch):
+    """Post-launch fix: the site admin can never hold a PoolMember row, structurally, not
+    just by convention. seed_admin still creates the starter pool exactly as before, it just
+    no longer enrolls the admin into it; the pool waits for a real commissioner to be attached
+    from the admin portal."""
+    _configure_admin_credentials(monkeypatch)
+
+    from app.cli import seed_admin
+
+    seed_admin()
+
+    session = isolated_db()
+    try:
+        pool = session.scalar(select(Pool))
+        assert pool is not None
+        user = session.scalar(select(User).where(User.email == "commissioner@example.com"))
+        assert user is not None
+        assert user.is_admin
+        memberships = session.scalars(select(PoolMember).where(PoolMember.user_id == user.id)).all()
+        assert memberships == []
     finally:
         session.close()
 

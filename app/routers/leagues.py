@@ -224,10 +224,17 @@ def league_new_save(
     emails = _parse_commissioner_emails(commissioner_emails)
     attached: list[str] = []
     missing: list[str] = []
+    is_admin_email: list[str] = []
     for email in emails:
         found = db.scalar(select(User).where(User.email == email))
         if found is None:
             missing.append(email)
+            continue
+        if found.is_admin:
+            # The site admin can never hold a PoolMember row, structurally, not just by
+            # convention (Post-launch fixes, see DECISIONS.md). Skip this one address and
+            # keep processing the rest of the submission rather than failing the whole form.
+            is_admin_email.append(email)
             continue
         db.add(PoolMember(pool_id=pool.id, user_id=found.id, role_in_pool="commissioner"))
         attached.append(found.display_name)
@@ -244,6 +251,12 @@ def league_new_save(
             "Only existing users can be attached here; promote someone from the pool's "
             "Members page once they have registered.",
             "info",
+        )
+    for email in is_admin_email:
+        flash(
+            request,
+            f"{email} is the site admin and can't be added as a commissioner.",
+            "error",
         )
     return _redirect("/admin/leagues")
 
