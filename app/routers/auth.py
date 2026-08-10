@@ -43,6 +43,18 @@ def _find_pool_by_code(db: Session, code: str) -> Pool | None:
     return db.scalar(select(Pool).where(func.upper(Pool.join_code) == code))
 
 
+def _find_pool_by_commissioner_code(db: Session, code: str) -> Pool | None:
+    """Mirrors _find_pool_by_code exactly, but against Pool.commissioner_invite_code, a
+    materially more powerful code that makes the registering user a commissioner rather than
+    a member. Kept as a fully separate lookup, never folded into _find_pool_by_code with a
+    "which column" flag, so there is never a code path where the two column names could be
+    confused for one another. See DECISIONS.md, Post-launch fixes."""
+    code = normalize_join_code(code)
+    if not code:
+        return None
+    return db.scalar(select(Pool).where(func.upper(Pool.commissioner_invite_code) == code))
+
+
 # Sign in --------------------------------------------------------------------
 
 
@@ -106,15 +118,31 @@ def logout(request: Request):
 
 
 @router.get("/register")
-def register_form(request: Request, user: User | None = Depends(get_current_user)):
+def register_form(
+    request: Request,
+    user: User | None = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
     if user:
         return RedirectResponse("/picks", status_code=303)
+    # A distinct query param from the player join code's ?code=, on purpose: a commissioner
+    # invite link grants a materially more powerful role, and the two must never be
+    # confusable with one another (Post-launch fixes, see DECISIONS.md). Only treated as a
+    # commissioner link once it actually resolves to a real pool; an unknown or missing code
+    # here falls straight back to today's plain registration form, no error shown, no
+    # regression.
+    commissioner_code = request.query_params.get("commissioner_code", "")
+    commissioner_pool = (
+        _find_pool_by_commissioner_code(db, commissioner_code) if commissioner_code else None
+    )
     return render(
         request,
         "auth/register.html",
         {
             "open_registration": settings.open_registration,
             "join_code": request.query_params.get("code", ""),
+            "commissioner_code": commissioner_code if commissioner_pool else "",
+            "commissioner_pool": commissioner_pool,
             "form": {},
         },
     )
@@ -127,6 +155,7 @@ def register_submit(
     email: str = Form(""),
     password: str = Form(""),
     join_code: str = Form(""),
+    commissioner_code: str = Form(""),
     db: Session = Depends(get_db),
 ):
     form = {"display_name": display_name.strip(), "email": email, "join_code": join_code}
@@ -144,8 +173,17 @@ def register_submit(
     elif len(password.encode("utf-8")) > 72:
         errors.append("That password is too long. Keep it to 72 characters.")
 
+    # A commissioner code and a plain join code are never both honored: exactly one of these
+    # two ends up set. commissioner_code, once present at all, is authoritative and never
+    # silently falls back to the join_code branch below, the same way an unknown join_code
+    # is a hard error rather than a silent skip to open registration.
     pool: Pool | None = None
-    if join_code.strip() or not settings.open_registration:
+    commissioner_pool: Pool | None = None
+    if commissioner_code.strip():
+        commissioner_pool = _find_pool_by_commissioner_code(db, commissioner_code)
+        if commissioner_pool is None:
+            errors.append("That commissioner link is not valid. Check it with the site admin.")
+    elif join_code.strip() or not settings.open_registration:
         pool = _find_pool_by_code(db, join_code)
         if pool is None:
             errors.append("That join code does not match a pool. Check it with the commissioner.")
@@ -162,10 +200,15 @@ def register_submit(
                 "form": form,
                 "open_registration": settings.open_registration,
                 "join_code": join_code,
+                "commissioner_code": commissioner_code,
+                "commissioner_pool": commissioner_pool,
             },
             status_code=400,
         )
 
+    # role is always "player" here, never varied by this form, commissioner code or not: a
+    # commissioner invite link only ever changes the PoolMember.role_in_pool row added below,
+    # never User.role. See DECISIONS.md, Post-launch fixes.
     user = User(
         email=address,
         password_hash=hash_password(password),
@@ -174,6 +217,18 @@ def register_submit(
     )
     db.add(user)
     db.flush()
+
+    if commissioner_pool is not None:
+        db.add(
+            PoolMember(pool_id=commissioner_pool.id, user_id=user.id, role_in_pool="commissioner")
+        )
+        db.commit()
+        login_user(request, user)
+        flash(
+            request,
+            f"You are the commissioner of {commissioner_pool.name}. Let's get your league set up.",
+        )
+        return RedirectResponse("/admin", status_code=303)
 
     if pool is not None:
         db.add(PoolMember(pool_id=pool.id, user_id=user.id, role_in_pool="member"))

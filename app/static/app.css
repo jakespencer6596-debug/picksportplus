@@ -3673,6 +3673,38 @@ a.toggle-btn { text-decoration: none; }
   margin-bottom: 0;
 }
 
+/* -- Invite links (commissioner and player) ------------------------------
+   Native <details>, same pattern .how-it-works and .scenario-representative
+   already use for a closed-by-default disclosure: no JS needed to open it. */
+
+.invite-details summary {
+  cursor: pointer;
+  color: var(--accent);
+  font-weight: 500;
+  list-style: none;
+}
+
+.invite-details summary::-webkit-details-marker { display: none; }
+
+.invite-panel {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-3);
+  margin-top: var(--space-3);
+  width: 100%;
+  max-width: 34rem;
+}
+
+.invite-panel .input { width: 100%; }
+
+.invite-message {
+  width: 100%;
+  min-height: 7rem;
+  resize: vertical;
+  font-family: var(--font-body);
+}
+
 /* -- Slate tables -------------------------------------------------------- */
 
 .matchup {

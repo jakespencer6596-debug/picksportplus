@@ -59,6 +59,47 @@
   </div>
 </section>
 
+<section class="section" aria-labelledby="invite-players-title">
+  <h2 class="section-title" id="invite-players-title">Invite players</h2>
+
+  {% set invite_link = base_url ~ "/register?code=" ~ pool.join_code %}
+  {% set invite_subject = "Join our pick'em pool on PickSportPlus" %}
+  {% set invite_body %}
+Hey,
+
+I'm running our confidence pick'em pool on PickSportPlus this season. Join with this link:
+{{ invite_link }}
+
+Or if you would rather enter it yourself, use join code {{ pool.join_code }} on the register page.
+
+See you on the leaderboard.
+  {% endset %}
+
+  <div class="card">
+    <div class="card-body">
+      <p class="eyebrow">Ready to send</p>
+      <p class="form-hint">
+        A message for your players, written for you but yours to send: copy it into your own
+        email or text, or use the email button below to open it in your own mail app. Nobody is
+        emailed from here, nothing goes out until you send it yourself. It always reflects
+        {{ pool.name }}'s current join code, so it updates on its own if you rotate the code
+        above.
+      </p>
+      <textarea class="input invite-message" id="invite-message" readonly
+                aria-label="Player invite message">{{ invite_body | trim }}</textarea>
+      <div class="row">
+        <button type="button" class="btn btn-secondary" data-copy="#invite-message">
+          Copy message
+        </button>
+        <a class="btn btn-gold"
+           href="mailto:?subject={{ invite_subject | urlencode }}&body={{ invite_body | trim | urlencode }}">
+          {{ ic.icon("mail", 18) }}<span class="btn-label">Email it</span>
+        </a>
+      </div>
+    </div>
+  </div>
+</section>
+
 <section class="section" aria-labelledby="roster-title">
   <h2 class="section-title" id="roster-title">The roster</h2>
 

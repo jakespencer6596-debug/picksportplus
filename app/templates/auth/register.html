@@ -6,10 +6,15 @@
 <div class="auth-wrap">
   <div class="card auth-card">
     <div class="card-body">
-      <p class="eyebrow">Join the pool</p>
+      <p class="eyebrow">
+        {% if commissioner_pool %}Become a commissioner{% else %}Join the pool{% endif %}
+      </p>
       <h1 class="page-title">Create an account</h1>
       <p class="muted auth-intro">
-        {% if open_registration %}
+        {% if commissioner_pool %}
+          You are creating a commissioner account for {{ commissioner_pool.name }}. Once you sign
+          up you will land on that league's admin dashboard, ready to set it up.
+        {% elif open_registration %}
           Registration is open. A join code puts you straight into a pool.
         {% else %}
           This pool is private. You need the join code from the commissioner.
@@ -45,15 +50,19 @@
           <p class="form-hint">At least 8 characters.</p>
         </div>
 
-        <div class="field">
-          <label class="field-label" for="join_code">
-            Join code{% if open_registration %} <span class="muted">(optional)</span>{% endif %}
-          </label>
-          <input class="input input-code" type="text" id="join_code" name="join_code"
-                 value="{{ join_code or form.join_code or '' }}"
-                 autocomplete="off" spellcheck="false"
-                 {% if not open_registration %}required{% endif %}>
-        </div>
+        {% if commissioner_pool %}
+          <input type="hidden" name="commissioner_code" value="{{ commissioner_code }}">
+        {% else %}
+          <div class="field">
+            <label class="field-label" for="join_code">
+              Join code{% if open_registration %} <span class="muted">(optional)</span>{% endif %}
+            </label>
+            <input class="input input-code" type="text" id="join_code" name="join_code"
+                   value="{{ join_code or form.join_code or '' }}"
+                   autocomplete="off" spellcheck="false"
+                   {% if not open_registration %}required{% endif %}>
+          </div>
+        {% endif %}
 
         <button class="btn btn-primary" type="submit">Create account</button>
       </form>

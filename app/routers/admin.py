@@ -60,7 +60,15 @@ def _week_or_none(db: Session, pool: Pool, week_number: int | None) -> Week | No
 
 
 def _base(db: Session, user: User, pool: Pool) -> dict:
-    return {"current_user": user, "pool": pool, "is_commissioner": True, "active_nav": "admin"}
+    return {
+        "current_user": user,
+        "pool": pool,
+        "is_commissioner": True,
+        "active_nav": "admin",
+        # Absolute origin for the player invite link and its mailto template, built the same
+        # way app/routers/public.py already builds base_url for pricing.html's mailto link.
+        "base_url": settings.base_url,
+    }
 
 
 # Rivalries --------------------------------------------------------------------
@@ -601,14 +609,15 @@ def member_role(
     user: User = Depends(require_user),
     pool: Pool = Depends(require_commissioner),
 ):
+    if not user.is_admin:
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN, "Only the site admin can change a commissioner role."
+        )
     member = db.get(PoolMember, member_id)
     if member is None or member.pool_id != pool.id:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "That member is not in this pool.")
     if role not in ("commissioner", "member"):
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Unknown role.")
-    if role == "member" and member.user_id == user.id and not user.is_admin:
-        flash(request, "You cannot remove your own commissioner role.", "error")
-        return _redirect("/admin/members")
     member.role_in_pool = role
     db.commit()
     flash(request, "Member role updated.")

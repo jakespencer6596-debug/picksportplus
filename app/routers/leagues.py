@@ -36,6 +36,7 @@ from app.auth import (
     normalize_join_code,
     require_admin,
 )
+from app.config import settings
 from app.db import get_db
 from app.models import Pool, PoolMember, User
 from app.templating import get_zone, render
@@ -77,7 +78,26 @@ def _base(user: User) -> dict:
         "pool": None,
         "is_commissioner": True,
         "active_nav": "admin_leagues",
+        # Absolute origin for the commissioner invite link, built the same way
+        # app/routers/public.py already builds base_url for pricing.html's mailto link.
+        "base_url": settings.base_url,
     }
+
+
+def _fresh_commissioner_invite_code(db: Session, exclude_pool_id: int | None = None) -> str:
+    """A commissioner_invite_code that collides with nobody else's, same collision-avoidance
+    shape as app/routers/admin.py's rotate_join_code (10 tries against the real column,
+    reusing generate_join_code, never a second generator)."""
+    for _ in range(10):
+        code = generate_join_code()
+        query = select(Pool).where(func.upper(Pool.commissioner_invite_code) == code)
+        if exclude_pool_id is not None:
+            query = query.where(Pool.id != exclude_pool_id)
+        if db.scalar(query) is None:
+            return code
+    raise HTTPException(
+        status.HTTP_500_INTERNAL_SERVER_ERROR, "Could not generate a commissioner invite code."
+    )
 
 
 def _parse_commissioner_emails(text: str) -> list[str]:
@@ -188,6 +208,7 @@ def league_new_save(
     pool = Pool(
         name=name,
         join_code=code,
+        commissioner_invite_code=_fresh_commissioner_invite_code(db),
         season_year=season_year,
         num_games_per_week=DEFAULT_NUM_GAMES_PER_WEEK,
         target_nfl=DEFAULT_TARGET_NFL,
@@ -224,6 +245,54 @@ def league_new_save(
             "Members page once they have registered.",
             "info",
         )
+    return _redirect("/admin/leagues")
+
+
+@router.post("/{pool_id}/commissioner-code")
+def rotate_commissioner_invite_code(
+    request: Request,
+    pool_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_admin),
+):
+    """Site-admin only, on purpose: creating a commissioner is the more powerful of the two
+    invite links (Post-launch fixes, see DECISIONS.md), so unlike the player join code, which
+    a pool's own commissioner can rotate from /admin/members, only the site admin can rotate
+    this one. Never touches Pool.join_code, the same way join code rotation never touches
+    this column."""
+    pool = db.get(Pool, pool_id)
+    if pool is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "No such league.")
+    pool.commissioner_invite_code = _fresh_commissioner_invite_code(db, exclude_pool_id=pool.id)
+    db.commit()
+    flash(request, f"New commissioner invite link generated for {pool.name}.")
+    return _redirect("/admin/leagues")
+
+
+@router.post("/{pool_id}/commissioner-code/set")
+def set_commissioner_invite_code(
+    request: Request,
+    pool_id: int,
+    commissioner_invite_code: str = Form(...),
+    db: Session = Depends(get_db),
+    user: User = Depends(require_admin),
+):
+    pool = db.get(Pool, pool_id)
+    if pool is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "No such league.")
+    code = normalize_join_code(commissioner_invite_code)
+    if len(code) < 4:
+        flash(request, "A commissioner invite code needs at least 4 characters.", "error")
+        return _redirect("/admin/leagues")
+    clash = db.scalar(
+        select(Pool).where(func.upper(Pool.commissioner_invite_code) == code, Pool.id != pool.id)
+    )
+    if clash is not None:
+        flash(request, "Another league already uses that commissioner invite code.", "error")
+        return _redirect("/admin/leagues")
+    pool.commissioner_invite_code = code
+    db.commit()
+    flash(request, f"Commissioner invite code for {pool.name} set to {code}.")
     return _redirect("/admin/leagues")
 
 

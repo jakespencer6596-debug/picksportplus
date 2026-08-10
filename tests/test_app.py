@@ -1844,6 +1844,8 @@ _NEW_LEAGUE_FORM = {
     "timezone": "America/New_York",
 }
 
+_SET_COMMISSIONER_CODE_FORM = {"commissioner_invite_code": "TRYCODE1"}
+
 
 def _make_other_pool(
     db: Session, *, name: str = "Second Pool", join_code: str = "SECONDPL"
@@ -1876,6 +1878,8 @@ def _make_pool_commissioner_who_is_not_admin(db: Session, pool: Pool) -> User:
         ("get", "/admin/leagues", None),
         ("post", "/admin/leagues/new", _NEW_LEAGUE_FORM),
         ("post", "/admin/leagues/{pool_id}/view-as", None),
+        ("post", "/admin/leagues/{pool_id}/commissioner-code", None),
+        ("post", "/admin/leagues/{pool_id}/commissioner-code/set", _SET_COMMISSIONER_CODE_FORM),
     ],
 )
 def test_leagues_admin_routes_refused_for_a_regular_player(client, world, method, path, data):
@@ -1893,6 +1897,8 @@ def test_leagues_admin_routes_refused_for_a_regular_player(client, world, method
         ("get", "/admin/leagues", None),
         ("post", "/admin/leagues/new", _NEW_LEAGUE_FORM),
         ("post", "/admin/leagues/{pool_id}/view-as", None),
+        ("post", "/admin/leagues/{pool_id}/commissioner-code", None),
+        ("post", "/admin/leagues/{pool_id}/commissioner-code/set", _SET_COMMISSIONER_CODE_FORM),
     ],
 )
 def test_leagues_admin_routes_refused_for_a_pool_commissioner_who_is_not_a_site_admin(
@@ -2108,3 +2114,201 @@ def test_viewing_as_commissioner_banner_shows_for_admin_and_never_for_a_real_com
     leagues_response = client.get("/admin/leagues")
     assert leagues_response.status_code == 200
     assert "Exit to leagues" not in leagues_response.text
+
+
+# Commissioner invite links (Post-launch fixes) -------------------------------
+# The workflow: the site admin talks to a prospective commissioner outside the app, then
+# hands them a link generated from /admin/leagues. Opening it presents the normal /register
+# form, but completing it makes them a commissioner of that specific pool, not a member. A
+# fully separate code and query param from the player join code on purpose, see
+# DECISIONS.md, Post-launch fixes.
+
+
+def test_register_page_greets_a_valid_commissioner_link(client, world, session_factory):
+    db = session_factory()
+    pool = db.get(Pool, world["pool_id"])
+    pool.commissioner_invite_code = "COMMISH1"
+    db.commit()
+    db.close()
+
+    response = client.get("/register?commissioner_code=COMMISH1")
+    assert response.status_code == 200
+    assert "commissioner" in response.text.lower()
+    assert "Test Pool" in response.text
+
+
+def test_register_with_a_valid_commissioner_code_creates_a_commissioner_not_an_admin(
+    client, world, session_factory
+):
+    db = session_factory()
+    pool = db.get(Pool, world["pool_id"])
+    pool.commissioner_invite_code = "COMMISH1"
+    db.commit()
+    db.close()
+
+    response = client.post(
+        "/register",
+        data={
+            "display_name": "New Commissioner",
+            "email": "newcommish@example.com",
+            "password": "hunter2hunter2",
+            "commissioner_code": "commish1",  # case insensitive, same convention as join codes
+        },
+    )
+    assert response.status_code == 303
+    assert response.headers["location"] == "/admin"
+
+    db = session_factory()
+    user = db.scalar(select(User).where(User.email == "newcommish@example.com"))
+    assert user is not None
+    assert user.role == "player"  # never a global admin, no matter what the invite grants
+    assert user.is_admin is False
+    member = db.scalar(select(PoolMember).where(PoolMember.user_id == user.id))
+    assert member is not None
+    assert member.pool_id == world["pool_id"]
+    assert member.role_in_pool == "commissioner"
+    db.close()
+
+
+def test_register_with_an_invalid_commissioner_code_is_rejected(client, world, session_factory):
+    response = client.post(
+        "/register",
+        data={
+            "display_name": "Nope",
+            "email": "nope@example.com",
+            "password": "hunter2hunter2",
+            "commissioner_code": "NOTREAL1",
+        },
+    )
+    assert response.status_code == 400
+    assert "commissioner link" in response.text.lower()
+
+    db = session_factory()
+    assert db.scalar(select(User).where(User.email == "nope@example.com")) is None
+    db.close()
+
+
+def test_register_with_no_commissioner_code_is_unchanged_from_todays_behavior(client, world):
+    """Omitting commissioner_code entirely (every pre-existing registration request) must
+    behave exactly as before: private mode still requires a real join code, and a normal
+    join code still works."""
+    private_mode_rejected = client.post(
+        "/register",
+        data={
+            "display_name": "Plain Player",
+            "email": "plainplayer@example.com",
+            "password": "hunter2hunter2",
+        },
+    )
+    assert private_mode_rejected.status_code == 400
+
+    joined = client.post(
+        "/register",
+        data={
+            "display_name": "Plain Player",
+            "email": "plainplayer@example.com",
+            "password": "hunter2hunter2",
+            "join_code": "TESTCODE",
+        },
+    )
+    assert joined.status_code == 303
+    assert joined.headers["location"] == "/picks"
+
+
+def test_rotating_commissioner_invite_code_never_touches_join_code_and_vice_versa(
+    client, world, session_factory
+):
+    db = session_factory()
+    pool = db.get(Pool, world["pool_id"])
+    pool.commissioner_invite_code = "OLDCOMM1"
+    db.commit()
+    original_join_code = pool.join_code
+    db.close()
+
+    _login(client, "boss@example.com")
+    rotate = client.post(f"/admin/leagues/{world['pool_id']}/commissioner-code")
+    assert rotate.status_code == 303
+
+    db = session_factory()
+    pool = db.get(Pool, world["pool_id"])
+    assert pool.commissioner_invite_code != "OLDCOMM1"
+    assert pool.commissioner_invite_code is not None
+    new_commissioner_code = pool.commissioner_invite_code
+    assert pool.join_code == original_join_code  # rotating the commissioner code alone
+    db.close()
+
+    # The old commissioner code no longer resolves to anything, the same way an old join
+    # code no longer works after rotation (test_join_code_rotation_invalidates_the_old_code).
+    client.post("/logout")
+    old_code_rejected = client.post(
+        "/register",
+        data={
+            "display_name": "Too Late",
+            "email": "toolate@example.com",
+            "password": "hunter2hunter2",
+            "commissioner_code": "OLDCOMM1",
+        },
+    )
+    assert old_code_rejected.status_code == 400
+
+    # And the reverse: rotating the player join code never touches the commissioner code.
+    _login(client, "boss@example.com")
+    join_rotate = client.post("/admin/join-code")
+    assert join_rotate.status_code == 303
+
+    db = session_factory()
+    pool = db.get(Pool, world["pool_id"])
+    assert pool.join_code != original_join_code
+    assert pool.commissioner_invite_code == new_commissioner_code
+    db.close()
+
+
+def test_set_commissioner_invite_code_by_hand(client, world, session_factory):
+    _login(client, "boss@example.com")
+    response = client.post(
+        f"/admin/leagues/{world['pool_id']}/commissioner-code/set",
+        data={"commissioner_invite_code": "handpicked"},
+    )
+    assert response.status_code == 303
+
+    db = session_factory()
+    pool = db.get(Pool, world["pool_id"])
+    assert pool.commissioner_invite_code == "HANDPICKED"  # stored uppercase, like join codes
+    db.close()
+
+
+def test_create_league_gives_the_new_pool_its_own_commissioner_invite_code(client, session_factory):
+    db = session_factory()
+    _make_user(db, "siteadmin6@example.com", "Site Admin Six", role="admin")
+    db.commit()
+    db.close()
+
+    _login(client, "siteadmin6@example.com")
+    response = client.post(
+        "/admin/leagues/new",
+        data={
+            "name": "Fresh League",
+            "join_code": "FRESHLG1",
+            "season_year": "2025",
+            "timezone": "America/New_York",
+        },
+    )
+    assert response.status_code == 303
+
+    db = session_factory()
+    pool = db.scalar(select(Pool).where(Pool.name == "Fresh League"))
+    assert pool is not None
+    assert pool.commissioner_invite_code is not None
+    assert pool.commissioner_invite_code != pool.join_code
+    db.close()
+
+
+def test_members_page_shows_the_invite_link_and_a_working_mailto(client, world):
+    _login(client, "boss@example.com")
+    response = client.get("/admin/members")
+    assert response.status_code == 200
+    assert "register?code=TESTCODE" in response.text
+    assert "mailto:" in response.text
+    assert "TESTCODE" in response.text
+    # No em dash anywhere in the generated invite copy.
+    assert "—" not in response.text

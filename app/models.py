@@ -101,6 +101,21 @@ class Pool(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     name: Mapped[str] = mapped_column(String(120), nullable=False)
     join_code: Mapped[str] = mapped_column(String(40), unique=True, index=True, nullable=False)
+    # A second, independent code that gates creating a COMMISSIONER account for this pool
+    # (POST /register?commissioner_code=..., app/routers/auth.py), never the plain player
+    # join_code above. Kept as its own nullable column, never a flag or alias on join_code,
+    # because it gates a materially more powerful action (creating a commissioner, not a
+    # member) and the product owner was explicit that rotating one must never affect the
+    # other (Post-launch fixes: commissioner invite links). Every existing pool is backfilled
+    # with a fresh one in the migration that adds this column; every new pool gets one at
+    # creation time in POST /admin/leagues/new, so in practice this is never left null, but
+    # the column stays nullable at the type level since nothing here structurally requires
+    # every pool to always have one (matching Pool.venmo_handle and Pool.entry_fee's own
+    # nullable, "no value set yet" convention rather than forcing a NOT NULL with a synthetic
+    # default). Reusing app.auth.generate_join_code, never a second code generator.
+    commissioner_invite_code: Mapped[str | None] = mapped_column(
+        String(40), unique=True, index=True, nullable=True
+    )
     season_year: Mapped[int] = mapped_column(Integer, nullable=False)
 
     # Slate size. All three are commissioner settings. The per league numbers are targets:

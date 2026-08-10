@@ -1921,3 +1921,138 @@ direct `get_active_pool` unit tests, and the viewing-as-commissioner banner). `g
 app/` finds nothing new. No new icon beyond the existing `flag`/`settings` icons reused
 as-is, no emoji, no new dependency, no Tailwind or bundler, no new CSS (the banner reuses
 `.lockbar` exactly as it already renders on `picks.html`).
+
+### Commissioner invite links, and a ready-to-send player invite message
+
+Two distinct invite links the product owner wanted kept firmly apart: one that a site admin
+hands a brand new person (no account yet) to become a commissioner of a specific league, and
+one that a commissioner already has (yesterday's join code) to hand their own players, now
+paired with a written, ready-to-copy message instead of just a bare code.
+
+**Why a second column, `Pool.commissioner_invite_code`, rather than reusing `join_code` with
+a flag.** The two codes gate materially different actions: `join_code` only ever creates a
+`PoolMember` with `role_in_pool="member"`; the new code creates one with
+`role_in_pool="commissioner"`, a real permission upgrade. The product owner's own requirement
+was explicit that rotating one must never affect the other, which rules out a shared column
+outright (rotating a shared value would always touch both powers at once) and rules out a
+"this join code is currently in commissioner mode" flag too (a stray flag flip, or a future
+bug, could silently turn a player join link into a commissioner mint). A second, independent,
+nullable `String(40)` column with its own unique index is the only shape where "rotate one,
+the other is untouched" is true by construction, not by careful bookkeeping.
+`test_rotating_commissioner_invite_code_never_touches_join_code_and_vice_versa` proves both
+directions in one test.
+
+**Migration `176d4f464857_add_commissioner_invite_code_to_pools.py`.** Adds the column
+nullable with no server default (a server default would hand every existing pool the *same*
+code, which is useless: two pools cannot share a commissioner invite code once the unique
+index is in place). Instead the migration backfills every existing pool by hand in a small
+loop, reusing `app.auth.generate_join_code` directly (imported into the migration, the same
+precedent `6b6eab096a56` already set for reaching into `app/` from a migration, there for a
+static constant, here for a real function so the exact alphabet and ambiguous-character
+exclusions never drift into a second implementation) and tracking codes already handed out
+in this same pass to avoid a collision, the same shape `rotate_join_code` already uses
+against the live table. Applied cleanly against both the existing dev database (two pools,
+both backfilled, zero left null) and a brand new database built from the very first migration
+forward (zero existing pools, loop body never runs, still ends at head cleanly). `downgrade`
+drops the column and its index. Every pool created after this migration, via
+`POST /admin/leagues/new`, also gets a fresh code at creation time
+(`_fresh_commissioner_invite_code` in `app/routers/leagues.py`, the same 10-try
+collision-avoidance shape as `rotate_join_code`), so in practice no pool is ever left without
+one, even though the column stays nullable at the type level rather than forcing a synthetic
+NOT NULL default (matching `Pool.venmo_handle`/`Pool.entry_fee`'s own "nullable until someone
+sets a real value" convention, since nothing structurally requires the value to exist, unlike
+`join_code`, which the login/registration path depends on for every pool, always).
+
+**Query param: `?commissioner_code=`, never `?code=`.** `?code=` already means "the player
+join code" everywhere in this codebase (`GET`/`POST /register`, and the docs and copy that
+already reference it); reusing it for a second, more powerful meaning would make every
+existing join link ambiguous about which power it grants depending on invisible database
+state. `?commissioner_code=` is unambiguous on sight, greppable, and reads naturally next to
+the existing `?code=`. `app/routers/auth.py` adds `_find_pool_by_commissioner_code`,
+deliberately a full sibling of `_find_pool_by_code` rather than one function branching on a
+"which column" argument, so there is no code path where the two could be crossed by a typo in
+a conditional. In `register_submit`, the two are mutually exclusive by construction: a
+non-blank `commissioner_code` is checked first and is authoritative (an invalid one is a hard
+error, exactly like an invalid `join_code` already is, and it never silently falls through to
+try `join_code` instead); only when `commissioner_code` is entirely absent does the form fall
+back to today's exact `join_code` handling, unchanged. `User.role` is always `"player"`
+regardless of which branch runs; only `PoolMember.role_in_pool` ever varies, so a commissioner
+invite link can never produce a global admin no matter what code is used or how the form is
+manipulated, by construction, not by a runtime check somewhere that could be bypassed or
+forgotten. `register_form` (`GET`) resolves the code up front too, purely for a better
+greeting ("You are creating a commissioner account for {pool.name}") and to swap the plain
+join-code field for a hidden field carrying the same code through to the `POST`; an unknown
+or missing `commissioner_code` at `GET` renders the ordinary form, no error shown, no
+regression.
+
+**Rotate and set routes: `POST /admin/leagues/{pool_id}/commissioner-code` and
+`.../commissioner-code/set`, in `app/routers/leagues.py`, gated `require_admin`.** Mirrors
+`rotate_join_code`/`set_join_code` in `app/routers/admin.py` almost exactly (10-try
+collision loop for the generated case, a 4-character minimum plus a clash check for the
+hand-set case, `normalize_join_code` for uppercasing), but lives in the admin-only leagues
+file and is gated `require_admin` rather than `require_commissioner`, matching today's
+separate decision (already reflected in `app/routers/admin.py`'s `member_role`) that only the
+site admin may ever create a commissioner. A pool's own real commissioner, even of their own
+league, cannot rotate or set this code, proven by extending the existing
+`test_leagues_admin_routes_refused_for_a_regular_player` and
+`test_leagues_admin_routes_refused_for_a_pool_commissioner_who_is_not_a_site_admin`
+parametrized boundary tests with the two new routes rather than writing a parallel pair of
+tests, since the boundary being proven is identical to every other route already in that
+list.
+
+**UI: an expandable `<details>` per league row on `/admin/leagues`, not a separate page.**
+Keeps the existing table from growing a wall of always-visible URLs; a native
+`<details>`/`<summary>` disclosure needs no JavaScript to open (the same pattern
+`how-it-works.html` and the scenario engine's representative-scenario panel already use), so
+this stayed plain HTML. A pool with no code yet (only possible for one created by
+`seed_admin`/the CLI after this migration, since both the backfill and `POST
+/admin/leagues/new` always populate it going forward) shows a single "Create a commissioner
+invite link" button instead of a blank link, which doubles as the first-time generation
+action, no separate code path needed for "create" versus "rotate."
+
+**Copy-to-clipboard: one small, generic helper added to `app/static/app.js`, not two.** No
+copy-to-clipboard control existed anywhere in the app before this (checked: no
+`clipboard`/`data-copy` hits anywhere in `app/` beforehand). Rather than writing one for the
+commissioner link and a second for the player invite message, a single `data-copy="<css
+selector>"` attribute plus one delegated click handler (`handleCopyClick`, wired into the
+existing document-level `onClick`) serves both: it reads `.value` when the target is a form
+control (the invite link `<input readonly>`, the invite message `<textarea readonly>`) or
+`.textContent` otherwise, and falls back to a hidden textarea plus `execCommand("copy")` when
+`navigator.clipboard`/`isSecureContext` are unavailable (a plain `http://localhost` dev
+server, for one), so the button always does something instead of throwing. No new dependency.
+
+**Player invite message on `/admin/members`, regenerated live from the pool's current join
+code.** Sits in its own "Invite players" section right below the existing "Join code" panel.
+Built the exact same way `pricing.html`'s existing refer-a-friend `mailto:` link already is
+(`{% set %}` blocks for the subject and body, `| urlencode` on both, a plain `mailto:?subject=
+...&body=...` href), so this introduces no new templating pattern, just a second use of one
+already in the codebase. The message text and the `mailto:` body both read `pool.join_code`
+directly at render time, never a value captured at some earlier point, so rotating the join
+code and reloading the page is the only "update" step needed, nothing can go stale. Copy
+reviewed for sentence case, plain language, and no em dash, matching the pricing page's own
+refer-a-friend tone; `test_members_page_shows_the_invite_link_and_a_working_mailto` asserts
+both the link and the code appear in the rendered `mailto:` href and body, and that no em dash
+snuck into the generated copy.
+
+**What this does not touch.** `POST /admin/leagues/new`'s existing "attach an existing user by
+email" textarea is completely unmodified; that remains the path for a person the admin already
+knows has an account. Nothing here sends an email or a text message on anyone's behalf: every
+"invite" is a link plus a copy-paste template or a `mailto:` link that opens the commissioner's
+own mail client, exactly like the pre-existing refer-a-friend feature, matching the standing
+rule against ever sending on a user's behalf without their own explicit action.
+
+**Verification.** `ruff check .`, `black .`, and `pytest -q` all clean, 818 passed, 0 failed
+(806 at the previous post-launch baseline, 12 net new tests: the register/commissioner-code
+happy path, the greeting on `GET /register` with a valid code, an invalid code rejected, a
+missing code proven unchanged from today's behavior, the two-direction rotation-independence
+test, hand-setting a commissioner invite code, a fresh league getting its own code distinct
+from its join code, the player-invite-panel rendering check, plus the two new routes folded
+into the existing admin-only boundary parametrizations rather than counted as wholly separate
+tests). Migration applied cleanly against both the live dev database (backfilling two existing
+pools, zero left null afterward) and a from-scratch database built through the full chain.
+`grep -rn "—" app/ tests/ alembic/` finds only the literal em dash inside the new test's own
+assertion string that checks for its absence, nothing in any real copy. No emoji anywhere
+touched. No new dependency, no Tailwind or bundler, no SPA; the only new CSS is the small
+`.invite-details`/`.invite-panel`/`.invite-message` block in `app/static/app.css`, built from
+existing design tokens and reusing `.card`, `.field-label`, `.input`, `.row`, and `.form-hint`
+rather than inventing parallel classes for the same shapes.

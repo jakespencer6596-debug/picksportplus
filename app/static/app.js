@@ -339,7 +339,61 @@
     }
   }
 
+  /* ---------------------------------------------------------- copy to clipboard */
+
+  /* A small, generic "copy this text" control, used by the commissioner invite link
+     (admin/leagues.html) and the player invite message (admin/members.html): the button
+     carries data-copy, a CSS selector for the one element holding the text to copy (an
+     input's value, or a plain element's text content). One helper for both pages rather
+     than two, since both are the same "put this exact text on the clipboard" job. */
+  function copyFromSelector(selector) {
+    var el = document.querySelector(selector);
+    if (!el) return "";
+    return "value" in el ? el.value : el.textContent;
+  }
+
+  /* navigator.clipboard needs a secure context, which a plain http dev server is not, so
+     this always has a working fallback: a hidden textarea plus the older execCommand copy,
+     good enough for the one-shot copy this control does. */
+  function copyText(text) {
+    if (navigator.clipboard && window.isSecureContext) {
+      return navigator.clipboard.writeText(text);
+    }
+    var ta = document.createElement("textarea");
+    ta.value = text;
+    ta.setAttribute("readonly", "");
+    ta.style.position = "fixed";
+    ta.style.opacity = "0";
+    document.body.appendChild(ta);
+    ta.select();
+    try {
+      document.execCommand("copy");
+    } catch (err) {
+      /* Nothing more this control can do; the text is still visible for a manual copy. */
+    }
+    document.body.removeChild(ta);
+    return Promise.resolve();
+  }
+
+  function handleCopyClick(btn) {
+    var text = copyFromSelector(btn.getAttribute("data-copy"));
+    if (!text) return;
+    var original = btn.textContent;
+    copyText(text).then(function () {
+      btn.textContent = "Copied";
+      window.setTimeout(function () {
+        btn.textContent = original;
+      }, 1500);
+    });
+  }
+
   function onClick(e) {
+    var copyBtn = e.target.closest("[data-copy]");
+    if (copyBtn) {
+      handleCopyClick(copyBtn);
+      return;
+    }
+
     var rowToggle = e.target.closest("[data-row-toggle]");
     if (rowToggle) {
       toggleRowDetail(rowToggle);
