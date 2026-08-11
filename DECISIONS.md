@@ -2577,3 +2577,16 @@ convention outranks matching a generic instruction that was written without know
 codebase's own design language. A payout figure that suddenly looked like "$1,234" next to every
 other dollar figure on the same page reading "1,234 dollars" would look like a bug, not a
 feature.
+
+### Phase 6: one paid checkbox per player, not per award
+
+A player can hold up to four awards (one per scope). The spec's "a Paid checkbox" reads as one
+control per table row (one row = one player), so `POST /admin/payouts/player/{user_id}/paid`
+marks every currently-unpaid award for that player paid in one action, or unmarks every
+currently-paid award if the row is already fully paid (a real two-way toggle, backed by a new
+`unmark_paid` alongside Phase 3's `mark_paid`). A narrower single-award route,
+`POST /admin/payouts/award/{id}/paid`, also exists for a possible future more granular UI, but
+nothing links to it yet. Fixed in a follow-up commit: a player owed nothing at all rendered with
+a checked-and-live checkbox (trivially "fully paid" since they have no unpaid awards), which
+looked like a false confirmation; that checkbox is now disabled and unchecked for a zero
+grand_total row instead.

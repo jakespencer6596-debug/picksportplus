@@ -30,7 +30,8 @@ Tracking document for the commissioner payout system build (branch `payout-setti
   not HTMX live-swap, see DECISIONS.md)
 - [x] Phase 5: player-facing payout display (commit d5a0360, 920 passing; kept this app's
   existing "N dollars" money convention rather than a "$N" format, see DECISIONS.md)
-- [ ] Phase 6: commissioner payout summary and export
+- [x] Phase 6: commissioner payout summary and export (commit 3447d6f + follow-up 6c3bcb3,
+  929 passing; paid toggle is a real HTMX partial swap)
 - [ ] Phase 7: CLI, demo data, cron safety
 - [ ] Phase 8: full verification sweep
 - [ ] Phase 9: document, local merge to main (no push, no live deploy: see above)
