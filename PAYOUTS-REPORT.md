@@ -24,8 +24,8 @@ Tracking document for the commissioner payout system build (branch `payout-setti
 
 - [x] Phase 0: orientation, baseline, branch, tracking docs (commit d09b83d)
 - [x] Phase 1: data model and migration (commit 2634138)
-- [ ] Phase 2: pure payout allocation engine (`app/payouts.py`)
-- [ ] Phase 3: service layer, snapshots, scoring hook
+- [x] Phase 2: pure payout allocation engine (`app/payouts.py`) (commit 68fb3e7, 878 passing)
+- [x] Phase 3: service layer, snapshots, scoring hook (commit 231a9ac, 892 passing)
 - [ ] Phase 4: Set Payouts admin screen
 - [ ] Phase 5: player-facing payout display
 - [ ] Phase 6: commissioner payout summary and export

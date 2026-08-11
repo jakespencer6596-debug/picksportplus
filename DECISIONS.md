@@ -2532,3 +2532,15 @@ access. Per direction, this build proceeds through every phase including the fin
 `git merge --no-ff` of `payout-settings` into `main` with a green gate, but stops there: the
 actual `git push origin main` and live-deploy verification are done by the product owner
 afterward, not by this agent.
+
+### Phase 3: season completion signal for automatic snapshotting
+
+Spec: "Season scopes snapshot when the final week of the season is scored, or on an explicit
+admin action." This codebase has no stored "the season is officially over" flag anywhere.
+**Decision:** treat a bowl week (`Week.is_bowl_week`) finishing scoring as the season-complete
+signal, since the real season structure this build targets is weeks 1-15 regular season plus
+week 16 as the bowl week: `score_week_for_pool` snapshots `season_points` and `season_wins`
+right after it snapshots the bowl week's own `bowl` scope awards. This is a deliberate,
+documented choice (see the comment in `app/services/results.py`), not a discovered fact, and a
+pool that never marks any week as a bowl week never gets an automatic season snapshot from
+scoring alone; the explicit admin action (a later phase) is the fallback for that case.
