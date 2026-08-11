@@ -32,7 +32,7 @@ Tracking document for the commissioner payout system build (branch `payout-setti
   existing "N dollars" money convention rather than a "$N" format, see DECISIONS.md)
 - [x] Phase 6: commissioner payout summary and export (commit 3447d6f + follow-up 6c3bcb3,
   929 passing; paid toggle is a real HTMX partial swap)
-- [ ] Phase 7: CLI, demo data, cron safety
+- [x] Phase 7: CLI, demo data, cron safety (commits a29640d, 9498d80, 938 passing)
 - [ ] Phase 8: full verification sweep
 - [ ] Phase 9: document, local merge to main (no push, no live deploy: see above)
 
