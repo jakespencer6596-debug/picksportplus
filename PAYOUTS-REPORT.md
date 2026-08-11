@@ -34,7 +34,8 @@ Tracking document for the commissioner payout system build (branch `payout-setti
   929 passing; paid toggle is a real HTMX partial swap)
 - [x] Phase 7: CLI, demo data, cron safety (commits a29640d, 9498d80, 938 passing)
 - [x] Phase 8: full verification sweep (see checklist below)
-- [ ] Phase 9: document, local merge to main (no push, no live deploy: see above)
+- [x] Phase 9: document, local merge to main (merge commit 8bf5c54; no push, no live deploy,
+  by design, see below)
 
 Commit SHAs and per-phase notes are filled in as each phase completes below.
 
@@ -137,7 +138,7 @@ as verified.
 29. PASS. `scope="playoffs"` rejected with a non-500 response (checked live and by
     `tests/test_payout_routes.py::test_unknown_scope_is_rejected`).
 30. PASS. A duplicate `(scope, place)` POST is rejected with a readable message, not a 500
-    (checked live and by `tests/test_payout_routes.py::test_duplicate_scope_place_is_rejected`).
+    (checked live and by `tests/test_payout_routes.py::test_duplicate_scope_place_on_create_is_rejected`).
 31. PASS. Every payout route (`/admin/payouts`, `/admin/payouts/pot`, `/admin/payouts/rule`,
     `/admin/payouts/summary`, `/admin/payouts/summary.csv`) returns 403 for a logged-in,
     non-commissioner demo player (checked live against all five routes in one pass, and by
@@ -157,3 +158,168 @@ shape, plus 12 new: 11 in tests/test_payout_models.py, and test_demo_payout_rule
 place rather than added). Migration da27c5ef4f4f verified upgrade/downgrade/upgrade on a scratch
 SQLite database. Full details and adaptation notes (why the old routes/templates were removed in
 this same phase rather than left broken) are in DECISIONS.md, "Payout system".
+
+## Phase 9: documentation and merge
+
+`SPEC.md` section 10b rewritten for the current design (four scopes, dollar/percent modes,
+per-week weekly semantics, pot/override, ties and rounding, frozen snapshots, over-allocation
+warns not blocks), section 11 extended with the four new CLI commands, and a new note in
+section 4 correcting the earlier inaccurate claim that the Decimal-money rule already lived in
+section 3h (it did not; see DECISIONS.md). `README.md` got a "Payouts" walkthrough under "The
+commissioner", the four new CLI commands documented under "Running a week end to end", and the
+Render ephemeral-storage note extended to cover hand-entered payout rules specifically.
+`DECISIONS.md` has a full "Payout system" heading covering every ambiguity resolved across all
+nine phases, in order, with reasoning.
+
+Full gate run one final time on the `payout-settings` branch (939 passed, ruff/black/em-dash
+all clean), then `git checkout main && git pull --ff-only` (already up to date),
+`git merge --no-ff payout-settings` (clean merge, no conflicts), full gate re-run on `main`
+itself (939 passed, ruff/black/em-dash all clean). `main` now sits at merge commit `8bf5c54`,
+one commit ahead of `origin/main` (`f2edba1`). Per explicit direction, this agent does not have
+`git push` permission (a hard block from the harness's own permission system, confirmed early
+in this build, not worked around) and does not have Render dashboard/shell access, so this is
+where the work stops: `main` is merged locally with a green gate, not pushed. The product owner
+pushes `origin/main` and verifies the live Render deploy directly afterward, the same way every
+other push in this project has been handled.
+
+## Every phase, with its commit SHA
+
+- Phase 0 (orientation, baseline, branch): `d09b83d`
+- Phase 1 (models and migration): `2634138`
+- Phase 2 (pure engine, `app/payouts.py`): `68fb3e7`
+- Phase 3 (service layer, snapshots, scoring hook): `231a9ac`
+- Phase 4 (Set Payouts admin screen): `02f45df`
+- Phase 5 (player-facing payout display): `d5a0360`
+- Phase 6 (commissioner summary and export): `3447d6f`, follow-up fix `6c3bcb3`
+- Phase 7 (CLI, demo data, cron safety): `a29640d`, `9498d80`
+- Phase 8 (full verification sweep): `2d1dabc`
+- Phase 9 (SPEC.md/README.md docs, merge): `3b27724`, `32b7f10`, merge commit `8bf5c54`
+- Unrelated, requested alongside this build, pushed by the product owner directly before this
+  branch existed: the provider budget visibility fix, `f2edba1`
+
+No phase gate failed a third consecutive time; the Failure Protocol's revert-and-continue path
+was never needed. Every gate passed on the first or second attempt of the phase it belonged to.
+
+## Test count
+
+861 passing before this build (baseline). 939 passing after Phase 9's merge to `main`. Net
++78 (the spec's own bar was +60 over baseline).
+
+## Live deploy
+
+Not pushed, not deployed, by design (see above: this agent has no push permission and no
+Render access, and was explicitly told not to attempt to route around that). The product owner
+will push `origin/main` and confirm `/admin/payouts` renders on the live site directly.
+
+## Plain-English walkthrough: setting up your four ladders from scratch
+
+Written for the commissioner, no code required.
+
+1. Sign in and go to Admin, then Payouts (`/admin/payouts`).
+2. At the top, "Pot" is your money box. Type in your entry fee (how much each player pays to
+   join) and it multiplies by however many members are marked paid on the Members page. If you
+   would rather just type in the real total by hand (a reserve, a carryover from last year,
+   whatever the real number is), use "Pot override" instead, it always wins over the computed
+   figure. You will also see "Weekly payout weeks" (how many regular weeks you pay out, 15 by
+   default), "Rounding" (round shares down to the cent, the whole dollar, or the nearest five
+   dollars), and "Tiebreak" (how a split cent or dollar gets handed out when two people tie,
+   today this is always "earliest submitted").
+3. Below the pot panel are four sections: Weekly, Bowl Week, Season: Points, Season: Wins. The
+   fastest way to start is the "Load preset" button, which fills in a known, real payout
+   ladder (the one this build was built around: weekly 105/55/25 a week, bowl 250/100/50,
+   season points 600/405/150, season wins 325/185/110) so you can see the shape of the screen
+   working with real numbers, then edit from there. It asks you to confirm since it replaces
+   anything already configured.
+4. In each section, "Add place" adds a row: pick the place (1st, 2nd, 3rd, and so on, no
+   limit), a mode (dollars or percent of the pot), a value, and an optional label. Whichever
+   mode you did not pick shows up next to it in muted text, so you always see both the dollar
+   figure and the percent of the pot at the same time, never having to guess one from the
+   other.
+5. If your player count changes and you want every payout to automatically rescale instead of
+   re-typing every number, click "Scale to pot". It converts every rule to a percentage of the
+   pot at whatever it is currently worth, so the dollar amounts stay exactly the same today,
+   but next season, if the pot is bigger or smaller, every payout grows or shrinks with it
+   automatically.
+6. Underneath the four sections is a live summary, in the same shape as a spreadsheet: each
+   category's breakdown, its total, then the grand total, the pot, and what is left over
+   (unallocated). If your payouts add up to more or less than the pot, a banner tells you
+   exactly how far off you are. It still lets you save either way. Reserves and rounding are
+   normal.
+7. That is the whole setup. From here, payouts show up automatically: a Payout column appears
+   on Weekly Results once a week finishes scoring, and once you save your Season: Points and
+   Season: Wins rules, two award panels show up on Season Standings once the bowl week
+   finishes scoring (that is this app's own signal that the season is over).
+8. To see what everyone is owed and pay them, go to the "View payout summary" link from the
+   Payouts screen. It lists every player, their total owed, and a checkbox that marks (or
+   unmarks) everything they are still owed as paid. There is a running "Paid X of Y, N of M
+   players settled" line at the top so you can track your progress. "Copy as text" puts a
+   clean, aligned table on your clipboard, ready to paste into a group text. "Download CSV"
+   gives you the same numbers in a spreadsheet file.
+
+One thing worth knowing up front: once a week finishes scoring, its payout numbers are frozen.
+If someone pays their entry fee late and the pot grows afterward, that already-scored week's
+payout does not change. This is deliberate, so a number you already sent someone over Venmo
+never quietly changes on you later. If you genuinely need to fix a past week's numbers by hand
+(a rule was wrong, for example), that is what "Recalculate" is for, a separate, explicit,
+confirmed action, never something that happens automatically.
+
+## Deliberately not built, and what it would take
+
+- A second, more granular "mark this one specific award paid" UI. The route exists
+  (`POST /admin/payouts/award/{id}/paid`) but nothing links to it; the payout summary page
+  only offers one checkbox per player (marks or unmarks every one of their awards at once).
+  Building a per-scope checkbox instead would mean a small template change to the existing
+  summary table partial, no new backend work.
+- Live, client-side recalculation of the dollar/percent display as a commissioner types. The
+  "both representations visible" requirement is satisfied by recomputing both figures on the
+  server on every save, not by JavaScript math updating instantly as a value is typed. This
+  would need either a small amount of client-side arithmetic duplicating
+  `app.payouts.resolve_rule` (a real risk of the two drifting apart) or an HTMX round trip on
+  every keystroke, debounced. Neither was worth the added complexity for a screen that is
+  edited occasionally, not continuously.
+- An admin-triggered "recalculate" button in the UI. `recalculate_awards` exists and is fully
+  tested in the service layer, but no route or template button calls it yet; today the only
+  way to invoke it is `python -m app.cli payouts-snapshot` combined with a direct service
+  call, or a future small addition to `app/routers/payouts.py`. Wiring an actual confirmed
+  button to it is a small, self contained follow-up.
+- Genuine visual, responsive, and keyboard verification. See Phase 8, items 25 and 26: this
+  agent verified every payout screen through a scripted HTTP client, not a browser, so
+  360px/768px/1280px legibility and full keyboard/focus-ring operation were reasoned about
+  from the CSS and component reuse, not watched by eye. This needs a human, or a browser
+  driving agent, to close out for real.
+- A second, narrower payout tiebreak rule. `Pool.payout_tiebreak` and `PAYOUT_TIEBREAKS` exist
+  as a real, stored, validated setting, but only one value (`earliest_submit`) is implemented;
+  the column and the UI control exist specifically so a second rule can be added later without
+  a migration.
+
+## Top three risks to this feature in live use, and a recommended mitigation for each
+
+1. The season-complete signal is a guess, not a fact. Season-scope awards (`season_points`,
+   `season_wins`) only snapshot automatically when a week marked `is_bowl_week=True` finishes
+   scoring. If a commissioner's pool never marks any week as the bowl week, the season awards
+   never freeze on their own, and the two panels on Season Standings simply never appear.
+   Mitigation: the CLI (`payouts-snapshot --scope season_points`) already exists as an explicit
+   fallback exactly for this case; the real fix is making sure this gap is visible rather than
+   silent, for example a small banner on Season Standings once the regular season's last week
+   is scored but neither season scope has snapshotted yet, prompting the commissioner to run
+   it by hand. That banner was not built in this pass and is a good first follow-up.
+2. A commissioner can genuinely lose track of which numbers are frozen versus live. The
+   "Projected" label only appears on Weekly Results for the current, still-scoring week; every
+   other payout figure in the app (the summary page, the season panels, CSV exports) only ever
+   reads frozen `PayoutAward` rows. The risk is not incorrect math, it is a commissioner
+   assuming the live Set Payouts editor's numbers ("what does 1st place pay today") are the
+   same thing as what a specific past week actually paid out, when a rule has since changed.
+   Mitigation: the editor screen could show a small note when a rule's current value differs
+   from what the most recent frozen award for that scope actually paid, surfacing the drift
+   explicitly rather than leaving a commissioner to notice it by comparing two separate pages.
+   Not built in this pass, worth adding before this ships to a group that pays real money on
+   real numbers.
+3. Money type discipline is enforced by convention and tests, not by the database itself.
+   `Decimal` end to end is a real, tested, code-review-level guarantee inside
+   `app/payouts.py`/`app/services/payouts.py` (the gate's own `grep -rn "float("` check, plus
+   every test asserting `isinstance(x, Decimal)`), but nothing at the SQLAlchemy/SQLite layer
+   stops a future edit from quietly reintroducing a `float` somewhere in this module. Mitigation:
+   the gate's `float(` grep check on these two files should stay a permanent, standing part of
+   this project's CI or pre-commit hooks, not just something run once during this build; it is
+   cheap, fast, and is the single test most likely to catch a real future regression here
+   before it reaches production.
