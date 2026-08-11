@@ -7,6 +7,7 @@
 {% set me = current_user.id if current_user else None %}
 {% set status_words = {"scored": "Scored", "locked": "Locked", "open": "Picks open", "draft": "Draft"} %}
 {% set points_dir = "asc" if pool and pool.scoring_mode == "inverse" else "desc" %}
+{% set rounding_words = {"cent": "the cent", "dollar": "the whole dollar", "five": "the nearest five dollars"} %}
 
 <div class="page-head">
   <div>
@@ -153,7 +154,9 @@
               </th>
               <th scope="col" class="num" data-sortable-col data-sort-default-dir="desc" aria-sort="none">Correct</th>
               {% if payout_rules_exist %}
-                <th scope="col" class="num">Payout</th>
+                <th scope="col" class="num" data-sortable-col data-sort-default-dir="desc" aria-sort="none">
+                  Payout{% if payout_is_projected %} <span class="pill">Projected</span>{% endif %}
+                </th>
               {% endif %}
             </tr>
           </thead>
@@ -180,8 +183,10 @@
                   {% if row.did_not_submit %}<span class="no-entry">.</span>{% else %}{{ row.correct }} of {{ row.possible }}{% endif %}
                 </td>
                 {% if payout_rules_exist %}
-                  <td class="num" data-label="Payout">
-                    {{ payouts_by_user.get(row.user_id, 0) | money }} dollars
+                  {% set amount = payouts_by_user.get(row.user_id) %}
+                  <td class="num{{ ' muted' if payout_is_projected }}" data-label="Payout"
+                      data-sort-value="{{ amount or 0 }}">
+                    {% if amount %}{{ amount | money }} dollars{% endif %}
                   </td>
                 {% endif %}
               </tr>
@@ -196,9 +201,14 @@
       {% endif %}
       {% if payout_rules_exist %}
         <p class="muted lb-note">
-          Payout column: {{ "bowl week" if payout_scope == "bowl" else "weekly" }} payout rules
-          from Settings. A tie splits the combined amount for those places evenly, to the cent;
-          any leftover cent goes to whoever submitted their picks earliest.
+          Payout column: {{ "bowl week" if payout_scope == "bowl" else "weekly" }} payout rules.
+          {% if payout_is_projected %}
+            This week is still being scored, so these amounts are projected and can still
+            change.
+          {% endif %}
+          A tie splits the combined amount for those places evenly, rounded to
+          {{ rounding_words.get(pool.payout_rounding, pool.payout_rounding) }}. Any leftover
+          goes to whoever submitted their picks earliest.
         </p>
       {% endif %}
     {% else %}

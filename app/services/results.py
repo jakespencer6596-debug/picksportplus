@@ -17,6 +17,7 @@ from app.models import Game, Pick, Pool, PoolMember, Week, WeekEntry, utcnow
 from app.providers import espn
 from app.providers.http import ProviderError
 from app.scoring import GameOutcome, PickInput, score_week, weekly_winner_ids
+from app.services import payouts as payout_service
 
 log = logging.getLogger("picksportplus.results")
 
@@ -218,6 +219,23 @@ def score_week_for_pool(db: Session, pool: Pool, week: Week) -> ScoreReport:
         if week.status != "scored":
             week.status = "scored"
             week.scored_at = utcnow()
+
+            # Freeze this week's payout awards the instant it finishes scoring, so a pot that
+            # grows later (a member pays late) never silently changes a figure the
+            # commissioner may already have paid over Venmo. snapshot_awards is itself
+            # idempotent and a no-op when there are no configured rules for this scope, so
+            # this call is safe even for a pool with no payout rules at all.
+            scope = "bowl" if week.is_bowl_week else "weekly"
+            payout_service.snapshot_awards(db, pool, scope, week=week)
+
+            # This codebase's real season structure is weeks 1-15 regular season plus week 16
+            # as the bowl week, and there is no separate stored "season complete" flag
+            # anywhere. The bowl week finishing scoring is therefore treated as the season's
+            # natural completion signal, a deliberate, documented choice rather than a
+            # discovered fact, and is the trigger for freezing both season-wide scopes here.
+            if week.is_bowl_week:
+                payout_service.snapshot_awards(db, pool, "season_points", week=None)
+                payout_service.snapshot_awards(db, pool, "season_wins", week=None)
     db.flush()
 
     return report

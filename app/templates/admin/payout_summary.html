@@ -1,0 +1,36 @@
+{% extends "base.html" %}
+{% block title %}Payout summary. {{ APP_NAME }}{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <div>
+    <p class="eyebrow">Commissioner</p>
+    <h1 class="page-title">Payout summary</h1>
+  </div>
+  <p class="muted">{{ pool.name }}, {{ pool.season_year }} season</p>
+</div>
+
+<nav class="subnav" aria-label="Commissioner tools">
+  <a class="subnav-link" href="/admin">Overview</a>
+  <a class="subnav-link" href="/admin/slate">Slate</a>
+  <a class="subnav-link" href="/admin/members">Members</a>
+  <a class="subnav-link" href="/admin/settings">Settings</a>
+  <a class="subnav-link is-active" href="/admin/payouts" aria-current="page">Payouts</a>
+</nav>
+
+<div class="stack">
+  <div class="row">
+    <a class="btn btn-secondary" href="/admin/payouts">Back to set payouts</a>
+    <a class="btn {{ 'btn-primary' if not unpaid_only else 'btn-secondary' }}"
+       href="/admin/payouts/summary" aria-current="{{ 'true' if not unpaid_only else 'false' }}">
+      All players
+    </a>
+    <a class="btn {{ 'btn-primary' if unpaid_only else 'btn-secondary' }}"
+       href="/admin/payouts/summary?unpaid=1" aria-current="{{ 'true' if unpaid_only else 'false' }}">
+      Unpaid only
+    </a>
+  </div>
+
+  {% include "components/payout_summary_table.html" %}
+</div>
+{% endblock %}

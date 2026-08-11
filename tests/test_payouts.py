@@ -1,373 +1,540 @@
-"""Tests for app/services/payouts.py (Phase 7).
+"""Unit tests for app.payouts, the pure payout allocation engine (Payout system rebuild,
+Phase 2). Pure logic, no database and no network, exactly like tests/test_scoring.py.
 
-allocate_payouts is pure arithmetic, no database: (user_id, rank) pairs plus a place-to-
-amount mapping in, a user_id-to-dollars mapping out. Every tie split test below writes the
-cent arithmetic out explicitly and asserts the split sums back to the combined total exactly,
-per the brief, rather than pinning a magic number nobody can check by eye.
+Every rank_standings call below passes descending explicitly, on purpose, even where a
+default would arguably be "safe": this module's whole design point is that no caller,
+including a test, gets to lean on an assumed direction. See app/payouts.py's module
+docstring and test_season_wins_always_ranks_descending_regardless_of_pool_scoring_mode below
+for why season_wins in particular must never inherit the pool's own scoring direction.
 
-week_payout_scope and week_is_complete take plain model instances that are never flushed to a
-database (constructed with exactly the attributes each function reads), since neither
-function needs anything else about a Week or Game to answer its one question.
+Dollar amounts below that don't need a tie-breaking timestamp use pot=Decimal("0") for
+amount-mode rules, since an amount-mode rule's resolved value never depends on the pot at
+all; using 0 makes that independence visible rather than implying some real number matters.
 """
 
 from __future__ import annotations
 
 import datetime as dt
+from decimal import Decimal
 
-from app.models import Game, PayoutRule, Pool, PoolMember, User, Week, WeekEntry
-from app.services.payouts import (
-    allocate_payouts,
-    payout_summary,
-    rules_by_place,
-    season_payouts,
-    week_is_complete,
-    week_payout_scope,
-    weekly_payouts,
+import pytest
+
+from app.payouts import (
+    SCOPES,
+    Award,
+    Rule,
+    StandingInput,
+    allocate,
+    allocation_summary,
+    category_total,
+    rank_standings,
+    resolve_rule,
 )
-from app.services.standings import season_standings, weekly_leaderboard
 
 UTC = dt.UTC
 
+EARLY = dt.datetime(2026, 1, 1, tzinfo=UTC)
+MID = dt.datetime(2026, 1, 2, tzinfo=UTC)
+LATE = dt.datetime(2026, 1, 3, tzinfo=UTC)
 
-# allocate_payouts: the pure tie-split arithmetic ----------------------------
 
+def rule(scope: str, place: int, mode: str, value, label: str | None = None) -> Rule:
+    return Rule(scope=scope, place=place, mode=mode, value=Decimal(str(value)), label=label)
 
-def test_allocate_payouts_clean_1_2_3_4_no_ties():
-    ranked = [(101, 1), (102, 2), (103, 3), (104, 4)]
-    amounts = {1: 100.0, 2: 50.0, 3: 25.0, 4: 10.0}
 
-    result = allocate_payouts(ranked, amounts)
+def std(user_id: int, metric, submitted_at: dt.datetime | None = None) -> StandingInput:
+    return StandingInput(user_id=user_id, metric=Decimal(str(metric)), submitted_at=submitted_at)
 
-    assert result == {101: 100.0, 102: 50.0, 103: 25.0, 104: 10.0}
 
+# The commissioner's real ladder ----------------------------------------------------------
 
-def test_allocate_payouts_no_rules_at_all_returns_empty():
-    assert allocate_payouts([(1, 1), (2, 2)], {}) == {}
-    assert allocate_payouts([], {1: 100.0}) == {}
 
+def test_fatrunner_ladder_resolves_to_known_totals():
+    """Pins the real commissioner's real payout structure to known totals so a future change
+    to resolution or category-total math fails loudly rather than quietly shorting real
+    money. See the brief: weekly 105/55/25 x 15 weeks, bowl 250/100/50, season_points
+    600/405/150, season_wins 325/185/110, grand total 4950 against a 4950 pot."""
+    rules = [
+        rule("weekly", 1, "amount", 105),
+        rule("weekly", 2, "amount", 55),
+        rule("weekly", 3, "amount", 25),
+        rule("bowl", 1, "amount", 250),
+        rule("bowl", 2, "amount", 100),
+        rule("bowl", 3, "amount", 50),
+        rule("season_points", 1, "amount", 600),
+        rule("season_points", 2, "amount", 405),
+        rule("season_points", 3, "amount", 150),
+        rule("season_wins", 1, "amount", 325),
+        rule("season_wins", 2, "amount", 185),
+        rule("season_wins", 3, "amount", 110),
+    ]
+    pot = Decimal("4950")
 
-def test_allocate_payouts_omits_a_rank_past_every_configured_place():
-    # Only places 1 and 2 are configured. The rank 3 finisher gets nothing at all, not a
-    # $0.00 entry, since this pool wrote no rule for 3rd.
-    ranked = [(1, 1), (2, 2), (3, 3)]
-    amounts = {1: 20.0, 2: 10.0}
-
-    result = allocate_payouts(ranked, amounts)
-
-    assert result == {1: 20.0, 2: 10.0}
-    assert 3 not in result
-
-
-def test_allocate_payouts_two_way_tie_splits_evenly_with_remainder_cent_to_earliest():
-    # Alice and Bob tie for 1st (rank 1 each), Carol is 3rd alone. Alice submitted first, so
-    # she is listed first in the tie-break order allocate_payouts is handed.
-    ranked = [(1, 1), (2, 1), (3, 3)]
-    # Places 1 and 2 (what a two way tie for 1st occupies) pay 100.01 and 50.00: combined
-    # 150.01, an odd number of cents (15001) that does not split evenly in two.
-    amounts = {1: 100.01, 2: 50.00, 3: 25.0}
-
-    result = allocate_payouts(ranked, amounts)
-
-    # 15001 cents / 2 = 7500 remainder 1. Alice (listed first, the earlier submitter) gets
-    # the extra cent: 7501 cents = $75.01. Bob gets the even share: 7500 cents = $75.00.
-    assert result[1] == 75.01
-    assert result[2] == 75.00
-    assert result[3] == 25.0
-    # The split reconciles to the combined amount exactly, to the cent.
-    assert round(result[1] + result[2], 2) == round(100.01 + 50.00, 2)
-
-
-def test_allocate_payouts_three_way_tie_splits_evenly_with_remainder_cent_to_earliest():
-    # Alice, Bob and Carol tie for 1st (rank 1 each, listed earliest submitter first), Dave
-    # is 4th alone. The tied trio occupies places 1, 2 and 3.
-    ranked = [(1, 1), (2, 1), (3, 1), (4, 4)]
-    amounts = {1: 100.0, 2: 50.0, 3: 33.34, 4: 10.0}
-
-    result = allocate_payouts(ranked, amounts)
-
-    # Combined cents for places 1-3: 10000 + 5000 + 3334 = 18334. 18334 // 3 = 6111,
-    # remainder 1 (6111 * 3 = 18333, one cent left over). Alice gets the extra cent.
-    combined_cents = round(100.0 * 100) + round(50.0 * 100) + round(33.34 * 100)
-    assert combined_cents == 18334
-    share_cents, remainder_cents = divmod(combined_cents, 3)
-    assert (share_cents, remainder_cents) == (6111, 1)
-
-    assert result[1] == (share_cents + 1) / 100  # 61.12, the earliest submitter
-    assert result[2] == share_cents / 100  # 61.11
-    assert result[3] == share_cents / 100  # 61.11
-    assert result[4] == 10.0
-
-    # The three way split reconciles to the combined amount exactly.
-    assert round(result[1] + result[2] + result[3], 2) == round(100.0 + 50.0 + 33.34, 2)
-
-
-def test_allocate_payouts_tied_group_straddling_an_unconfigured_place():
-    # A two way tie for 4th occupies places 4 and 5, but only place 4 has a rule. Place 5's
-    # missing rule counts as $0 toward the combined amount, per allocate_payouts' own
-    # sparse-mapping contract.
-    ranked = [(1, 4), (2, 4)]
-    amounts = {1: 100.0, 2: 50.0, 3: 25.0, 4: 20.0}
-
-    result = allocate_payouts(ranked, amounts)
-
-    assert result == {1: 10.0, 2: 10.0}
-
-
-def test_allocate_payouts_omits_a_zero_share():
-    # A place explicitly worth $0 pays nobody, rather than a $0.00 row.
-    ranked = [(1, 1)]
-    result = allocate_payouts(ranked, {1: 0.0})
-    assert result == {}
-
-
-# week_payout_scope and week_is_complete -------------------------------------
-
-
-def test_week_payout_scope_routes_bowl_week_to_bowl():
-    week = Week(is_bowl_week=True)
-    assert week_payout_scope(week) == "bowl"
-
-
-def test_week_payout_scope_routes_ordinary_week_to_weekly():
-    week = Week(is_bowl_week=False)
-    assert week_payout_scope(week) == "weekly"
-
-
-def test_week_is_complete_true_once_nothing_is_scheduled_or_in_progress():
-    games = [Game(status="final"), Game(status="void"), Game(status="final")]
-    assert week_is_complete(games) is True
-
-
-def test_week_is_complete_false_while_a_game_is_still_playable():
-    games = [Game(status="final"), Game(status="in_progress")]
-    assert week_is_complete(games) is False
-
-    games = [Game(status="scheduled")]
-    assert week_is_complete(games) is False
-
-
-def test_week_is_complete_false_for_an_empty_slate():
-    assert week_is_complete([]) is False
-
-
-# Database backed helpers -----------------------------------------------------
-
-
-def _pool(db, **overrides) -> Pool:
-    defaults = {
-        "name": "Test Pool",
-        "join_code": f"PAYCODE{id(overrides) % 100000}",
-        "season_year": 2026,
-        "sports": ["nfl", "ncaaf"],
-        "timezone": "America/New_York",
-        "current_week": 1,
-        "scoring_mode": "inverse",
-    }
-    defaults.update(overrides)
-    pool = Pool(**defaults)
-    db.add(pool)
-    db.flush()
-    return pool
-
-
-def _user(db, name: str) -> User:
-    user = User(
-        email=f"{name.lower().replace(' ', '.')}@example.com",
-        password_hash="x",
-        display_name=name,
-    )
-    db.add(user)
-    db.flush()
-    return user
-
-
-def _member(db, pool: Pool, user: User) -> PoolMember:
-    member = PoolMember(pool_id=pool.id, user_id=user.id, role_in_pool="member")
-    db.add(member)
-    db.flush()
-    return member
-
-
-def _week(
-    db, pool: Pool, week_number: int = 1, status: str = "scored", is_bowl_week: bool = False
-) -> Week:
-    week = Week(
-        pool_id=pool.id,
-        season_year=pool.season_year,
-        week_number=week_number,
-        label=f"Week {week_number}",
-        status=status,
-        is_bowl_week=is_bowl_week,
-    )
-    db.add(week)
-    db.flush()
-    return week
-
-
-def _entry(db, pool: Pool, week: Week, user: User, *, points: int, submitted_at) -> WeekEntry:
-    entry = WeekEntry(
-        pool_id=pool.id,
-        week_id=week.id,
-        user_id=user.id,
-        points=points,
-        correct=0,
-        possible=0,
-        submitted_at=submitted_at,
-    )
-    db.add(entry)
-    db.flush()
-    return entry
-
-
-def _rule(db, pool: Pool, scope: str, place: int, amount: float) -> PayoutRule:
-    rule = PayoutRule(pool_id=pool.id, scope=scope, place=place, amount=amount)
-    db.add(rule)
-    db.flush()
-    return rule
-
-
-def test_rules_by_place_reads_only_the_requested_scope(db):
-    pool = _pool(db)
-    _rule(db, pool, "weekly", 1, 100.0)
-    _rule(db, pool, "bowl", 1, 200.0)
-    _rule(db, pool, "season", 1, 300.0)
-
-    assert rules_by_place(db, pool, "weekly") == {1: 100.0}
-    assert rules_by_place(db, pool, "bowl") == {1: 200.0}
-    assert rules_by_place(db, pool, "season") == {1: 300.0}
-
-
-def test_rules_by_place_empty_scope_returns_empty_dict(db):
-    pool = _pool(db)
-    assert rules_by_place(db, pool, "weekly") == {}
-
-
-def test_weekly_payouts_ties_broken_by_earliest_submitted_at(db):
-    pool = _pool(db)
-    alice, bob = _user(db, "Alice"), _user(db, "Bob")
-    _member(db, pool, alice)
-    _member(db, pool, bob)
-    week = _week(db, pool)
-    # Same inverse score for both (a tie for 1st), Alice submitted first.
-    _entry(db, pool, week, alice, points=5, submitted_at=dt.datetime(2026, 9, 1, 10, 0, tzinfo=UTC))
-    _entry(db, pool, week, bob, points=5, submitted_at=dt.datetime(2026, 9, 1, 12, 0, tzinfo=UTC))
-
-    rows, _ = weekly_leaderboard(db, pool, week=week)
-    rules = {1: 100.01, 2: 50.0}
-
-    result = weekly_payouts(db, week, rows, rules)
-
-    # Combined for the tied pair occupying places 1 and 2: 15001 cents, 7501/7500 split.
-    assert result[alice.id] == 75.01
-    assert result[bob.id] == 75.00
-
-
-def test_weekly_payouts_no_rules_returns_empty(db):
-    pool = _pool(db)
-    alice = _user(db, "Alice")
-    _member(db, pool, alice)
-    week = _week(db, pool)
-    _entry(db, pool, week, alice, points=5, submitted_at=dt.datetime.now(UTC))
-    rows, _ = weekly_leaderboard(db, pool, week=week)
-
-    assert weekly_payouts(db, week, rows, {}) == {}
-
-
-def test_bowl_week_routes_to_bowl_rules_not_weekly_even_when_both_exist(db):
-    """The brief's own named test case: a bowl week's payout must come from scope="bowl"
-    rules, never scope="weekly", even though weekly rules also exist for this pool."""
-    pool = _pool(db)
-    alice = _user(db, "Alice")
-    _member(db, pool, alice)
-    bowl_week = _week(db, pool, week_number=17, is_bowl_week=True)
-    _entry(db, pool, bowl_week, alice, points=0, submitted_at=dt.datetime.now(UTC))
-    rows, _ = weekly_leaderboard(db, pool, week=bowl_week)
-
-    _rule(db, pool, "weekly", 1, 999.0)
-    _rule(db, pool, "bowl", 1, 55.0)
-    weekly_rules = rules_by_place(db, pool, "weekly")
-    bowl_rules = rules_by_place(db, pool, "bowl")
-
-    scope = week_payout_scope(bowl_week)
-    assert scope == "bowl"
-    rules = bowl_rules if scope == "bowl" else weekly_rules
-    result = weekly_payouts(db, bowl_week, rows, rules)
-
-    assert result == {alice.id: 55.0}
-
-
-def test_season_payouts_uses_season_standings_order_for_the_tie_break(db):
-    pool = _pool(db)
-    alice, bob = _user(db, "Alice"), _user(db, "Bob")
-    _member(db, pool, alice)
-    _member(db, pool, bob)
-    week = _week(db, pool)
-    # Both tie for 1st in the season standings (same points, same correct, same weekly
-    # wins); season_standings' own final tiebreak is display name, so Alice sorts first.
-    _entry(db, pool, week, alice, points=3, submitted_at=dt.datetime.now(UTC))
-    _entry(db, pool, week, bob, points=3, submitted_at=dt.datetime.now(UTC))
-
-    rows = season_standings(db, pool)
-    result = season_payouts(rows, {1: 10.01, 2: 5.0})
-
-    assert result[alice.id] == 7.51
-    assert result[bob.id] == 7.50
-
-
-def test_payout_summary_totals_weekly_bowl_and_season_per_player(db):
-    pool = _pool(db)
-    alice = _user(db, "Alice")
-    _member(db, pool, alice)
-
-    ordinary_week = _week(db, pool, week_number=1, status="scored", is_bowl_week=False)
-    bowl_week = _week(db, pool, week_number=18, status="scored", is_bowl_week=True)
-    now = dt.datetime.now(UTC)
-    _entry(db, pool, ordinary_week, alice, points=0, submitted_at=now)
-    _entry(db, pool, bowl_week, alice, points=0, submitted_at=now)
-    # A game on each week, both final, so week_is_complete is true for both.
-    db.add(
-        Game(
-            week_id=ordinary_week.id,
-            league="nfl",
-            espn_event_id="w1",
-            start_time=now,
-            home_team="H",
-            away_team="A",
-            home_abbr="H",
-            away_abbr="A",
-            canonical_home_key="nfl:h",
-            canonical_away_key="nfl:a",
-            in_slate=True,
-            status="final",
+    summary = allocation_summary(rules, pot=pot, weekly_weeks=15)
+
+    assert summary.scopes["weekly"].category_total == Decimal("2775")
+    assert summary.scopes["bowl"].category_total == Decimal("400")
+    assert summary.scopes["season_points"].category_total == Decimal("1155")
+    assert summary.scopes["season_wins"].category_total == Decimal("620")
+    assert summary.grand_total == Decimal("4950")
+    assert summary.pot == pot
+    assert summary.unallocated == Decimal("0")
+
+
+# resolve_rule -----------------------------------------------------------------------------
+
+
+def test_resolve_rule_amount_mode_passes_value_through_unchanged():
+    r = rule("bowl", 1, "amount", "250.00")
+    assert resolve_rule(r, pot=Decimal("999999")) == Decimal("250.00")
+
+
+def test_resolve_rule_percent_mode_computes_percentage_of_pot():
+    r = rule("season_points", 1, "percent", "10")
+    assert resolve_rule(r, pot=Decimal("4950")) == Decimal("495.00")
+
+
+def test_non_integer_percent_values_resolve_to_correct_cents():
+    pot = Decimal("10000")
+    assert resolve_rule(rule("season_points", 1, "percent", "2.12"), pot) == Decimal("212.00")
+    assert resolve_rule(rule("season_points", 2, "percent", "0.05"), pot) == Decimal("5.00")
+
+
+# rank_standings -----------------------------------------------------------------------------
+
+
+def test_rank_standings_ties_share_a_rank_and_the_next_rank_skips_ahead():
+    rows = [std(1, 100), std(2, 100), std(3, 90)]
+    standings = rank_standings(rows, descending=True)
+    by_user = {s.user_id: s.rank for s in standings}
+    assert by_user[1] == 1
+    assert by_user[2] == 1
+    assert by_user[3] == 3  # skips rank 2, the two tied players occupied it
+
+
+def test_inverse_scoring_lowest_metric_wins_and_flips_the_winner_vs_standard():
+    """Same raw standings, only the descending flag changes: proves rank_standings reads the
+    direction it is given rather than assuming standard (highest-wins) behavior. This is the
+    core correctness property for weekly, bowl, and season_points under a pool running
+    inverse scoring, where the lowest point total is the winner."""
+    rows = [std(1, 50), std(2, 10), std(3, 30)]
+
+    inverse_standings = rank_standings(rows, descending=False)  # inverse: lowest wins
+    standard_standings = rank_standings(rows, descending=True)  # standard: highest wins
+
+    inverse_winner = next(s for s in inverse_standings if s.rank == 1)
+    standard_winner = next(s for s in standard_standings if s.rank == 1)
+    assert inverse_winner.user_id == 2  # lowest metric
+    assert standard_winner.user_id == 1  # highest metric
+    assert inverse_winner.user_id != standard_winner.user_id
+
+    # The flip carries all the way through to real dollars, not just the ranking.
+    rules = [rule("bowl", 1, "amount", 250)]
+    inverse_awards = allocate(rules, inverse_standings, pot=Decimal("0"), rounding="dollar")
+    standard_awards = allocate(rules, standard_standings, pot=Decimal("0"), rounding="dollar")
+    assert inverse_awards[0].user_id == 2
+    assert standard_awards[0].user_id == 1
+
+
+def test_season_wins_always_ranks_descending_regardless_of_pool_scoring_mode():
+    """The cross-wiring bug this module is built to make impossible: a future caller must
+    never be able to wire season_wins to the pool's own scoring direction by accident.
+
+    Every real call site for season_wins passes descending=True, hard coded, never sourced
+    from pool.scoring_mode the way weekly/bowl/season_points are. This test proves it by
+    asserting the winner's actual metric is the maximum of the group, not merely by id: if a
+    future edit ever let season_wins inherit descending=False (the direction weekly/bowl/
+    season_points use under inverse scoring), the winner's metric would come back as the
+    minimum instead, and this assertion would catch it even if the user ids happened to
+    still line up.
+    """
+    rows = [std(1, 5), std(2, 12), std(3, 8)]
+    standings = rank_standings(rows, descending=True)
+    winner = next(s for s in standings if s.rank == 1)
+    assert winner.user_id == 2
+    assert winner.metric == max(r.metric for r in rows)
+    assert winner.metric != min(r.metric for r in rows)
+
+
+# Percent vs amount, mixed modes -------------------------------------------------------------
+
+
+def test_percent_mode_matches_amount_mode_for_all_scopes():
+    pot = Decimal("10000")
+    amount_rules = [
+        rule("weekly", 1, "amount", 1000),
+        rule("weekly", 2, "amount", 500),
+        rule("weekly", 3, "amount", 200),
+        rule("bowl", 1, "amount", 1500),
+        rule("bowl", 2, "amount", 700),
+        rule("bowl", 3, "amount", 300),
+        rule("season_points", 1, "amount", 2000),
+        rule("season_points", 2, "amount", 1000),
+        rule("season_points", 3, "amount", 500),
+        rule("season_wins", 1, "amount", 800),
+        rule("season_wins", 2, "amount", 400),
+        rule("season_wins", 3, "amount", 200),
+    ]
+    percent_rules = [
+        rule("weekly", 1, "percent", 10),
+        rule("weekly", 2, "percent", 5),
+        rule("weekly", 3, "percent", 2),
+        rule("bowl", 1, "percent", 15),
+        rule("bowl", 2, "percent", 7),
+        rule("bowl", 3, "percent", 3),
+        rule("season_points", 1, "percent", 20),
+        rule("season_points", 2, "percent", 10),
+        rule("season_points", 3, "percent", 5),
+        rule("season_wins", 1, "percent", 8),
+        rule("season_wins", 2, "percent", 4),
+        rule("season_wins", 3, "percent", 2),
+    ]
+
+    amount_summary = allocation_summary(amount_rules, pot=pot, weekly_weeks=1)
+    percent_summary = allocation_summary(percent_rules, pot=pot, weekly_weeks=1)
+
+    for scope in SCOPES:
+        assert (
+            amount_summary.scopes[scope].category_total
+            == percent_summary.scopes[scope].category_total
         )
-    )
-    db.add(
-        Game(
-            week_id=bowl_week.id,
-            league="nfl",
-            espn_event_id="w18",
-            start_time=now,
-            home_team="H",
-            away_team="A",
-            home_abbr="H",
-            away_abbr="A",
-            canonical_home_key="nfl:h",
-            canonical_away_key="nfl:a",
-            in_slate=True,
-            status="final",
+        assert amount_summary.scopes[scope].places == percent_summary.scopes[scope].places
+    assert amount_summary.grand_total == percent_summary.grand_total
+
+
+def test_mixed_modes_in_one_season_resolve_correctly_together():
+    pot = Decimal("5000")
+    rules = [
+        rule("weekly", 1, "percent", 2),  # 2% of 5000 = 100/week
+        rule("weekly", 2, "percent", 1),  # 50/week
+        rule("season_points", 1, "amount", 600),
+        rule("season_points", 2, "amount", 400),
+    ]
+    summary = allocation_summary(rules, pot=pot, weekly_weeks=10)
+    assert summary.scopes["weekly"].category_total == Decimal("1500")  # (100 + 50) * 10
+    assert summary.scopes["season_points"].category_total == Decimal("1000")
+    assert summary.grand_total == Decimal("2500")
+
+
+# Weekly per-week semantics -------------------------------------------------------------------
+
+
+def test_weekly_award_is_the_per_week_figure_not_the_season_figure():
+    rules = [rule("weekly", 1, "amount", 105)]
+    standings = rank_standings([std(1, 500)], descending=True)
+    awards = allocate(rules, standings, pot=Decimal("0"), rounding="dollar")
+    assert awards == [
+        Award(
+            user_id=1,
+            place=1,
+            tied_with=1,
+            amount=Decimal("105"),
+            rule_mode="amount",
+            rule_value=Decimal("105"),
         )
+    ]
+
+
+def test_category_total_multiplies_the_weekly_per_week_total_by_weekly_payout_weeks():
+    rules = [
+        rule("weekly", 1, "amount", 105),
+        rule("weekly", 2, "amount", 55),
+        rule("weekly", 3, "amount", 25),
+    ]
+    per_week = category_total(rules, pot=Decimal("0"), weeks=1)
+    season = category_total(rules, pot=Decimal("0"), weeks=15)
+    assert per_week == Decimal("185")
+    assert season == per_week * 15 == Decimal("2775")
+
+
+def test_weekly_payout_weeks_of_zero_is_zero_not_an_error():
+    rules = [rule("weekly", 1, "amount", 105)]
+    assert category_total(rules, pot=Decimal("0"), weeks=0) == Decimal("0")
+
+
+def test_weekly_payout_weeks_of_one_equals_the_per_week_total():
+    rules = [rule("weekly", 1, "amount", 105), rule("weekly", 2, "amount", 55)]
+    assert category_total(rules, pot=Decimal("0"), weeks=1) == Decimal("160")
+
+
+# Season scopes independence -------------------------------------------------------------------
+
+
+def test_season_points_and_season_wins_resolve_independently_same_winner_collects_both():
+    points_rules = [
+        rule("season_points", 1, "amount", 600),
+        rule("season_points", 2, "amount", 400),
+    ]
+    wins_rules = [rule("season_wins", 1, "amount", 325), rule("season_wins", 2, "amount", 185)]
+
+    points_standings = rank_standings([std(1, 900), std(2, 700)], descending=True)
+    wins_standings = rank_standings([std(1, 8), std(2, 5)], descending=True)
+
+    points_awards = allocate(points_rules, points_standings, pot=Decimal("0"), rounding="dollar")
+    wins_awards = allocate(wins_rules, wins_standings, pot=Decimal("0"), rounding="dollar")
+
+    points_by_user = {a.user_id: a.amount for a in points_awards}
+    wins_by_user = {a.user_id: a.amount for a in wins_awards}
+    assert points_by_user[1] == Decimal("600")
+    assert wins_by_user[1] == Decimal("325")
+
+    # Winning one scope has no bearing on the other: user 1 collects both in full.
+    total_for_user_1 = sum(a.amount for a in (*points_awards, *wins_awards) if a.user_id == 1)
+    assert total_for_user_1 == Decimal("925")
+
+
+# Tie splitting --------------------------------------------------------------------------------
+
+
+def test_two_way_tie_for_first_splits_first_and_second_next_player_takes_third():
+    rules = [
+        rule("weekly", 1, "amount", 100),
+        rule("weekly", 2, "amount", 50),
+        rule("weekly", 3, "amount", 30),
+    ]
+    standings = rank_standings([std(1, 100), std(2, 100), std(3, 90)], descending=True)
+    awards = allocate(rules, standings, pot=Decimal("0"), rounding="dollar")
+    by_user = {a.user_id: a for a in awards}
+
+    assert by_user[1].amount == Decimal("75")
+    assert by_user[2].amount == Decimal("75")
+    assert by_user[1].place == 1
+    assert by_user[1].tied_with == 2
+    assert by_user[3].amount == Decimal("30")
+    assert by_user[3].place == 3
+    assert by_user[3].tied_with == 1
+    assert sum(a.amount for a in awards) == Decimal("180")
+
+
+def test_three_way_tie_for_first_with_only_three_places_splits_evenly_nobody_else_paid():
+    rules = [
+        rule("weekly", 1, "amount", 210),
+        rule("weekly", 2, "amount", 120),
+        rule("weekly", 3, "amount", 90),
+    ]
+    standings = rank_standings([std(1, 50), std(2, 50), std(3, 50), std(4, 10)], descending=True)
+    awards = allocate(rules, standings, pot=Decimal("0"), rounding="dollar")
+
+    assert {a.user_id for a in awards} == {1, 2, 3}
+    assert all(a.amount == Decimal("140") for a in awards)
+    assert all(a.tied_with == 3 for a in awards)
+    assert sum(a.amount for a in awards) == Decimal("420")
+
+
+def test_three_way_tie_for_second_where_fourth_place_has_no_rule_contributes_zero():
+    rules = [
+        rule("weekly", 1, "amount", 300),
+        rule("weekly", 2, "amount", 150),
+        rule("weekly", 3, "amount", 90),
+    ]
+    # Rank 2 is a 3 way tie spanning places 2, 3, and 4; place 4 has no configured rule.
+    standings = rank_standings(
+        [std(1, 100), std(2, 80), std(3, 80), std(4, 80), std(5, 10)], descending=True
     )
-    _rule(db, pool, "weekly", 1, 40.0)
-    _rule(db, pool, "bowl", 1, 60.0)
-    _rule(db, pool, "season", 1, 80.0)
-    db.commit()
+    awards = allocate(rules, standings, pot=Decimal("0"), rounding="dollar")
+    by_user = {a.user_id: a for a in awards}
 
-    summary = payout_summary(db, pool)
+    assert by_user[1].amount == Decimal("300")
+    tied = [by_user[2], by_user[3], by_user[4]]
+    assert sum(a.amount for a in tied) == Decimal("240")  # 150 (2nd) + 90 (3rd) + 0 (4th, no rule)
+    assert all(a.tied_with == 3 for a in tied)
+    assert 5 not in by_user  # rank 5 is entirely past the highest configured place
 
-    assert len(summary) == 1
-    row = summary[0]
-    assert row.display_name == "Alice"
-    assert row.weekly_total == 40.0
-    assert row.bowl_total == 60.0
-    assert row.season_award == 80.0
-    assert row.total_owed == 180.0
+
+def test_tie_at_the_very_last_paid_place_splits_correctly():
+    rules = [
+        rule("weekly", 1, "amount", 100),
+        rule("weekly", 2, "amount", 60),
+        rule("weekly", 3, "amount", 40),
+    ]
+    standings = rank_standings([std(1, 100), std(2, 80), std(3, 80)], descending=True)
+    awards = allocate(rules, standings, pot=Decimal("0"), rounding="dollar")
+    by_user = {a.user_id: a.amount for a in awards}
+
+    assert by_user[1] == Decimal("100")
+    assert by_user[2] == Decimal("50")
+    assert by_user[3] == Decimal("50")
+    assert sum(by_user.values()) == Decimal("200")
+
+
+# Rounding and remainder distribution -----------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "rounding, total, expected_amounts",
+    [
+        ("cent", Decimal("100.01"), [Decimal("33.34"), Decimal("33.34"), Decimal("33.33")]),
+        ("dollar", Decimal("50"), [Decimal("17"), Decimal("17"), Decimal("16")]),
+        ("five", Decimal("115"), [Decimal("40"), Decimal("40"), Decimal("35")]),
+    ],
+)
+def test_rounding_reconciles_to_the_allocated_total_at_every_unit(
+    rounding, total, expected_amounts
+):
+    rules = [rule("weekly", 1, "amount", total)]
+    standings = rank_standings(
+        [
+            std(1, 100, submitted_at=EARLY),
+            std(2, 100, submitted_at=MID),
+            std(3, 100, submitted_at=LATE),
+        ],
+        descending=True,
+    )
+    awards = allocate(rules, standings, pot=Decimal("0"), rounding=rounding)
+    amounts = [a.amount for a in sorted(awards, key=lambda a: a.user_id)]
+
+    assert amounts == expected_amounts
+    assert sum(amounts) == total
+    for a in awards:
+        assert isinstance(a.amount, Decimal)
+
+
+def test_uneven_three_way_split_of_one_hundred_dollars_distributes_34_33_33():
+    rules = [rule("weekly", 1, "amount", 100)]
+    standings = rank_standings(
+        [
+            std(1, 100, submitted_at=EARLY),
+            std(2, 100, submitted_at=MID),
+            std(3, 100, submitted_at=LATE),
+        ],
+        descending=True,
+    )
+    awards = allocate(rules, standings, pot=Decimal("0"), rounding="dollar")
+    amounts = [a.amount for a in sorted(awards, key=lambda a: a.user_id)]
+
+    assert amounts == [Decimal("34"), Decimal("33"), Decimal("33")]
+    assert sum(amounts) == Decimal("100")
+
+
+def test_remainder_tiebreak_falls_back_to_user_id_when_submitted_at_is_equal():
+    same_time = dt.datetime(2026, 9, 1, tzinfo=UTC)
+    rules = [rule("weekly", 1, "amount", 100)]
+    standings = rank_standings(
+        [
+            std(5, 100, submitted_at=same_time),
+            std(2, 100, submitted_at=same_time),
+            std(9, 100, submitted_at=same_time),
+        ],
+        descending=True,
+    )
+    awards = allocate(rules, standings, pot=Decimal("0"), rounding="dollar")
+    by_user = {a.user_id: a.amount for a in awards}
+
+    # Nothing distinguishes the submitted_at values, so the lowest user_id breaks the tie
+    # and picks up the one remainder dollar.
+    assert by_user[2] == Decimal("34")
+    assert by_user[5] == Decimal("33")
+    assert by_user[9] == Decimal("33")
+
+
+def test_remainder_tiebreak_handles_none_submitted_at_without_raising():
+    rules = [rule("weekly", 1, "amount", 100)]
+    standings = rank_standings(
+        [
+            std(1, 100, submitted_at=None),
+            std(2, 100, submitted_at=EARLY),
+            std(3, 100, submitted_at=None),
+        ],
+        descending=True,
+    )
+    awards = allocate(rules, standings, pot=Decimal("0"), rounding="dollar")  # must not raise
+    by_user = {a.user_id: a.amount for a in awards}
+
+    # The one real timestamp sorts ahead of both missing ones and takes the remainder dollar;
+    # between the two None submissions, user_id (1 before 3) is what stays deterministic.
+    assert by_user[2] == Decimal("34")
+    assert by_user[1] == Decimal("33")
+    assert by_user[3] == Decimal("33")
+
+
+# Empty and undersized inputs --------------------------------------------------------------------
+
+
+def test_empty_rules_returns_empty_award_list():
+    standings = rank_standings([std(1, 100)], descending=True)
+    assert allocate([], standings, pot=Decimal("1000"), rounding="dollar") == []
+
+
+def test_empty_standings_returns_empty_award_list():
+    rules = [rule("weekly", 1, "amount", 100)]
+    assert allocate(rules, [], pot=Decimal("1000"), rounding="dollar") == []
+
+
+def test_fewer_players_than_configured_places_leaves_unfilled_places_unpaid():
+    rules = [
+        rule("weekly", 1, "amount", 100),
+        rule("weekly", 2, "amount", 50),
+        rule("weekly", 3, "amount", 25),
+    ]
+    standings = rank_standings([std(1, 90)], descending=True)
+    awards = allocate(rules, standings, pot=Decimal("0"), rounding="dollar")
+
+    assert len(awards) == 1
+    assert awards[0].user_id == 1
+    assert awards[0].amount == Decimal("100")
+
+
+# Pot edge cases and over-allocation --------------------------------------------------------------
+
+
+def test_pot_zero_with_percent_mode_resolves_everything_to_zero_without_dividing_by_zero():
+    rules = [rule("weekly", 1, "percent", 10), rule("weekly", 2, "percent", 5)]
+    standings = rank_standings([std(1, 90), std(2, 80)], descending=True)
+
+    awards = allocate(rules, standings, pot=Decimal("0"), rounding="cent")  # must not raise
+
+    assert len(awards) == 2
+    assert all(a.amount == Decimal("0") for a in awards)
+    assert category_total(rules, pot=Decimal("0")) == Decimal("0")
+
+
+def test_grand_total_exceeding_pot_allocates_normally_over_allocation_is_legal():
+    rules = [
+        rule("weekly", 1, "amount", 500),
+        rule("weekly", 2, "amount", 300),
+        rule("bowl", 1, "amount", 400),
+    ]
+    pot = Decimal("100")
+
+    summary = allocation_summary(rules, pot=pot, weekly_weeks=1)
+    assert summary.grand_total == Decimal("1200")
+    assert summary.unallocated == Decimal("-1100")
+
+    # allocate() itself never clamps against the pot either: over-allocation is the
+    # commissioner's call to make (and fix), not something this engine blocks.
+    weekly_rules = [r for r in rules if r.scope == "weekly"]
+    standings = rank_standings([std(1, 90), std(2, 80)], descending=True)
+    awards = allocate(weekly_rules, standings, pot=pot, rounding="dollar")
+    assert {a.amount for a in awards} == {Decimal("500"), Decimal("300")}
+
+
+# Decimal typing everywhere -----------------------------------------------------------------------
+
+
+def test_money_values_are_always_decimal_never_float():
+    pot = Decimal("1000")
+    percent_rule = rule("weekly", 1, "percent", "12.5")
+    amount_rule = rule("weekly", 2, "amount", "10")
+
+    resolved = resolve_rule(percent_rule, pot)
+    assert isinstance(resolved, Decimal)
+
+    standings = rank_standings([std(1, 50), std(2, 50)], descending=True)
+    awards = allocate([percent_rule, amount_rule], standings, pot=pot, rounding="cent")
+    assert awards, "expected at least one award to check"
+    for award in awards:
+        assert isinstance(award.amount, Decimal)
+        assert isinstance(award.rule_value, Decimal)
+
+    total = category_total([percent_rule], pot=pot, weeks=3)
+    assert isinstance(total, Decimal)
+
+    summary = allocation_summary([percent_rule], pot=pot, weekly_weeks=3)
+    assert isinstance(summary.pot, Decimal)
+    assert isinstance(summary.grand_total, Decimal)
+    assert isinstance(summary.unallocated, Decimal)
+    for scope_summary in summary.scopes.values():
+        assert isinstance(scope_summary.category_total, Decimal)
+        assert isinstance(scope_summary.percent_of_pot, Decimal)
+        for amount in scope_summary.places.values():
+            assert isinstance(amount, Decimal)

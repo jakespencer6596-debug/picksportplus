@@ -139,6 +139,11 @@ Semantic HTML, labeled form controls, visible gold focus rings, AA contrast, ful
 - `pytest`. Pure logic unit tests for scoring and slate selection are mandatory. Provider tests use recorded JSON fixtures and never hit live APIs.
 - `ruff` plus `black`, keep the tree clean.
 - Pin versions in `requirements.txt`.
+- Money in the payout system (`app/payouts.py`, `app/services/payouts.py`, `PayoutRule`,
+  `PayoutAward`, `Pool.entry_fee`/`pot_override`) is `Decimal` end to end, never `float`.
+  Everywhere else in this codebase money uses a plain `Float` column (see `Game.spread_home`
+  for the established, older convention), which the payout system deliberately departs from;
+  see DECISIONS.md, "Payout system", for the reasoning.
 
 ## 5. Data sources and integration
 
@@ -313,13 +318,67 @@ The Members page carries a paid/unpaid column, a one click toggle per member (`P
 
 ### 10b. Payout rules
 
-`PayoutRule` rows (`pool_id`, `scope` of `weekly`, `bowl`, or `season`, `place`, `amount`, an optional `label`) are entered by hand from `/admin/settings`, three sections matching the three scopes, add and remove only. Every pool ships with zero rows; there is no seeded structure anywhere in this build. A pot validator on the same page compares total collected (paid members times the entry fee) against total allocated (every rule's amount, every scope, summed) and warns, never blocks, when they disagree.
+Rebuilt (Payout system rebuild, see DECISIONS.md, "Payout system") from an earlier, simpler
+version: this is the current, shipping design. His real ask, verbatim: "if there's a way in
+settings to Set Payouts for weekly, bowl week, season points, and season wins... it's a
+function of total $$ pool."
 
-Once every countable game in a week is final or void, the Results weekly leaderboard gains a Payout column, matched against each player's rank: `bowl` scope rules when the week resolved as a bowl week, `weekly` rules otherwise, even if `weekly` rules also exist for the pool. A tie splits the combined amount for the tied places evenly, rounded to the cent, with any remainder cent going to whoever submitted earliest; a small muted note next to the column states this. No rules configured for the relevant scope means no payout column at all, not an empty or zeroed one.
+**Four scopes**, `PAYOUT_SCOPES = ("weekly", "bowl", "season_points", "season_wins")`. `weekly`
+applies to every regular season week (his real structure: weeks 1 to 15), `bowl` to the one
+week `Week.is_bowl_week` is true, `season_points` to the season standings ranked by total
+points, `season_wins` to the same standings ranked by weekly win count instead, always
+descending regardless of the pool's scoring mode. Never hard coded: the pure allocation engine
+(`app/payouts.py`) takes ranking direction as an explicit keyword argument at every call site,
+specifically so `season_wins` cannot accidentally inherit the pool's scoring direction.
 
-The Season Standings page gains an awards panel, driven by `scope="season"` rules matched against the current season rank, shown once at least one week has been scored and labelled plainly as the current standings, not a final result, since nothing in this data model marks a season as officially over.
+**Two modes per rule**, `PAYOUT_MODES = ("amount", "percent")`. `amount` is a flat dollar
+figure. `percent` is a percentage (0-100) of the pot, resolved fresh every time against
+`Pool.entry_fee * count(paid members)`, or `Pool.pot_override` when a commissioner has set one
+by hand (always wins, for a reserve or a carryover). Every payout figure in this build is a
+`Decimal`, never a `float`, end to end.
 
-A `/admin/payouts` view lists, per player, their weekly payouts total, bowl payout, season award, and total owed: a plain table a commissioner can select and paste into a spreadsheet.
+**Weekly rules are per week, not per season.** A weekly 1st of 105 dollars means 105 dollars
+every regular week; a weekly 1st of 2.12 percent means 2.12 percent of the pot every week.
+`Pool.weekly_payout_weeks` (default 15) is what multiplies the per-week figure into a season
+total for display; every other scope is a one-time payout.
+
+**Ties** split the combined pool of the consecutive places they occupy (two tied for 1st split
+1st and 2nd, the next player takes 3rd); a place with no rule contributes zero to that split
+rather than raising. Each tied group's combined total is rounded down to `Pool.payout_rounding`
+(`cent`, `dollar`, or `five`) before splitting, and the leftover is handed out one unit at a
+time in `Pool.payout_tiebreak` order (today, `earliest_submit`: earliest `WeekEntry.submitted_at`
+first, a missing submission time sorts last, then `user_id` for full determinism).
+
+**Frozen snapshots.** A percent-mode payout resolves against the pot, and the pot can grow
+after a week is already scored (a member pays their entry fee late). Re-resolving a past week
+live would silently change a figure the commissioner may already have paid over Venmo, so the
+resolved amount is written once, frozen, into `PayoutAward` the instant a week finishes scoring
+(`score_week_for_pool`'s own hook), or the instant a bowl week finishes scoring for the two
+season scopes (this codebase's real season structure is weeks 1-15 plus a week 16 bowl week,
+and there is no separate stored "season complete" flag). All display of a past payout reads
+this frozen table; only the current, still unfinished week may show a live, unsaved
+projection, and it is always labelled "Projected" wherever it renders.
+
+**Over-allocation warns, never blocks.** The Set Payouts screen (`/admin/payouts`) shows a
+banner naming the exact difference and direction whenever the grand total does not equal the
+pot, but always lets the commissioner save anyway: he may deliberately hold a reserve, or write
+rules before everyone has paid.
+
+The screen has four scope editors in this order (Weekly, Bowl Week, Season: Points, Season:
+Wins), a pot panel (entry fee, override, weekly payout weeks, rounding, tiebreak), a live
+allocation summary in the shape of the commissioner's own spreadsheet, a "Scale to pot" action
+(converts every rule to percent at its current share, so the whole ladder auto-rescales when
+the player count changes, which is the entire point of percent mode), and a "Load preset"
+action seeding the known ladder (weekly 105/55/25, bowl 250/100/50, season points 600/405/150,
+season wins 325/185/110).
+
+Weekly Results gains a Payout column once rules exist for the relevant scope, blank (never
+0) for anyone out of the money. Season Standings gains two award panels, Season: Points and
+Season: Wins, once the season scope has actually been snapshotted. `/admin/payouts/summary`
+is the commissioner's payout summary: one row per player, a running "Paid X of Y, N of M
+players settled" line, a Paid checkbox per player (marks or unmarks every one of their
+currently unpaid/paid awards in one action), an unpaid-only filter, a copy-as-text export, and
+a CSV download.
 
 ## 11. CLI commands and cron
 
@@ -334,6 +393,10 @@ All idempotent, all take `--year` and `--week` where relevant, defaulting to the
 - `fetch-results --week` pull finals and status from ESPN.
 - `score-week --week` compute pick results, `week_entries`, and standings.
 - `run-cron` the set and forget entry point. Safe to run hourly.
+- `payouts-show --scope` print the current ladder and allocation summary as plain text.
+- `payouts-preset` load the known payout ladder. Safe to re-run, always clears and reseeds.
+- `payouts-snapshot --scope --week` freeze one scope's awards by hand.
+- `payouts-summary` print the commissioner payout summary to stdout.
 
 ## 12. Data model
 

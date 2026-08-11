@@ -22,7 +22,6 @@ from app.models import (
     Base,
     ContactSubmission,
     Game,
-    PayoutRule,
     Pick,
     Pool,
     PoolMember,
@@ -1598,66 +1597,9 @@ def test_settings_save_rejects_a_negative_entry_fee(client, world, session_facto
     db.close()
 
 
-def test_payout_rule_add_and_remove(client, world, session_factory):
-    _login(client, "boss@example.com")
-    response = client.post(
-        "/admin/payouts/rule",
-        data={"scope": "weekly", "place": "1", "amount": "100.00", "label": "1st place"},
-    )
-    assert response.status_code == 303
-
-    db = session_factory()
-    rule = db.scalar(select(PayoutRule).where(PayoutRule.pool_id == world["pool_id"]))
-    assert rule is not None
-    assert rule.scope == "weekly"
-    assert rule.place == 1
-    assert rule.amount == 100.0
-    assert rule.label == "1st place"
-    rule_id = rule.id
-    db.close()
-
-    settings_response = client.get("/admin/settings")
-    assert "100" in settings_response.text
-
-    remove_response = client.post(f"/admin/payouts/rule/{rule_id}/remove")
-    assert remove_response.status_code == 303
-
-    db = session_factory()
-    assert db.get(PayoutRule, rule_id) is None
-    db.close()
-
-
-def test_pot_validator_warns_on_mismatch_and_not_on_match(client, world, session_factory):
-    _login(client, "boss@example.com")
-
-    # Nobody paid, no rules: 0 collected, 0 allocated, balanced.
-    response = client.get("/admin/settings")
-    assert "does not match" not in response.text
-
-    # Set a fee, mark one member paid, but write no payout rules: now mismatched.
-    db = session_factory()
-    pool = db.get(Pool, world["pool_id"])
-    pool.entry_fee = 20.0
-    member = db.scalar(
-        select(PoolMember).where(
-            PoolMember.pool_id == world["pool_id"], PoolMember.user_id == world["player_id"]
-        )
-    )
-    member.paid_at = dt.datetime.now(UTC)
-    db.commit()
-    db.close()
-
-    mismatched = client.get("/admin/settings")
-    assert "does not match" in mismatched.text
-
-    # Write a payout rule for exactly the collected amount: balanced again. Saving settings
-    # is unaffected either way, matching every response above returning 200.
-    client.post(
-        "/admin/payouts/rule",
-        data={"scope": "weekly", "place": "1", "amount": "20.00", "label": ""},
-    )
-    matched = client.get("/admin/settings")
-    assert "does not match" not in matched.text
+# Payout rule CRUD and the pot balance validator moved to app/routers/payouts.py and
+# tests/test_payout_routes.py as part of the payout system rebuild; see DECISIONS.md,
+# "Payout system".
 
 
 # Results: the weekly payout column --------------------------------------------
@@ -1697,42 +1639,8 @@ def test_results_no_payout_rules_means_no_payout_column(client, world, session_f
     assert "Payout" not in response.text
 
 
-def test_results_weekly_payout_column_matches_ranks(client, world, session_factory):
-    """Under inverse mode the player (some wrong picks, 3 points against) outranks the boss
-    (a no show, the maximum penalty for a 4 game slate, 10 points against): the player is
-    rank 1, the boss is rank 2."""
-    _score_worlds_only_week(client, session_factory, world)
-
-    db = session_factory()
-    db.add(PayoutRule(pool_id=world["pool_id"], scope="weekly", place=1, amount=100.0))
-    db.add(PayoutRule(pool_id=world["pool_id"], scope="weekly", place=2, amount=40.0))
-    db.commit()
-    db.close()
-
-    _login(client, "boss@example.com")
-    response = client.get("/results")
-    assert response.status_code == 200
-    assert "Payout" in response.text
-    assert "100 dollars" in response.text
-    assert "40 dollars" in response.text
-
-
-def test_results_bowl_week_payout_uses_bowl_scope_not_weekly(client, world, session_factory):
-    _score_worlds_only_week(client, session_factory, world)
-
-    db = session_factory()
-    week = db.get(Week, world["week_id"])
-    week.is_bowl_week = True
-    db.add(PayoutRule(pool_id=world["pool_id"], scope="weekly", place=1, amount=999.0))
-    db.add(PayoutRule(pool_id=world["pool_id"], scope="bowl", place=1, amount=55.0))
-    db.commit()
-    db.close()
-
-    _login(client, "boss@example.com")
-    response = client.get("/results")
-    assert response.status_code == 200
-    assert "55 dollars" in response.text
-    assert "999 dollars" not in response.text
+# The weekly and bowl week payout column tests moved to tests/test_payout_display.py, on the
+# new frozen-award-backed rendering. See DECISIONS.md, "Payout system".
 
 
 # Results: the scenarios panel and build-your-own-scenario (Phase 8) -----------
@@ -1848,21 +1756,8 @@ def test_season_awards_panel_absent_before_any_week_is_scored(client, world):
     assert "Season awards" not in response.text
 
 
-def test_season_awards_panel_shows_amounts_once_a_week_is_scored(client, world, session_factory):
-    _score_worlds_only_week(client, session_factory, world)
-
-    db = session_factory()
-    db.add(PayoutRule(pool_id=world["pool_id"], scope="season", place=1, amount=50.0))
-    db.add(PayoutRule(pool_id=world["pool_id"], scope="season", place=2, amount=20.0))
-    db.commit()
-    db.close()
-
-    _login(client, "boss@example.com")
-    response = client.get("/standings")
-    assert response.status_code == 200
-    assert "Season awards" in response.text
-    assert "50 dollars" in response.text
-    assert "20 dollars" in response.text
+# The season awards panel amounts test moved to tests/test_payout_display.py, on the new
+# season_points/season_wins two-panel layout. See DECISIONS.md, "Payout system".
 
 
 # Global admin league management (post-launch) --------------------------------

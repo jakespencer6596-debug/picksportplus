@@ -192,6 +192,18 @@ Timing rules:
 - **Once any pick exists the game count is fixed for that week** and only voiding remains, so
   scoring stays consistent for everyone.
 
+### Payouts
+
+From Admin, Payouts the commissioner sets how the pool's money moves. Set an entry fee per
+member, paid status tracked from the Members page, or type in a flat pot override that always
+wins over the computed figure. Configure each of the four payout ladders (weekly, bowl, season
+points, season wins) place by place, or click "Load preset" to seed a known dollar ladder for
+all four at once, safe to click again later to reset back to it. A payout amount freezes the
+instant the week (or the season) it belongs to finishes scoring: what a player was owed for a
+past week never quietly changes later just because more members pay their entry fee after the
+fact. The Payouts summary page lists what every player is owed across all four scopes, with a
+running paid and unpaid total and a plain text or CSV export for bookkeeping outside the app.
+
 ---
 
 ## Running a week end to end
@@ -207,6 +219,10 @@ python -m app.cli fetch-results --week 6     # pull finals from ESPN
 python -m app.cli score-week --week 6        # compute points, entries, standings
 python -m app.cli run-cron                   # everything above, safely, in one go
 python -m app.cli usage                      # metered API budget report
+python -m app.cli payouts-show               # print the payout ladder and allocation summary
+python -m app.cli payouts-preset             # load the known preset ladder for all four scopes
+python -m app.cli payouts-snapshot --scope weekly --week 6   # freeze one scope's awards by hand
+python -m app.cli payouts-summary            # print what every player is owed, paid and unpaid
 ```
 
 Lock is enforced at request time by comparing the clock against `lock_at`, so a late or missed
@@ -231,7 +247,10 @@ one free Postgres per workspace and yours may already be in use. That disk is ep
 the free service sleeps or redeploys, the file is lost and the start command rebuilds the demo
 from the recordings in `tests/fixtures`. The seeded week, the standings and both demo logins
 are therefore always present, and the demo always looks right. What does not survive a restart
-is anything a visitor typed, such as picks they made while clicking around.
+is anything a visitor typed, such as picks they made while clicking around, or a payout ladder
+a commissioner configured by hand from `/admin/payouts`: `seed-demo` reseeds its own known
+payout ladder on every restart, but any change made on top of that by hand in the hosted demo
+is gone the next time the free service sleeps or redeploys.
 
 To make it permanent and still free, create a database at [Neon](https://neon.tech) and set
 `DATABASE_URL` on the service to its connection string. That is the only change, no redeploy

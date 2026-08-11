@@ -1,0 +1,86 @@
+{#
+  The commissioner payout summary table (Payout system rebuild, Phase 6). Included once from
+  admin/payout_summary.html's own first render, and re-rendered whole as an HTMX partial swap
+  into #payout-summary-wrap whenever a Paid checkbox is toggled
+  (POST /admin/payouts/player/{user_id}/paid, app/routers/payouts.py), so the settlement line
+  and the totals row both stay in sync with the checkbox without a full page reload.
+#}
+<div id="payout-summary-wrap">
+  <p class="payout-settlement-line">
+    Paid {{ paid_sum | money }} dollars of {{ grand_sum | money }} dollars.
+    {{ settled_count }} of {{ owed_count }} {{ owed_count | pluralize("player") }} settled.
+  </p>
+
+  <div class="table-wrap">
+    <table class="table" id="payout-summary-table">
+      <caption class="visually-hidden">Payout summary by player, sorted by grand total owed.</caption>
+      <thead>
+        <tr>
+          <th scope="col">Player</th>
+          <th scope="col" class="num">Weekly</th>
+          <th scope="col" class="num">Bowl</th>
+          <th scope="col" class="num">Season points</th>
+          <th scope="col" class="num">Season wins</th>
+          <th scope="col" class="num">Grand total owed</th>
+          <th scope="col">Paid</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in rows %}
+          <tr>
+            <td data-label="Player">{{ row.display_name }}</td>
+            <td class="num" data-label="Weekly">{{ row.weekly_total | money }} dollars</td>
+            <td class="num" data-label="Bowl">{{ row.bowl_total | money }} dollars</td>
+            <td class="num" data-label="Season points">{{ row.season_points_total | money }} dollars</td>
+            <td class="num" data-label="Season wins">{{ row.season_wins_total | money }} dollars</td>
+            <td class="num payout-summary-strong" data-label="Grand total owed">
+              {{ row.grand_total | money }} dollars
+            </td>
+            <td data-label="Paid">
+              {% if row.grand_total == 0 %}
+                <input type="checkbox" class="paid-checkbox" disabled
+                       aria-label="{{ row.display_name }} is not owed anything yet">
+              {% else %}
+                <input type="checkbox" class="paid-checkbox"
+                       hx-post="/admin/payouts/player/{{ row.user_id }}/paid"
+                       hx-target="#payout-summary-wrap" hx-swap="outerHTML"
+                       {% if unpaid_only %}hx-vals='{"unpaid": "1"}'{% endif %}
+                       {% if row.unpaid_total == 0 %}checked{% endif %}
+                       aria-label="Mark {{ row.display_name }} paid">
+              {% endif %}
+            </td>
+          </tr>
+        {% else %}
+          <tr>
+            <td colspan="7" class="muted">
+              {% if unpaid_only %}
+                Nobody is still owed money.
+              {% else %}
+                No pool members yet.
+              {% endif %}
+            </td>
+          </tr>
+        {% endfor %}
+      </tbody>
+      {% if rows %}
+        <tfoot>
+          <tr>
+            <td class="payout-summary-strong">Total</td>
+            <td class="num payout-summary-strong">{{ totals.weekly_total | money }} dollars</td>
+            <td class="num payout-summary-strong">{{ totals.bowl_total | money }} dollars</td>
+            <td class="num payout-summary-strong">{{ totals.season_points_total | money }} dollars</td>
+            <td class="num payout-summary-strong">{{ totals.season_wins_total | money }} dollars</td>
+            <td class="num payout-summary-strong">{{ totals.grand_total | money }} dollars</td>
+            <td class="num payout-summary-strong">{{ totals.paid_total | money }} dollars paid</td>
+          </tr>
+        </tfoot>
+      {% endif %}
+    </table>
+  </div>
+
+  <div class="row payout-summary-actions">
+    <a class="btn btn-secondary" href="/admin/payouts/summary.csv">Download CSV</a>
+    <button type="button" class="btn btn-secondary" data-copy="#payout-summary-text">Copy as text</button>
+  </div>
+  <pre id="payout-summary-text" class="visually-hidden">{{ text_table }}</pre>
+</div>
