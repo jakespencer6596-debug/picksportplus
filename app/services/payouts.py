@@ -21,13 +21,22 @@ Money is Decimal end to end in this module, never float, no exceptions.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from decimal import Decimal
+from decimal import ROUND_HALF_UP, Decimal
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.models import PayoutAward, PayoutRule, Pool, PoolMember, User, Week, WeekEntry, utcnow
-from app.payouts import SCOPES, Award, Rule, Standing, StandingInput, allocate, rank_standings
+from app.payouts import (
+    SCOPES,
+    Award,
+    Rule,
+    Standing,
+    StandingInput,
+    allocate,
+    rank_standings,
+    resolve_rule,
+)
 from app.services.standings import season_standings, weekly_leaderboard
 
 __all__ = [
@@ -41,6 +50,11 @@ __all__ = [
     "payout_summary",
     "mark_paid",
     "recalculate_awards",
+    "find_rule",
+    "save_rule",
+    "delete_rule",
+    "scale_rules_to_pot",
+    "load_preset",
 ]
 
 
@@ -418,3 +432,170 @@ def recalculate_awards(
             )
         )
     )
+
+
+# Set Payouts editor (Payout system rebuild, Phase 4) ------------------------------------
+#
+# Everything below this line supports the commissioner-facing /admin/payouts screen
+# (app/routers/payouts.py): plain create/update/delete for a single PayoutRule row, plus
+# the two bulk actions the editor offers (scale every rule to the pot, load the known
+# preset ladder). Route-level input shape/range validation (place is a positive integer,
+# scope/mode are known values, value parses as Decimal, a percent value is capped at 100,
+# weekly_payout_weeks is 0-30) lives in the router, not here, matching this codebase's own
+# router/service split; what lives here is the part a raw HTML form cannot check for itself,
+# identity (does rule_id name a row that is really this pool's) and the uniqueness rule the
+# database would otherwise enforce with a raw IntegrityError.
+
+
+def find_rule(db: Session, pool: Pool, rule_id: int) -> PayoutRule | None:
+    """The PayoutRule row for rule_id, but only if it actually belongs to this pool. A rule
+    id from another pool (or one that no longer exists) reads as None, never someone else's
+    row, so a caller never has to double check pool_id itself."""
+    row = db.get(PayoutRule, rule_id)
+    if row is None or row.pool_id != pool.id:
+        return None
+    return row
+
+
+def save_rule(
+    db: Session,
+    pool: Pool,
+    *,
+    rule_id: int | None,
+    scope: str,
+    place: int,
+    mode: str,
+    value: Decimal,
+    label: str | None,
+) -> PayoutRule:
+    """Create a new PayoutRule (rule_id is None, the "Add place" form on the editor) or
+    update the row rule_id names (a hidden field on each already-configured row's own save
+    form). This is the one place in the payout system that decides "create" versus "update":
+    the editor never posts an id for a brand new row and always posts one for an existing
+    row, so the caller's intent is unambiguous from rule_id alone.
+
+    Raises ValueError, never letting the database's own (pool_id, scope, place) unique
+    constraint raise a raw IntegrityError, in two cases: rule_id names a row that is not
+    (or no longer) this pool's, and a genuine (scope, place) collision with a DIFFERENT row
+    (updating a row to the scope/place it already has is not a collision with itself, that is
+    the ordinary "change the value, keep the place" edit). The pre-check here, a SELECT before
+    any write, is deliberate: it is what lets the route give the commissioner a clean flash
+    message instead of a 500. Does not commit; the caller owns the transaction.
+    """
+    existing: PayoutRule | None = None
+    if rule_id is not None:
+        existing = find_rule(db, pool, rule_id)
+        if existing is None:
+            raise ValueError("That payout rule no longer exists.")
+
+    conflict = db.scalar(
+        select(PayoutRule).where(
+            PayoutRule.pool_id == pool.id, PayoutRule.scope == scope, PayoutRule.place == place
+        )
+    )
+    if conflict is not None and (existing is None or conflict.id != existing.id):
+        raise ValueError(f"Place {place} is already configured for that scope.")
+
+    if existing is None:
+        row = PayoutRule(
+            pool_id=pool.id, scope=scope, place=place, mode=mode, value=value, label=label
+        )
+        db.add(row)
+    else:
+        existing.scope = scope
+        existing.place = place
+        existing.mode = mode
+        existing.value = value
+        existing.label = label
+        row = existing
+    db.flush()
+    return row
+
+
+def delete_rule(db: Session, pool: Pool, rule_id: int) -> bool:
+    """True if a row belonging to this pool was actually removed. False for a rule_id that
+    names nothing, or someone else's pool's rule: the delete route treats both the same, a
+    quiet no-op rather than a 404 dead end, which is friendlier to a commissioner who double
+    clicks remove or has a stale tab open. Does not commit."""
+    row = find_rule(db, pool, rule_id)
+    if row is None:
+        return False
+    db.delete(row)
+    db.flush()
+    return True
+
+
+def scale_rules_to_pot(db: Session, pool: Pool) -> int:
+    """Convert every PayoutRule row for this pool, across all four scopes, to mode="percent"
+    at its CURRENT effective share of the pot, so every rule's resolved dollar figure is
+    unchanged the instant this returns (a $105 weekly 1st place against a $4,950 pot becomes
+    a percent rule that still resolves to $105 against that same pot). Returns how many rows
+    were converted.
+
+    Raises ValueError, converting nothing, when the effective pot is Decimal("0"): there is no
+    real share to freeze a percent rule to, and dividing by a zero pot is exactly the bug this
+    guards against, never a silent divide-by-zero. The percent value is quantized to four
+    decimal places (PayoutRule.value's own column precision, Numeric(12, 4)) with ROUND_HALF_UP,
+    the same rounding a human doing this by hand on a calculator would reach for; the tiny
+    quantization remainder is always well under a cent by the time it is resolved back to
+    dollars for a pot in the range this pool ever deals with.
+    """
+    pot = effective_pot(db, pool)
+    if pot == 0:
+        raise ValueError(
+            "There is no pot to scale against yet. Set an entry fee or a pot override first."
+        )
+    rows = list(db.scalars(select(PayoutRule).where(PayoutRule.pool_id == pool.id)))
+    for row in rows:
+        rule = Rule(
+            scope=row.scope,
+            place=row.place,
+            mode=row.mode,
+            value=Decimal(row.value),
+            label=row.label,
+        )
+        dollars = resolve_rule(rule, pot)
+        row.mode = "percent"
+        row.value = (dollars / pot * 100).quantize(Decimal("0.0001"), rounding=ROUND_HALF_UP)
+    db.flush()
+    return len(rows)
+
+
+# The known ladder (DECISIONS.md, "Payout system"): weekly 105/55/25, bowl 250/100/50,
+# season_points 600/405/150, season_wins 325/185/110, every one dollar mode. Kept as a module
+# level constant, not a magic literal inside load_preset, so a future change to the real
+# numbers is a one line diff in an obvious place.
+_PRESET_LADDER: dict[str, list[tuple[int, Decimal]]] = {
+    "weekly": [(1, Decimal("105")), (2, Decimal("55")), (3, Decimal("25"))],
+    "bowl": [(1, Decimal("250")), (2, Decimal("100")), (3, Decimal("50"))],
+    "season_points": [(1, Decimal("600")), (2, Decimal("405")), (3, Decimal("150"))],
+    "season_wins": [(1, Decimal("325")), (2, Decimal("185")), (3, Decimal("110"))],
+}
+
+
+def load_preset(db: Session, pool: Pool) -> int:
+    """Seed all four scopes with the known ladder and set pool.weekly_payout_weeks = 15.
+
+    Always clears every existing PayoutRule row for this pool first, across all four scopes,
+    whether or not the pool already has any: this is what makes the route safe to call
+    unconditionally rather than needing a separate "already has rules" branch of its own. The
+    editor's own confirm() dialog (app/templates/admin/payouts.html) is what actually tells the
+    commissioner this replaces whatever is already configured; by the time this function runs
+    that confirmation has already happened, so clearing first here is never a surprise, it is
+    just what makes the reseed impossible to fail on the (pool_id, scope, place) unique
+    constraint or silently duplicate a row. Returns how many rows were created (always 12).
+    """
+    for row in db.scalars(select(PayoutRule).where(PayoutRule.pool_id == pool.id)):
+        db.delete(row)
+    db.flush()
+
+    count = 0
+    for scope, places in _PRESET_LADDER.items():
+        for place, value in places:
+            db.add(
+                PayoutRule(pool_id=pool.id, scope=scope, place=place, mode="amount", value=value)
+            )
+            count += 1
+    pool.weekly_payout_weeks = 15
+    db.flush()
+    return count

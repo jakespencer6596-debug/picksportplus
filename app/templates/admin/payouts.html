@@ -1,12 +1,137 @@
 {% extends "base.html" %}
 {% import "components/icons.html" as ic %}
-{% block title %}Payout summary. {{ APP_NAME }}{% endblock %}
+{% block title %}Set payouts. {{ APP_NAME }}{% endblock %}
+
+{% macro mode_toggle(field_id, form_id, checked_mode) %}
+<div class="mode-toggle" role="radiogroup" aria-label="Mode">
+  <label class="mode-toggle-option {% if checked_mode == 'amount' %}is-active{% endif %}" for="{{ field_id }}-amount">
+    <input type="radio" id="{{ field_id }}-amount" name="mode" value="amount"
+           {% if form_id %}form="{{ form_id }}"{% endif %}
+           {% if checked_mode == 'amount' %}checked{% endif %}>
+    <span>$</span>
+  </label>
+  <label class="mode-toggle-option {% if checked_mode == 'percent' %}is-active{% endif %}" for="{{ field_id }}-percent">
+    <input type="radio" id="{{ field_id }}-percent" name="mode" value="percent"
+           {% if form_id %}form="{{ form_id }}"{% endif %}
+           {% if checked_mode == 'percent' %}checked{% endif %}>
+    <span>%</span>
+  </label>
+</div>
+{% endmacro %}
+
+{% macro scope_editor(scope, heading, heading_id) %}
+<section class="card" aria-labelledby="{{ heading_id }}">
+  <div class="card-head">
+    <h2 id="{{ heading_id }}">{{ heading }}</h2>
+  </div>
+  <div class="card-body">
+    {% if scope == "weekly" %}
+      <p class="form-hint">
+        Weekly payouts apply to every regular week. A percentage here is a percentage of the
+        pot each week, not across the season.
+      </p>
+    {% endif %}
+
+    <div class="table-wrap">
+      <table class="table payout-rule-table">
+        <caption class="visually-hidden">{{ heading }} payout places</caption>
+        <thead>
+          <tr>
+            <th scope="col">Place</th>
+            <th scope="col">Label</th>
+            <th scope="col">Mode</th>
+            <th scope="col" class="num">Value</th>
+            <th scope="col" class="num">Resolves to</th>
+            <th scope="col"><span class="visually-hidden">Remove</span></th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for view in rows_by_scope[scope] %}
+            {% set rule = view.rule %}
+            {% set form_id = "rule-form-" ~ rule.id %}
+            <tr>
+              <td data-label="Place">
+                <input class="input input-sm num" type="number" name="place" form="{{ form_id }}"
+                       value="{{ rule.place }}" min="1" step="1" required
+                       aria-label="Place for this row">
+              </td>
+              <td data-label="Label">
+                <input class="input" type="text" name="label" form="{{ form_id }}"
+                       value="{{ rule.label or '' }}" maxlength="60" placeholder="Optional"
+                       aria-label="Label for this row">
+              </td>
+              <td data-label="Mode">
+                {{ mode_toggle(form_id, form_id, rule.mode) }}
+              </td>
+              <td class="num" data-label="Value">
+                <input class="input input-sm num" type="number" name="value" form="{{ form_id }}"
+                       value="{{ rule.value }}" min="0" step="0.01" required
+                       aria-label="Value for this row">
+                <span class="payout-other-repr">
+                  {% if rule.mode == "amount" %}
+                    &asymp; {{ view.other_value | money }}%
+                  {% else %}
+                    &asymp; ${{ view.other_value | money }}
+                  {% endif %}
+                </span>
+              </td>
+              <td class="num" data-label="Resolves to">${{ view.resolved | money }}</td>
+              <td class="cell-actions">
+                <input type="hidden" name="scope" value="{{ scope }}" form="{{ form_id }}">
+                <input type="hidden" name="rule_id" value="{{ rule.id }}" form="{{ form_id }}">
+                <form id="{{ form_id }}" method="post" action="/admin/payouts/rule"></form>
+                <button class="btn btn-secondary btn-sm" type="submit" form="{{ form_id }}">Save</button>
+                <form method="post" action="/admin/payouts/rule/{{ rule.id }}/delete" class="inline-form">
+                  <button class="btn btn-ghost btn-sm" type="submit"
+                          aria-label="Remove this place from {{ heading }}">
+                    {{ ic.icon("x", 16) }}
+                  </button>
+                </form>
+              </td>
+            </tr>
+          {% else %}
+            <tr>
+              <td colspan="6" class="muted">No places configured for this scope yet.</td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+
+    <form method="post" action="/admin/payouts/rule" class="payout-add-row">
+      <input type="hidden" name="scope" value="{{ scope }}">
+      <div class="field">
+        <label class="field-label" for="{{ scope }}-add-place">Place</label>
+        <input class="input input-sm num" type="number" id="{{ scope }}-add-place" name="place"
+               value="{{ next_place[scope] }}" min="1" step="1" required>
+      </div>
+      <div class="field">
+        <label class="field-label" for="{{ scope }}-add-label">Label</label>
+        <input class="input" type="text" id="{{ scope }}-add-label" name="label"
+               maxlength="60" placeholder="Optional">
+      </div>
+      <div class="field">
+        <span class="field-label">Mode</span>
+        {{ mode_toggle(scope ~ "-add", "", "amount") }}
+      </div>
+      <div class="field">
+        <label class="field-label" for="{{ scope }}-add-value">Value</label>
+        <input class="input input-sm num" type="number" id="{{ scope }}-add-value" name="value"
+               min="0" step="0.01" required placeholder="0.00">
+      </div>
+      <div class="field payout-add-submit">
+        <button class="btn btn-secondary btn-sm" type="submit">Add place</button>
+      </div>
+    </form>
+  </div>
+</section>
+{% endmacro %}
 
 {% block content %}
 <div class="page-head">
   <div>
     <p class="eyebrow">Commissioner</p>
-    <h1 class="page-title">Payout summary</h1>
+    <h1 class="page-title">Set payouts</h1>
   </div>
   <p class="muted">{{ pool.name }}, {{ pool.season_year }} season</p>
 </div>
@@ -19,52 +144,195 @@
   <a class="subnav-link is-active" href="/admin/payouts" aria-current="page">Payouts</a>
 </nav>
 
-<section class="section" aria-labelledby="payout-summary-title">
-  <h2 class="section-title" id="payout-summary-title">What everyone is owed</h2>
-  <p class="muted">
-    Weekly payouts total every scored week that has weekly payout rules; bowl and season columns
-    follow the same rules from Settings. A plain table, select and paste it into a spreadsheet.
-  </p>
+<div class="stack">
 
-  {% if summary %}
+  <section class="card" aria-labelledby="pot-title">
+    <div class="card-head">
+      <h2 id="pot-title">The pot</h2>
+    </div>
+    <div class="card-body">
+      <form method="post" action="/admin/payouts/pot" class="stack">
+        <div class="form-row">
+          <div class="field">
+            <label class="field-label" for="entry_fee">Entry fee</label>
+            <input class="input num" type="number" id="entry_fee" name="entry_fee"
+                   value="{{ pool.entry_fee if pool.entry_fee is not none else '' }}"
+                   min="0" step="0.01" placeholder="Not set">
+            <p class="form-hint">
+              {{ paid_count }} member{{ "s" if paid_count != 1 else "" }} marked paid on the
+              <a href="/admin/members">Members</a> page.
+            </p>
+          </div>
+          <div class="field">
+            <label class="field-label" for="pot_override">Pot override</label>
+            <input class="input num" type="number" id="pot_override" name="pot_override"
+                   value="{{ pool.pot_override if pool.pot_override is not none else '' }}"
+                   min="0" step="0.01" placeholder="Not set">
+            <p class="form-hint">Wins over the computed pot whenever it is set.</p>
+          </div>
+        </div>
+
+        <div class="pot-figures">
+          <div class="pot-figure">
+            <span class="pot-figure-label">
+              Computed{% if pool.pot_override is not none %} (not in use){% endif %}
+            </span>
+            <span class="pot-figure-value">${{ computed_pot | money }}</span>
+          </div>
+          {% if pool.pot_override is not none %}
+            <div class="pot-figure">
+              <span class="pot-figure-label">Override (in use)</span>
+              <span class="pot-figure-value">${{ pool.pot_override | money }}</span>
+            </div>
+          {% endif %}
+          <div class="pot-figure pot-figure-effective">
+            <span class="pot-figure-label">Effective pot</span>
+            <span class="pot-figure-value pot-figure-big">${{ effective_pot_value | money }}</span>
+          </div>
+        </div>
+
+        <div class="form-row">
+          <div class="field">
+            <label class="field-label" for="weekly_payout_weeks">Weekly payout weeks</label>
+            <input class="input num" type="number" id="weekly_payout_weeks" name="weekly_payout_weeks"
+                   value="{{ pool.weekly_payout_weeks }}" min="0" max="30" step="1" required>
+            <p class="form-hint">How many regular weeks the weekly scope pays out.</p>
+          </div>
+          <div class="field">
+            <label class="field-label" for="payout_rounding">Rounding</label>
+            <select class="select" id="payout_rounding" name="payout_rounding">
+              {% for r in PAYOUT_ROUNDINGS %}
+                <option value="{{ r }}" {% if r == pool.payout_rounding %}selected{% endif %}>
+                  {{ r | capitalize }}
+                </option>
+              {% endfor %}
+            </select>
+            <p class="form-hint">The unit each resolved share rounds down to before leftovers are handed out.</p>
+          </div>
+          <div class="field">
+            <label class="field-label" for="payout_tiebreak">Tiebreak</label>
+            <select class="select" id="payout_tiebreak" name="payout_tiebreak">
+              {% for t in PAYOUT_TIEBREAKS %}
+                <option value="{{ t }}" {% if t == pool.payout_tiebreak %}selected{% endif %}>
+                  {{ t.replace("_", " ") | capitalize }}
+                </option>
+              {% endfor %}
+            </select>
+            <p class="form-hint">
+              How a leftover rounding unit, and a tied group's own order, is broken. Only one
+              rule exists today: earliest submission first.
+            </p>
+          </div>
+        </div>
+
+        <div class="form-actions">
+          <button class="btn btn-primary" type="submit">Save pot settings</button>
+        </div>
+      </form>
+    </div>
+  </section>
+
+  {{ scope_editor("weekly", "Weekly (weeks 1 to " ~ pool.weekly_payout_weeks ~ ")", "weekly-title") }}
+  {{ scope_editor("bowl", "Bowl Week (week 16)", "bowl-title") }}
+  {{ scope_editor("season_points", "Season: Points", "season-points-title") }}
+  {{ scope_editor("season_wins", "Season: Wins", "season-wins-title") }}
+
+  <section class="card" aria-labelledby="payout-tools-title">
+    <div class="card-head">
+      <h2 id="payout-tools-title">Tools</h2>
+    </div>
+    <div class="card-body">
+      <div class="row">
+        <form method="post" action="/admin/payouts/scale-to-pot"
+              onsubmit="return confirm('Convert every configured payout rule, in every scope, to percent mode at its current dollar value against the pot? Nothing changes today, only how each rule is expressed.');">
+          <button class="btn btn-secondary" type="submit">Scale every rule to percent of pot</button>
+        </form>
+        <form method="post" action="/admin/payouts/load-preset"
+              onsubmit="return confirm('{% if has_any_rules %}This clears every payout rule currently configured for this pool and replaces it with the standard ladder. Continue?{% else %}Load the standard payout ladder (weekly 105/55/25, bowl 250/100/50, season points 600/405/150, season wins 325/185/110)?{% endif %}');">
+          <button class="btn btn-secondary" type="submit">Load standard ladder</button>
+        </form>
+      </div>
+      <p class="form-hint">
+        Scale to pot converts every rule, in every scope, to percent mode at its current share
+        of the effective pot, so nothing changes today, only how it is expressed going forward.
+        Load standard ladder seeds weekly, bowl, season points and season wins with the
+        105/55/25 style ladder in dollar mode and sets weekly payout weeks to 15;
+        {% if has_any_rules %}since this pool already has rules configured, loading it replaces
+        every existing rule, it never duplicates one{% else %}this pool has no rules configured
+        yet, so nothing is replaced{% endif %}.
+      </p>
+    </div>
+  </section>
+
+  <section class="section" aria-labelledby="payout-summary-title">
+    <h2 class="section-title" id="payout-summary-title">Live allocation summary</h2>
+
+    {% set diff = summary.unallocated %}
+    {% if diff < 0 %}
+      <div class="flash flash-error">
+        {{ ic.icon("alert", 18) }}
+        <span>Payouts exceed the pot by ${{ (-diff) | money }}.</span>
+      </div>
+    {% elif diff > 0 %}
+      <div class="flash flash-info">
+        {{ ic.icon("info", 18) }}
+        <span>${{ diff | money }} of the pot is unallocated.</span>
+      </div>
+    {% else %}
+      <div class="flash flash-ok">
+        {{ ic.icon("check", 18) }}
+        <span>Payouts match the pot exactly.</span>
+      </div>
+    {% endif %}
+
     <div class="table-wrap">
       <table class="table">
-        <caption class="visually-hidden">
-          Payout summary, one row per player: weekly payouts total, bowl payout, season award,
-          and the total owed.
-        </caption>
+        <caption class="visually-hidden">Payout allocation summary by category.</caption>
         <thead>
           <tr>
-            <th scope="col">Player</th>
-            <th scope="col" class="num">Weekly total</th>
-            <th scope="col" class="num">Bowl</th>
-            <th scope="col" class="num">Season award</th>
-            <th scope="col" class="num">Total owed</th>
+            <th scope="col">Category</th>
+            <th scope="col">Breakdown</th>
+            <th scope="col" class="num">Category total</th>
           </tr>
         </thead>
         <tbody>
-          {% for row in summary %}
+          {% set scope_labels = {
+            "weekly": "Weekly (" ~ pool.weekly_payout_weeks ~ " weeks)",
+            "bowl": "Bowl Week",
+            "season_points": "Season, Points",
+            "season_wins": "Season, Wins",
+          } %}
+          {% for scope in PAYOUT_SCOPES %}
+            {% set s = summary.scopes[scope] %}
             <tr>
-              <td data-label="Player">{{ row.display_name }}</td>
-              <td class="num" data-label="Weekly total">{{ row.weekly_total | money }}</td>
-              <td class="num" data-label="Bowl">{{ row.bowl_total | money }}</td>
-              <td class="num" data-label="Season award">{{ row.season_award | money }}</td>
-              <td class="num" data-label="Total owed"><strong>{{ row.total_owed | money }}</strong></td>
+              <td data-label="Category">{{ scope_labels[scope] }}</td>
+              <td data-label="Breakdown">
+                {% if s.places %}
+                  {% for amount in s.places.values() %}${{ amount | money }}{% if not loop.last %} / {% endif %}{% endfor %}
+                  {% if scope == "weekly" %} each week{% endif %}
+                {% else %}
+                  <span class="muted">Not configured</span>
+                {% endif %}
+              </td>
+              <td class="num" data-label="Category total">${{ s.category_total | money }}</td>
             </tr>
           {% endfor %}
+          <tr>
+            <td colspan="2" class="num payout-summary-strong">Grand total</td>
+            <td class="num payout-summary-strong">${{ summary.grand_total | money }}</td>
+          </tr>
+          <tr>
+            <td colspan="2" class="num">Pot</td>
+            <td class="num">${{ summary.pot | money }}</td>
+          </tr>
+          <tr>
+            <td colspan="2" class="num">Unallocated</td>
+            <td class="num">${{ summary.unallocated | money }}</td>
+          </tr>
         </tbody>
       </table>
     </div>
-    <p class="form-hint">
-      Every figure is dollars. A row of zeroes means no payout rule paid that player yet, not
-      an error.
-    </p>
-  {% else %}
-    <div class="empty-state">
-      {{ ic.icon("dollar", 28) }}
-      <h3 class="empty-state-title">No players yet</h3>
-      <p>Once players join {{ pool.name }}, they show up here, paid out or not.</p>
-    </div>
-  {% endif %}
-</section>
+  </section>
+
+</div>
 {% endblock %}

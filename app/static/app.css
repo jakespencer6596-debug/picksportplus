@@ -107,6 +107,7 @@
      13  SortableJS drag states
      14  Utilities
      15  Print
+     16  Payouts: pot figures, dollar/percent mode toggle
 
    TEMPLATE HOOKS THIS FILE OWNS
    Names that app/templates and app/static/app.js already emit, so they are
@@ -4694,4 +4695,144 @@ a.toggle-btn { text-decoration: none; }
   .picks-grid .is-sticky { position: static; box-shadow: none; }
   .picks-grid .pick-game { display: table-cell; }
   .pick-summary { display: none !important; }
+}
+
+
+/* ==========================================================================
+   16  PAYOUTS: POT FIGURES, DOLLAR/PERCENT MODE TOGGLE
+   The Set Payouts editor (Payout system rebuild, Phase 4, /admin/payouts). No existing
+   component covered a two-way segmented toggle, so .mode-toggle is new here; everything
+   else reuses .card / .table / .field / .btn-secondary etc, unchanged.
+   ========================================================================== */
+
+.pot-figures {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-6);
+  padding: var(--space-4);
+  background: var(--bg-surface-alt);
+  border: var(--hairline);
+  border-radius: var(--radius-sm);
+}
+
+.pot-figure {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.pot-figure-label {
+  font-size: var(--fs-xs);
+  color: var(--text-muted);        /* 6.95:1 on paper, 7.47:1 on surface-2 */
+  text-transform: uppercase;
+  letter-spacing: var(--track-eyebrow);
+}
+
+.pot-figure-value {
+  font-family: var(--font-display);
+  font-size: var(--fs-lg);
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+
+.pot-figure-big {
+  font-size: var(--fs-xl);
+  color: var(--accent);            /* 9.54:1 on paper, 10.25:1 on surface-2 */
+}
+
+/* Dollar / percent segmented toggle, styled off two native radio inputs so it stays fully
+   keyboard and screen reader operable (a real radiogroup, not a div faking one). Each radio
+   is visually hidden and swapped for its wrapping label, which is what makes the whole
+   segment, not just a tiny dot, the click target.
+
+   :has() drives the pressed state live, with zero JavaScript, the instant either radio is
+   clicked (Baseline widely available since 2023). The server rendered .is-active class,
+   from whichever mode the row was actually saved in, is the fallback for a browser without
+   :has() support: the toggle still shows which mode is saved even there, it just will not
+   repaint again until the next save, which matches this screen's own "server rendered on
+   every save, not live JS math" design (see app/routers/payouts.py's module docstring). */
+.mode-toggle {
+  display: inline-flex;
+  border: 1px solid var(--accent);
+  border-radius: var(--radius-pill);
+  overflow: hidden;
+}
+
+.mode-toggle-option {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 2.75rem;
+  min-height: var(--tap-sm);
+  padding: var(--space-1) var(--space-3);
+  font-family: var(--font-body);
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  color: var(--accent);            /* 11.03:1 on surface */
+  cursor: pointer;
+  transition: background-color var(--dur) var(--ease), color var(--dur) var(--ease);
+}
+
+.mode-toggle-option + .mode-toggle-option { border-left: 1px solid var(--accent); }
+
+/* Visually hidden, not display: none, so the input stays focusable and its :checked state
+   stays readable by :has() and by assistive tech. */
+.mode-toggle-option input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.mode-toggle-option.is-active,
+.mode-toggle-option:has(input:checked) {
+  background: var(--accent);
+  color: var(--text-invert);       /* 11.03:1, same pairing as .btn-primary */
+}
+
+.mode-toggle-option:has(input:focus-visible) {
+  outline: 2px solid var(--focus);
+  outline-offset: 1px;
+}
+
+/* The muted "other representation" beside a rule's Value input: the equivalent percent of
+   pot when the row is in dollar mode, the resolved dollar figure when it is in percent
+   mode. Always visible, per the brief, so nobody has to guess which figure is really in
+   play; recomputed server side on every page render against the real effective pot. */
+.payout-other-repr {
+  display: inline-block;
+  margin-left: var(--space-2);
+  font-size: var(--fs-xs);
+  color: var(--text-muted);        /* 6.95:1 on paper */
+  white-space: nowrap;
+}
+
+/* The "Add place" row under each scope table: place / label / mode / value / submit, on one
+   line from tablet width up. A dedicated class rather than reusing .form-row, since .form-row
+   locks in a 2 column grid at 768px (Section 7) which does not fit five unevenly sized
+   fields. */
+.payout-add-row {
+  display: grid;
+  grid-template-columns: 1fr;
+  align-items: end;
+  gap: var(--space-3);
+  margin-top: var(--space-4);
+}
+
+@media (min-width: 640px) {
+  .payout-add-row {
+    grid-template-columns: 5rem 1fr 6.5rem 7rem auto;
+  }
+}
+
+.payout-add-row .field { margin-bottom: 0; }
+
+.payout-summary-strong {
+  font-weight: 700;
+  border-top: 2px solid var(--line);
 }
