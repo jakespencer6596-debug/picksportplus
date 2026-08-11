@@ -22,8 +22,8 @@ Tracking document for the commissioner payout system build (branch `payout-setti
 
 ## Phase checklist
 
-- [x] Phase 0: orientation, baseline, branch, tracking docs
-- [ ] Phase 1: data model and migration
+- [x] Phase 0: orientation, baseline, branch, tracking docs (commit d09b83d)
+- [x] Phase 1: data model and migration (commit 2634138)
 - [ ] Phase 2: pure payout allocation engine (`app/payouts.py`)
 - [ ] Phase 3: service layer, snapshots, scoring hook
 - [ ] Phase 4: Set Payouts admin screen
@@ -34,3 +34,11 @@ Tracking document for the commissioner payout system build (branch `payout-setti
 - [ ] Phase 9: document, local merge to main (no push, no live deploy: see above)
 
 Commit SHAs and per-phase notes are filled in as each phase completes below.
+
+## Phase 1 notes
+
+Test count after Phase 1: 848 passed (861 baseline, minus 25 tests removed for the old payout
+shape, plus 12 new: 11 in tests/test_payout_models.py, and test_demo_payout_rules... updated in
+place rather than added). Migration da27c5ef4f4f verified upgrade/downgrade/upgrade on a scratch
+SQLite database. Full details and adaptation notes (why the old routes/templates were removed in
+this same phase rather than left broken) are in DECISIONS.md, "Payout system".
