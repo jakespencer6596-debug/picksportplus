@@ -66,8 +66,10 @@
   </div>
 </section>
 
+{% if is_site_admin %}
 <section class="section" aria-labelledby="budget-title">
   <h2 class="section-title" id="budget-title">Provider budgets</h2>
+  <p class="muted">Site admin only. Commissioners never see provider call budgets.</p>
   <p class="budget-intro">
     ESPN is keyless and unmetered, so schedules, live status and final scores never spend a
     credit. The two feeds below are asked only for a point spread ESPN did not carry, and only
@@ -129,6 +131,7 @@
     {% endfor %}
   </div>
 </section>
+{% endif %}
 
 <section class="section" aria-labelledby="weeks-title">
   <h2 class="section-title" id="weeks-title">Weeks</h2>

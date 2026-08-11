@@ -212,8 +212,12 @@ def dashboard(
             "slate_counts": counts,
             "pick_counts": pick_counts,
             "member_count": member_count,
-            "usage": usage_report(db),
-            "warnings": provider_warnings(db),
+            "is_site_admin": user.is_admin,
+            # Provider call budgets are cost/vendor detail, site admin only. A real
+            # commissioner never sees them, and the values are not even computed for
+            # anyone else, matching the template's own {% if is_site_admin %} gate below.
+            "usage": usage_report(db) if user.is_admin else [],
+            "warnings": provider_warnings(db) if user.is_admin else [],
         },
         **_base(db, user, pool),
     )
