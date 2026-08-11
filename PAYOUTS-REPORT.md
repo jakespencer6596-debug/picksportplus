@@ -28,7 +28,8 @@ Tracking document for the commissioner payout system build (branch `payout-setti
 - [x] Phase 3: service layer, snapshots, scoring hook (commit 231a9ac, 892 passing)
 - [x] Phase 4: Set Payouts admin screen (commit 02f45df, 913 passing; plain-redirect summary,
   not HTMX live-swap, see DECISIONS.md)
-- [ ] Phase 5: player-facing payout display
+- [x] Phase 5: player-facing payout display (commit d5a0360, 920 passing; kept this app's
+  existing "N dollars" money convention rather than a "$N" format, see DECISIONS.md)
 - [ ] Phase 6: commissioner payout summary and export
 - [ ] Phase 7: CLI, demo data, cron safety
 - [ ] Phase 8: full verification sweep

@@ -2565,3 +2565,15 @@ first, then reseeds the standard ladder, rather than refusing when rules already
 safe by the editor's own `confirm()` dialog, whose copy changes depending on whether the pool
 already has rules configured, so the destructive replace is always an explicit, confirmed click
 from the commissioner, never a silent overwrite.
+
+### Phase 5: money display stays "N dollars", never "$N"
+
+The original abstract brief for this feature asked for money formatted as "$1,234"/"$1,234.56".
+**Decision:** kept this codebase's own, already fully established convention instead: the
+`money` Jinja filter renders a bare number, no currency symbol, no thousands separator, and the
+surrounding copy spells out the word "dollars" (every existing money display in this app already
+does this, in settings, members, results, admin). Consistency with an app-wide, already-shipped
+convention outranks matching a generic instruction that was written without knowledge of this
+codebase's own design language. A payout figure that suddenly looked like "$1,234" next to every
+other dollar figure on the same page reading "1,234 dollars" would look like a bug, not a
+feature.
