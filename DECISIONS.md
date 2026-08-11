@@ -2590,3 +2590,13 @@ nothing links to it yet. Fixed in a follow-up commit: a player owed nothing at a
 a checked-and-live checkbox (trivially "fully paid" since they have no unpaid awards), which
 looked like a false confirmation; that checkbox is now disabled and unchecked for a zero
 grand_total row instead.
+
+### Phase 9: the "SPEC.md Section 3h" money rule was never actually in 3h
+
+The build brief for this feature claimed the Decimal-money-for-payouts rule came "from
+SPEC.md Section 3h, non-negotiable." Checked directly: SPEC.md's real section 3h is "Copy
+rules" (em dashes, emoji, sentence case, voice), and never mentioned money types at all. The
+Decimal rule was followed anyway, since it is good practice for a real money feature and was
+explicit, non-negotiable instruction from the build brief regardless of its citation being
+wrong. Phase 9 adds the rule to SPEC.md for real, in section 4 (Tech stack) where it actually
+belongs, rather than leaving the document's own claim about itself inaccurate.
