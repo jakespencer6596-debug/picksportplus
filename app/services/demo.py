@@ -40,6 +40,7 @@ from sqlalchemy.orm import Session
 from app.auth import hash_password
 from app.models import Game, PayoutRule, Pick, Pool, PoolMember, User, Week, WeekEntry, utcnow
 from app.providers import cfbd, espn
+from app.services import payouts as payout_service
 from app.services.ingest import apply_slate, publish_week, set_void
 from app.services.results import score_week_for_pool
 
@@ -131,7 +132,12 @@ OPEN_WEEK_LOCK_DAYS_AHEAD = 7
 # 600/405/150, season wins 325/185/110. render.yaml's free demo service re-seeds this on
 # every restart (ephemeral disk), which is exactly why this seed must not be skipped: see
 # README.md's Render section.
-DEMO_ENTRY_FEE = Decimal("20.00")
+#
+# The fee is set so the computed pot (entry_fee times DEMO_PLAYERS' 8 paid members) lands
+# exactly on the real ladder's own $4,950 grand total: 618.75 * 8 = 4950.00. This is what
+# makes the demo's own Set Payouts screen show "$0 unallocated" out of the box, a much better
+# first look at the balance validator than an arbitrary mismatch would be.
+DEMO_ENTRY_FEE = Decimal("618.75")
 DEMO_VENMO_HANDLE = "picksportplus-demo"
 DEMO_PAYMENT_NOTE = (
     "Demo pool: no real money changes hands. This entry fee and Venmo handle exist only to "
@@ -204,6 +210,17 @@ def seed_demo_pool(db: Session, reset: bool = False, scenario_week: bool = False
         _build_scored_week(db, pool, users, WEEK2, out, no_show_local=None, void_one_game=False)
 
     _build_open_week(db, pool, users, WEEK2, out)
+
+    # Neither demo week is a bowl week, so score_week_for_pool's own automatic season-scope
+    # snapshot (Phase 3: triggered by a bowl week finishing scoring) never fires here on its
+    # own. Snapshot both season scopes by hand instead, once, after the real scored weeks
+    # above, so the demo's Season standings page shows both award panels rather than an empty
+    # state. Safe to call even under scenario_week=True, where week 6 is left partially
+    # played: season_points/season_wins still resolve against whatever week 5 alone already
+    # contributed.
+    payout_service.snapshot_awards(db, pool, "season_points")
+    payout_service.snapshot_awards(db, pool, "season_wins")
+    out.append("Snapshotted season points and season wins payout awards for the demo pool.")
 
     out.extend(demo_logins())
     return out
