@@ -2472,3 +2472,63 @@ league" calls to action), and updated `register.html`'s copy and the join code f
 always optional rather than conditionally required. Verified end to end in the browser: a fresh
 account with no code lands directly on a real, live preview slate; `/standings` and `/results`
 still 403 as before; a direct `POST /picks` against the preview pool's own games still 403s.
+
+## Payout system
+
+### Phase 0: orientation, and why this is a rebuild, not a greenfield build
+
+The brief for this feature was written as if no payout system existed yet (new `PayoutRule`
+model, a new router file, a fresh `/admin/payouts` editor). In fact a simpler payout system
+already shipped in production (Post-launch fixes, "venmo entry gate, payout rules, and weekly
+payout column"): `PayoutRule` (scope in weekly/bowl/season, a plain float `amount`, no percent
+mode), `Pool.entry_fee` (float, nullable), routes `payout_rule_add`/`payout_rule_remove`/
+`payouts_page` in `app/routers/admin.py`, a `_pot_totals` helper comparing collected to
+allocated, and rendering in `app/templates/admin/settings.html` and `app/templates/admin/
+payouts.html`, plus payout columns already wired into `app/templates/results.html` and `app/
+templates/leaderboard.html` via `app/services/payouts.py` (`weekly_payouts`, `season_payouts`,
+`payout_summary`, `rules_by_place`, `week_payout_scope`, `week_is_complete`, `allocate_payouts`).
+
+Before writing any payout code, production was checked directly (by the product owner, who has
+Render dashboard/shell access this agent does not) for real `PayoutRule` rows and a real
+`Pool.entry_fee`. Zero rows exist anywhere, and `entry_fee` is unset (None) on every pool
+including the real one the commissioner uses; the model's own docstring says it "ships with zero
+rows for every pool, always." This agent did not independently verify that against the
+production database itself (no Render access), so this decision rests on the product owner's
+direct check, not on this agent's own inspection, and that is recorded here so nobody wonders
+later why no defensive data-migration path was built.
+
+**Decision:** given nothing real is at stake, do a clean rebuild rather than a data-preserving
+migration. The Phase 1 migration drops the old `payout_rules` table outright (its `downgrade()`
+recreates the old float, three-scope shape exactly, so the migration is still fully reversible,
+it just does not attempt to carry old rows across the shape change forward). The old
+`payout_rule_add`, `payout_rule_remove`, and `payouts_page` routes, the payout section of
+`admin/settings.html`, and the old `admin/payouts.html` template are removed outright in Phase 4
+rather than kept running alongside the new four-scope dollar-or-percent system, since two
+competing payout UIs would be strictly worse than a single clean one when there is nothing real
+to lose by cutting over.
+
+**Decision:** money type. The rest of this codebase's convention for precision-sensitive numbers
+is `Float` (see `Pool.entry_fee`'s own prior comment, `Game.spread_home`), reasoning that tie
+splits are done in integer cents so float drift never reaches a stored value. This build follows
+the newer house rule instead ("Decimal is the required money type, never float for money") for
+every payout-specific field: `Pool.entry_fee` (already `Float`, converted to `Numeric(10, 2)` in
+this pass since it is being extended anyway), `Pool.pot_override`, `PayoutRule.value`,
+`PayoutAward.amount`/`pot_at_award`/`rule_value`. This is a deliberate divergence from the
+pattern used elsewhere in the codebase (`Game.spread_home` etc. stay `Float`, out of scope here),
+scoped to money the payout system touches, not a repo-wide conversion.
+
+**Decision:** `Pool.entry_fee` is reused as-is per the product owner's direction rather than
+re-declared: this Phase 1 migration alters its column type from `Float` to `Numeric(10, 2)` in
+place (still nullable, still no hard-coded default) instead of adding a second column.
+
+**Decision:** the API/provider budget visibility fix (hiding "Provider budgets" and feed
+warnings from non-site-admin commissioners on `/admin`) was requested ahead of this build and
+was completed and pushed directly by the product owner as commit f2edba1 on `main`, before this
+branch existed. It is not part of this branch's diff.
+
+**Decision:** this agent does not have `git push` permission (blocked by the harness's own
+permission classifier, independent of anything in this repo) and does not have Render dashboard
+access. Per direction, this build proceeds through every phase including the final local
+`git merge --no-ff` of `payout-settings` into `main` with a green gate, but stops there: the
+actual `git push origin main` and live-deploy verification are done by the product owner
+afterward, not by this agent.
