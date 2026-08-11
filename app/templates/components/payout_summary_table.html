@@ -37,12 +37,17 @@
               {{ row.grand_total | money }} dollars
             </td>
             <td data-label="Paid">
-              <input type="checkbox" class="paid-checkbox"
-                     hx-post="/admin/payouts/player/{{ row.user_id }}/paid"
-                     hx-target="#payout-summary-wrap" hx-swap="outerHTML"
-                     {% if unpaid_only %}hx-vals='{"unpaid": "1"}'{% endif %}
-                     {% if row.unpaid_total == 0 %}checked{% endif %}
-                     aria-label="Mark {{ row.display_name }} paid">
+              {% if row.grand_total == 0 %}
+                <input type="checkbox" class="paid-checkbox" disabled
+                       aria-label="{{ row.display_name }} is not owed anything yet">
+              {% else %}
+                <input type="checkbox" class="paid-checkbox"
+                       hx-post="/admin/payouts/player/{{ row.user_id }}/paid"
+                       hx-target="#payout-summary-wrap" hx-swap="outerHTML"
+                       {% if unpaid_only %}hx-vals='{"unpaid": "1"}'{% endif %}
+                       {% if row.unpaid_total == 0 %}checked{% endif %}
+                       aria-label="Mark {{ row.display_name }} paid">
+              {% endif %}
             </td>
           </tr>
         {% else %}
