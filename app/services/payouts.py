@@ -49,6 +49,7 @@ __all__ = [
     "season_awards",
     "payout_summary",
     "mark_paid",
+    "unmark_paid",
     "recalculate_awards",
     "find_rule",
     "save_rule",
@@ -369,6 +370,22 @@ def mark_paid(db: Session, award_id: int, actor: User) -> PayoutAward:
     if award.paid_at is None:
         award.paid_at = utcnow()
         award.paid_marked_by_user_id = actor.id
+    db.flush()
+    return award
+
+
+def unmark_paid(db: Session, award_id: int) -> PayoutAward:
+    """Clear paid_at/paid_marked_by_user_id back to None, the mirror of mark_paid. Idempotent:
+    calling this on an award that is already unpaid is a harmless no-op that still returns the
+    row without error. Together, mark_paid/unmark_paid are what let the summary page's Paid
+    checkbox (Payout system rebuild, Phase 6) be a real two-way toggle rather than a
+    one-directional stamp: a commissioner who fat-fingers a mark-paid click can undo it."""
+    award = db.get(PayoutAward, award_id)
+    if award is None:
+        raise ValueError(f"No payout award with id {award_id!r}")
+    if award.paid_at is not None:
+        award.paid_at = None
+        award.paid_marked_by_user_id = None
     db.flush()
     return award
 
