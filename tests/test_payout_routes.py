@@ -297,6 +297,18 @@ def test_unknown_scope_is_rejected(client, world, session_factory):
     db.close()
 
 
+def test_unknown_mode_is_rejected(client, world, session_factory):
+    _login(client, "boss@example.com")
+    response = client.post(
+        "/admin/payouts/rule",
+        data={"scope": "weekly", "place": "1", "mode": "bitcoin", "value": "5"},
+    )
+    assert response.status_code == 303
+    db = session_factory()
+    assert db.scalar(select(PayoutRule).where(PayoutRule.pool_id == world["pool_id"])) is None
+    db.close()
+
+
 def test_non_integer_place_is_rejected_by_fastapi(client, world):
     """place is a typed int Form field: FastAPI's own coercion 422s before the route body
     (and therefore before this router's own explicit validation) ever runs."""
