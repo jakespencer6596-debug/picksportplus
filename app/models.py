@@ -3,16 +3,19 @@
 from __future__ import annotations
 
 import datetime as dt
+from decimal import Decimal
 from typing import Any
 
 from sqlalchemy import (
     JSON,
     Boolean,
+    CheckConstraint,
     Date,
     DateTime,
     Float,
     ForeignKey,
     Integer,
+    Numeric,
     String,
     Text,
     UniqueConstraint,
@@ -41,11 +44,25 @@ SPREAD_SOURCES = ("espn", "espn_core", "odds_api", "cfbd", "manual")
 # real rule and the default. "standard": correct picks earn points, highest total wins,
 # kept switchable per pool. See app/scoring.py.
 SCORING_MODES = ("standard", "inverse")
-# Which leaderboard a PayoutRule's place/amount is matched against (Phase 7): "weekly" for
-# an ordinary week's WeeklyRow.rank, "bowl" for a week where Week.is_bowl_week is true
-# (routes there instead of "weekly" even when weekly rules also exist), "season" for
-# StandingRow.rank on the season standings panel. See app/services/payouts.py.
-PAYOUT_SCOPES = ("weekly", "bowl", "season")
+# Which leaderboard a PayoutRule's place/value is matched against (Payout system rebuild):
+# "weekly" for an ordinary week's WeeklyRow.rank (every regular week, not summed across the
+# season), "bowl" for a week where Week.is_bowl_week is true (routes there instead of
+# "weekly" even when weekly rules also exist), "season_points" for the season standings
+# panel ranked by total points, "season_wins" for the same panel ranked by weekly win count
+# instead. See app/payouts.py and app/services/payouts.py.
+PAYOUT_SCOPES = ("weekly", "bowl", "season_points", "season_wins")
+# "amount": PayoutRule.value is a flat dollar figure. "percent": PayoutRule.value is a
+# percentage of the pot (0-100), resolved at read/snapshot time against the pool's
+# effective_pot. See app/payouts.py.resolve_rule.
+PAYOUT_MODES = ("amount", "percent")
+# The unit each resolved share is rounded down to before the leftover remainder is handed
+# out one unit at a time in tiebreak order. See app/payouts.py.allocate.
+PAYOUT_ROUNDINGS = ("cent", "dollar", "five")
+# How a remainder unit (and a tied group's internal order) is broken. Only one rule exists
+# today (earliest WeekEntry.submitted_at first, None sorts last, then user_id), kept as a
+# named, stored setting rather than a hard coded constant so a future tiebreak rule needs no
+# migration to switch a pool onto it.
+PAYOUT_TIEBREAKS = ("earliest_submit",)
 
 # The rivalry pairs (Phase 5) that auto-pin themselves onto every rebuilt slate no matter
 # how wide the spread runs: the two the commissioner group named directly (Ohio State vs
@@ -171,14 +188,29 @@ class Pool(Base):
     timezone: Mapped[str] = mapped_column(String(64), default="America/New_York", nullable=False)
 
     # Venmo entry gate (Phase 7: "Will be Venmo only this year. No Venmo, no participation.").
-    # A plain float, the same convention app/slate.py's spread_home/closeness already use for
-    # a precision-sensitive number in this codebase, rather than introducing SQLAlchemy's
-    # Numeric type for one new area. Every tie split computation rounds to the cent in integer
-    # cents before converting back (see app/services/payouts.py), so float drift never reaches
-    # a stored or displayed amount. Nullable/None until the commissioner sets a real number by
+    # Numeric(10, 2), not Float: the payout system rebuild (see DECISIONS.md, "Payout system")
+    # requires every payout-facing money field to be Decimal end to end, and entry_fee feeds
+    # directly into the payout pot, so it moved off this codebase's older Float-for-money
+    # convention along with it. Nullable/None until the commissioner sets a real number by
     # hand; the house rule is that no dollar figure is ever hard coded, including a fallback
-    # default here. See DECISIONS.md, Phase 7.
-    entry_fee: Mapped[float | None] = mapped_column(Float, nullable=True)
+    # default here.
+    entry_fee: Mapped[Decimal | None] = mapped_column(Numeric(10, 2), nullable=True)
+    # Overrides the computed pot (entry_fee times paid member count) when set, for a
+    # commissioner who wants to hold a reserve, carry over a prior season's balance, or
+    # otherwise declare the real number by hand rather than trusting the count. See
+    # app/services/payouts.py.effective_pot.
+    pot_override: Mapped[Decimal | None] = mapped_column(Numeric(10, 2), nullable=True)
+    # How many regular season weeks the "weekly" payout scope applies to (his real structure:
+    # "Weekly (weeks 1-15)"). A weekly rule resolves to this many separate per-week payouts,
+    # never a single season-long sum. See app/payouts.py.category_total.
+    weekly_payout_weeks: Mapped[int] = mapped_column(Integer, default=15, nullable=False)
+    # PAYOUT_ROUNDINGS: the unit each resolved payout share rounds down to before the leftover
+    # remainder is distributed one unit at a time. See app/payouts.py.allocate.
+    payout_rounding: Mapped[str] = mapped_column(String(8), default="dollar", nullable=False)
+    # PAYOUT_TIEBREAKS: how a remainder unit and a tied group's internal order are broken.
+    payout_tiebreak: Mapped[str] = mapped_column(
+        String(16), default="earliest_submit", nullable=False
+    )
     # The single collector's Venmo handle (no @), "1 person to pay, no multiple accounts" per
     # the group. PoolMember.member_venmo_handle (below) is a different thing: an optional note
     # for the commissioner's own reconciliation, never a second place to pay.
@@ -209,6 +241,13 @@ class Pool(Base):
     )
     weeks: Mapped[list[Week]] = relationship(back_populates="pool", cascade="all, delete-orphan")
     payout_rules: Mapped[list[PayoutRule]] = relationship(
+        back_populates="pool", cascade="all, delete-orphan"
+    )
+    # ORM-level cascade, matching payout_rules above: needed so deleting a Pool through the
+    # session removes its awards even on a SQLite connection without PRAGMA foreign_keys=ON
+    # (the DB-level ON DELETE CASCADE on payout_awards.pool_id is a second, independent
+    # safety net, not the only mechanism this relies on).
+    payout_awards: Mapped[list[PayoutAward]] = relationship(
         back_populates="pool", cascade="all, delete-orphan"
     )
 
@@ -497,30 +536,107 @@ class WeekEntry(Base):
 
 
 class PayoutRule(Base):
-    """One place's dollar amount for one payout scope (Phase 7).
+    """One place's dollar-or-percent value for one payout scope (Payout system rebuild).
 
-    "There was a payout column that determined the amount due each user. In settings we
-    determined what #1, 2, 3, 4 received each week, for the special Bowl Week, and end of
-    season awards." Ships with zero rows for every pool, always: the commissioner enters every
-    real number by hand from /admin/settings, never a seeded or hard coded figure (see
-    DECISIONS.md, Phase 7, and the Phase 0 configuration note this restates). Matched against
-    rank at read time (app/services/payouts.py), never stored against a specific week or
-    player, so the same weekly structure applies to every week without re-entering it.
+    "This will be done manually, so if there's a way in settings to Set Payouts for weekly,
+    bowl week, season points, and season wins... it's a function of total $$ pool." Ships with
+    zero rows for every pool, always: the commissioner enters every real number by hand from
+    /admin/payouts, never a seeded or hard coded figure (see DECISIONS.md, "Payout system").
+    Matched against rank at read time (app/payouts.py, app/services/payouts.py), never stored
+    against a specific week or player itself, so the same structure applies to every week
+    without re-entering it; PayoutAward below is the frozen, per-week/per-player result.
+
+    This replaces the earlier, simpler payout_rules table (float amount, three scopes, no
+    percent mode). Production had zero real rows in the old shape, so this is a clean rebuild,
+    not a migration of old rows into the new shape; see DECISIONS.md, "Payout system", Phase 0.
     """
 
     __tablename__ = "payout_rules"
+    __table_args__ = (
+        UniqueConstraint("pool_id", "scope", "place", name="uq_payout_rule_pool_scope_place"),
+        CheckConstraint("place >= 1", name="ck_payout_rule_place_positive"),
+        CheckConstraint("value >= 0", name="ck_payout_rule_value_non_negative"),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     pool_id: Mapped[int] = mapped_column(
         ForeignKey("pools.id", ondelete="CASCADE"), index=True, nullable=False
     )
     scope: Mapped[str] = mapped_column(String(16), nullable=False)  # PAYOUT_SCOPES
-    place: Mapped[int] = mapped_column(Integer, nullable=False)  # 1 based, 1 is first
-    # Same float convention as Pool.entry_fee, see its comment.
-    amount: Mapped[float] = mapped_column(Float, nullable=False)
-    label: Mapped[str | None] = mapped_column(String(120), nullable=True)  # "1st place", optional
+    place: Mapped[int] = mapped_column(Integer, nullable=False)  # 1 based, 1 is first, no cap
+    mode: Mapped[str] = mapped_column(String(8), nullable=False)  # PAYOUT_MODES
+    # Dollars when mode == "amount", a percentage (0-100) of the pot when mode == "percent".
+    # Numeric(12, 4): headroom for a percent value like 2.1234 without ever needing float math.
+    value: Mapped[Decimal] = mapped_column(Numeric(12, 4), nullable=False)
+    label: Mapped[str | None] = mapped_column(String(60), nullable=True)  # "1st place", optional
+    created_at: Mapped[dt.datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, server_default=func.now(), nullable=False
+    )
+    updated_at: Mapped[dt.datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=utcnow,
+        server_default=func.now(),
+        onupdate=utcnow,
+        nullable=False,
+    )
 
     pool: Mapped[Pool] = relationship(back_populates="payout_rules")
+
+
+class PayoutAward(Base):
+    """A frozen, resolved payout, written once a week (or the season) is fully scored (Payout
+    system rebuild). Percent-mode payouts resolve against the pot, and the pot can grow after
+    the fact (a member pays late), so re-resolving a past week live would silently change a
+    figure the commissioner may have already paid out over Venmo. This table is the fix: it
+    freezes the resolved dollar amount, the pot it was computed against, and the rule in force
+    at that moment, the instant a week (or the season) finishes scoring. All display of a past
+    payout reads this table; only the current, still-unfinished week/season may show a live,
+    unsaved projection, clearly labeled "Projected". See app/services/payouts.py.
+    """
+
+    __tablename__ = "payout_awards"
+    __table_args__ = (
+        UniqueConstraint(
+            "pool_id", "scope", "week_id", "user_id", name="uq_payout_award_pool_scope_week_user"
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    pool_id: Mapped[int] = mapped_column(
+        ForeignKey("pools.id", ondelete="CASCADE"), index=True, nullable=False
+    )
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), index=True, nullable=False
+    )
+    scope: Mapped[str] = mapped_column(String(16), nullable=False)  # PAYOUT_SCOPES
+    # Null for the two season scopes; set for weekly/bowl. Cascade deletes the award if the
+    # week itself is ever deleted (a rebuild-from-scratch scenario), rather than orphaning it.
+    week_id: Mapped[int | None] = mapped_column(
+        ForeignKey("weeks.id", ondelete="CASCADE"), index=True, nullable=True
+    )
+    place: Mapped[int] = mapped_column(Integer, nullable=False)
+    # How many players shared this exact place (a tie). 1 when this player finished alone.
+    tied_with: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+    amount: Mapped[Decimal] = mapped_column(Numeric(10, 2), nullable=False)
+    pot_at_award: Mapped[Decimal] = mapped_column(Numeric(10, 2), nullable=False)
+    rule_mode: Mapped[str] = mapped_column(String(8), nullable=False)  # PAYOUT_MODES
+    rule_value: Mapped[Decimal] = mapped_column(Numeric(12, 4), nullable=False)
+    awarded_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    # Set only when recalculate_awards overwrites a prior snapshot by hand, an explicit,
+    # confirmed admin action, never an automatic side effect of scoring running again.
+    recalculated_at: Mapped[dt.datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    recalculated_by_user_id: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    paid_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    paid_marked_by_user_id: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+
+    pool: Mapped[Pool] = relationship(back_populates="payout_awards")
+    user: Mapped[User] = relationship(foreign_keys=[user_id])
 
 
 class ContactSubmission(Base):

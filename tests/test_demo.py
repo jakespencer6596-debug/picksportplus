@@ -189,11 +189,17 @@ def test_demo_payout_rules_are_seeded_and_labelled_as_demo(db):
     pool = _pool(db)
 
     rules = list(db.scalars(select(PayoutRule).where(PayoutRule.pool_id == pool.id)))
-    weekly = [r for r in rules if r.scope == "weekly"]
-    season = [r for r in rules if r.scope == "season"]
-    assert len(weekly) == 3
-    assert len(season) == 2
+    by_scope = {
+        scope: [r for r in rules if r.scope == scope]
+        for scope in ("weekly", "bowl", "season_points", "season_wins")
+    }
+    assert len(by_scope["weekly"]) == 3
+    assert len(by_scope["bowl"]) == 3
+    assert len(by_scope["season_points"]) == 3
+    assert len(by_scope["season_wins"]) == 3
+    assert all(r.mode == "amount" for r in rules)
     assert all("(demo)" in (r.label or "") for r in rules)
+    assert pool.weekly_payout_weeks == 15
 
 
 def test_every_demo_member_is_marked_paid(db):

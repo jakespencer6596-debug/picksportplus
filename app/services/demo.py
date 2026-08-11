@@ -31,6 +31,7 @@ import datetime as dt
 import json
 import random
 from dataclasses import dataclass
+from decimal import Decimal
 from pathlib import Path
 
 from sqlalchemy import delete, func, select
@@ -123,16 +124,23 @@ OPEN_WEEK_LABEL = "Week 7"
 OPEN_WEEK_LOCK_DAYS_AHEAD = 7
 
 # Demo payout figures. Clearly labelled as demo amounts everywhere they render; no real money
-# changes hands in this pool. See DECISIONS.md, Phase 9, and app/models.py's PayoutRule
-# docstring for why the real production pool ships with none of these at all.
-DEMO_ENTRY_FEE = 20.0
+# changes hands in this pool. See DECISIONS.md, "Payout system", and app/models.py's
+# PayoutRule docstring for why the real production pool ships with none of these at all.
+# The ladder mirrors the commissioner's own real structure (Payout system rebuild brief) so
+# the demo shows something recognisable: weekly 105/55/25, bowl 250/100/50, season points
+# 600/405/150, season wins 325/185/110. render.yaml's free demo service re-seeds this on
+# every restart (ephemeral disk), which is exactly why this seed must not be skipped: see
+# README.md's Render section.
+DEMO_ENTRY_FEE = Decimal("20.00")
 DEMO_VENMO_HANDLE = "picksportplus-demo"
 DEMO_PAYMENT_NOTE = (
     "Demo pool: no real money changes hands. This entry fee and Venmo handle exist only to "
     "demonstrate the payment gate and the payout column."
 )
-DEMO_WEEKLY_PAYOUTS = {1: 20.0, 2: 10.0, 3: 5.0}
-DEMO_SEASON_PAYOUTS = {1: 60.0, 2: 30.0}
+DEMO_WEEKLY_PAYOUTS = {1: Decimal("105"), 2: Decimal("55"), 3: Decimal("25")}
+DEMO_BOWL_PAYOUTS = {1: Decimal("250"), 2: Decimal("100"), 3: Decimal("50")}
+DEMO_SEASON_POINTS_PAYOUTS = {1: Decimal("600"), 2: Decimal("405"), 3: Decimal("150")}
+DEMO_SEASON_WINS_PAYOUTS = {1: Decimal("325"), 2: Decimal("185"), 3: Decimal("110")}
 
 
 def _load(name: str):
@@ -271,29 +279,34 @@ def _mark_everyone_paid(db: Session, pool: Pool, users: list[User], out: list[st
 
 def _seed_payout_rules(db: Session, pool: Pool, out: list[str]) -> None:
     """A real, clearly-labelled-as-demo payout structure, so the payout column and the season
-    awards panel have something to show. The real production pool ships with zero rows here;
-    see app/models.py's PayoutRule docstring and DECISIONS.md, Phase 7 and Phase 9."""
+    award panels have something to show. The real production pool ships with zero rows here;
+    see app/models.py's PayoutRule docstring and DECISIONS.md, "Payout system"."""
+    scopes = (
+        ("weekly", DEMO_WEEKLY_PAYOUTS),
+        ("bowl", DEMO_BOWL_PAYOUTS),
+        ("season_points", DEMO_SEASON_POINTS_PAYOUTS),
+        ("season_wins", DEMO_SEASON_WINS_PAYOUTS),
+    )
+    ordinal_labels = {1: "1st place", 2: "2nd place", 3: "3rd place"}
     rules = [
         PayoutRule(
-            pool_id=pool.id, scope="weekly", place=place, amount=amount, label=f"{label} (demo)"
+            pool_id=pool.id,
+            scope=scope,
+            place=place,
+            mode="amount",
+            value=amount,
+            label=f"{ordinal_labels[place]} (demo)",
         )
-        for place, amount, label in (
-            (1, DEMO_WEEKLY_PAYOUTS[1], "1st place"),
-            (2, DEMO_WEEKLY_PAYOUTS[2], "2nd place"),
-            (3, DEMO_WEEKLY_PAYOUTS[3], "3rd place"),
-        )
-    ] + [
-        PayoutRule(
-            pool_id=pool.id, scope="season", place=place, amount=amount, label=f"{label} (demo)"
-        )
-        for place, amount, label in (
-            (1, DEMO_SEASON_PAYOUTS[1], "Season champion"),
-            (2, DEMO_SEASON_PAYOUTS[2], "Season runner up"),
-        )
+        for scope, amounts in scopes
+        for place, amount in amounts.items()
     ]
     db.add_all(rules)
+    pool.weekly_payout_weeks = 15
     db.flush()
-    out.append("Seeded demo payout rules: weekly 1st/2nd/3rd and season 1st/2nd, all demo figures.")
+    out.append(
+        "Seeded demo payout rules: weekly, bowl, season points, and season wins, "
+        "all demo figures."
+    )
 
 
 def _load_real_games(

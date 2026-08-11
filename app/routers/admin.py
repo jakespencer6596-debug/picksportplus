@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import datetime as dt
 import re
+from decimal import Decimal, InvalidOperation
 
 from fastapi import APIRouter, Depends, Form, HTTPException, Request, status
 from fastapi.responses import RedirectResponse
@@ -46,10 +47,8 @@ from app.auth import (
 from app.config import Settings, settings
 from app.db import get_db
 from app.models import (
-    PAYOUT_SCOPES,
     SCORING_MODES,
     Game,
-    PayoutRule,
     Pick,
     PoolMember,
     User,
@@ -60,13 +59,11 @@ from app.providers.http import provider_warnings, usage_report
 from app.providers.teams import canonical_key, display_name
 from app.routers.leagues import _fresh_commissioner_invite_code
 from app.services import ingest
-from app.services import payouts as payout_service
 from app.templating import get_zone, render
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 
 LEAGUE_LABELS = {"nfl": "NFL", "ncaaf": "College"}
-PAYOUT_SCOPE_LABELS = {"weekly": "Weekly", "bowl": "Bowl week", "season": "Season awards"}
 
 
 def _redirect(target: str = "/admin") -> RedirectResponse:
@@ -257,51 +254,6 @@ def switch_league(
 # Pool settings --------------------------------------------------------------
 
 
-def _payout_rules_by_scope(db: Session, pool: Pool) -> dict[str, list[PayoutRule]]:
-    rows = list(
-        db.scalars(
-            select(PayoutRule)
-            .where(PayoutRule.pool_id == pool.id)
-            .order_by(PayoutRule.scope, PayoutRule.place)
-        )
-    )
-    return {scope: [r for r in rows if r.scope == scope] for scope in PAYOUT_SCOPES}
-
-
-def _pot_totals(db: Session, pool: Pool) -> dict:
-    """Collected (paid members times the real entry fee) versus allocated (every PayoutRule
-    amount, every scope, summed). Warn-only, per the brief: a commissioner may deliberately
-    hold back a reserve, or write payout rules before everyone has paid, so this never blocks
-    a save, it only informs the banner on /admin/settings."""
-    member_count = (
-        db.scalar(select(func.count(PoolMember.id)).where(PoolMember.pool_id == pool.id)) or 0
-    )
-    paid_count = (
-        db.scalar(
-            select(func.count(PoolMember.id)).where(
-                PoolMember.pool_id == pool.id, PoolMember.paid_at.isnot(None)
-            )
-        )
-        or 0
-    )
-    collected = (pool.entry_fee or 0.0) * paid_count
-    allocated = (
-        db.scalar(
-            select(func.coalesce(func.sum(PayoutRule.amount), 0.0)).where(
-                PayoutRule.pool_id == pool.id
-            )
-        )
-        or 0.0
-    )
-    return {
-        "member_count": member_count,
-        "paid_count": paid_count,
-        "collected": collected,
-        "allocated": allocated,
-        "balanced": abs(collected - allocated) < 0.005,
-    }
-
-
 @router.get("/settings")
 def settings_page(
     request: Request,
@@ -326,10 +278,6 @@ def settings_page(
                 "America/Phoenix",
                 "UTC",
             ],
-            "payout_scopes": PAYOUT_SCOPES,
-            "payout_scope_labels": PAYOUT_SCOPE_LABELS,
-            "payout_rules_by_scope": _payout_rules_by_scope(db, pool),
-            "pot": _pot_totals(db, pool),
         },
         **_base(db, user, pool),
     )
@@ -400,12 +348,12 @@ def settings_save(
     else:
         anchor_date = None
 
-    fee_value: float | None
+    fee_value: Decimal | None
     entry_fee = entry_fee.strip()
     if entry_fee:
         try:
-            fee_value = float(entry_fee)
-        except ValueError:
+            fee_value = Decimal(entry_fee)
+        except InvalidOperation:
             errors.append("Entry fee must be a number.")
             fee_value = None
         else:
@@ -455,82 +403,10 @@ def settings_save(
     return _redirect("/admin/settings")
 
 
-# Payout rules -----------------------------------------------------------------
-# Ships with zero rows for every pool, always: the commissioner enters every real number here
-# by hand later (Phase 9's demo data is the one deliberate exception, and it is not this
-# router). Add/remove only, no in place edit: fixing a typo is a remove and a re-add, which
-# keeps this to the two routes the brief actually asks for.
-
-
-@router.post("/payouts/rule")
-def payout_rule_add(
-    request: Request,
-    scope: str = Form(...),
-    place: int = Form(...),
-    amount: str = Form(...),
-    label: str = Form(""),
-    db: Session = Depends(get_db),
-    user: User = Depends(require_user),
-    pool: Pool = Depends(require_commissioner),
-):
-    if scope not in PAYOUT_SCOPES:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Unknown payout scope.")
-    if place < 1:
-        flash(request, "Place must be 1 or higher.", "error")
-        return _redirect("/admin/settings")
-    try:
-        amount_value = float(amount)
-    except ValueError:
-        flash(request, "Payout amount must be a number.", "error")
-        return _redirect("/admin/settings")
-    if amount_value < 0:
-        flash(request, "Payout amount cannot be negative.", "error")
-        return _redirect("/admin/settings")
-
-    db.add(
-        PayoutRule(
-            pool_id=pool.id,
-            scope=scope,
-            place=place,
-            amount=amount_value,
-            label=label.strip() or None,
-        )
-    )
-    db.commit()
-    flash(request, f"{PAYOUT_SCOPE_LABELS.get(scope, scope)} payout rule added.")
-    return _redirect("/admin/settings")
-
-
-@router.post("/payouts/rule/{rule_id}/remove")
-def payout_rule_remove(
-    request: Request,
-    rule_id: int,
-    db: Session = Depends(get_db),
-    user: User = Depends(require_user),
-    pool: Pool = Depends(require_commissioner),
-):
-    rule = db.get(PayoutRule, rule_id)
-    if rule is None or rule.pool_id != pool.id:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "That payout rule is not part of this pool.")
-    db.delete(rule)
-    db.commit()
-    flash(request, "Payout rule removed.")
-    return _redirect("/admin/settings")
-
-
-@router.get("/payouts")
-def payouts_page(
-    request: Request,
-    db: Session = Depends(get_db),
-    user: User = Depends(require_user),
-    pool: Pool = Depends(require_commissioner),
-):
-    return render(
-        request,
-        "admin/payouts.html",
-        {"summary": payout_service.payout_summary(db, pool)},
-        **_base(db, user, pool),
-    )
+# Payout rules live in app/routers/payouts.py now (the Set Payouts screen at /admin/payouts:
+# four scopes, dollar-or-percent modes, a pot with an override, and frozen award snapshots).
+# The old add/remove-only, float, three-scope routes that used to live here are gone; see
+# DECISIONS.md, "Payout system".
 
 
 @router.post("/join-code")

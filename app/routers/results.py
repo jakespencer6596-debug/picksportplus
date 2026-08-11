@@ -22,7 +22,6 @@ from app.models import Game, Pick, Pool, PoolMember, User, Week, WeekEntry
 from app.routers.picks import week_is_locked
 from app.scenarios import PlayerScenarioOutlook, RepresentativeScenario
 from app.scoring import GameOutcome, PickInput, score_pick
-from app.services import payouts as payout_service
 from app.services import scenarios as scenario_service
 from app.services.standings import weekly_leaderboard
 from app.templating import render
@@ -198,17 +197,9 @@ def results_page(
             # matches whichever week the switcher has selected, not always the latest.
             weekly, _ = weekly_leaderboard(db, pool, week=row, viewer_id=user.id)
 
-            # The payout column only shows once every countable game has stopped being
-            # playable (Phase 7), reusing the same "week is complete" notion
-            # score_week_for_pool already uses, and only when the pool actually wrote
-            # payout rules for the relevant scope: a bowl week always routes to "bowl"
-            # rules, never "weekly", even when weekly rules also exist for the pool.
-            if payout_service.week_is_complete(games):
-                payout_scope = payout_service.week_payout_scope(row)
-                rules = payout_service.rules_by_place(db, pool, payout_scope)
-                if rules:
-                    payout_rules_exist = True
-                    payouts_by_user = payout_service.weekly_payouts(db, row, weekly, rules)
+            # The payout column is rebuilt on the new payout engine in
+            # app/services/payouts.py; wired back in here once that lands. See
+            # DECISIONS.md, "Payout system".
 
             # Scenarios panel (Phase 8). Leverage and representative scenarios are computed
             # only for the signed in viewer (see week_scenario_panel's representative_for),

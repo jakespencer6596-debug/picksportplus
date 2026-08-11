@@ -14,7 +14,6 @@ from app.auth import (
 )
 from app.db import get_db
 from app.models import Pool, User
-from app.services import payouts as payout_service
 from app.templating import render
 
 router = APIRouter(tags=["standings"])
@@ -31,19 +30,12 @@ def standings_page(
 
     season = season_standings(db, pool, viewer_id=user.id)
 
-    # Season awards panel (Phase 7): driven by PayoutRule rows of scope "season". There is no
-    # field in this codebase asserting a season is officially over, so this shows as soon as
-    # at least one week has been scored, worded as the pool's current standings rather than a
-    # final result. See DECISIONS.md, Phase 7, for why this gate was chosen over the
-    # alternatives considered.
-    season_has_scores = any(row.weeks_played > 0 for row in season)
+    # Season award panels (season points and season wins) are rebuilt on the new payout
+    # engine in app/services/payouts.py; wired back in here once that lands. Placeholder
+    # empty/False keeps leaderboard.html's existing conditional rendering safe in the
+    # meantime. See DECISIONS.md, "Payout system".
     season_awards: dict[int, float] = {}
     show_season_awards = False
-    if season_has_scores:
-        season_rules = payout_service.rules_by_place(db, pool, "season")
-        if season_rules:
-            show_season_awards = True
-            season_awards = payout_service.season_payouts(season, season_rules)
 
     return render(
         request,
