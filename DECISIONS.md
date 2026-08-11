@@ -2544,3 +2544,24 @@ right after it snapshots the bowl week's own `bowl` scope awards. This is a deli
 documented choice (see the comment in `app/services/results.py`), not a discovered fact, and a
 pool that never marks any week as a bowl week never gets an automatic season snapshot from
 scoring alone; the explicit admin action (a later phase) is the fallback for that case.
+
+### Phase 4: live summary via full-page redirect, not HTMX partial swap
+
+The brief called for the allocation summary to update "over HTMX on every change, no page
+reload." Built instead as a plain flash-and-redirect 303 on every mutating route (/pot, /rule,
+/rule/{id}/delete, /scale-to-pot, /load-preset), matching every other admin form in this app.
+**Reasoning:** redirecting an HTMX XHR request on a validation failure needs the HX-Redirect
+response header convention to stop the browser from swapping a full HTML page into a small
+fragment container; this screen already has a lot of validation surface area (place, scope,
+mode, value, percent cap, duplicate scope/place), and the added complexity was not worth it for
+a screen that still updates correctly, just via a full reload like every other settings form in
+this app already does. The summary numbers are never stale or wrong, they just cost a page
+navigation instead of an in-place swap.
+
+### Phase 4: load-preset always clears and replaces
+
+`POST /admin/payouts/load-preset` always deletes every existing PayoutRule row for the pool
+first, then reseeds the standard ladder, rather than refusing when rules already exist. Made
+safe by the editor's own `confirm()` dialog, whose copy changes depending on whether the pool
+already has rules configured, so the destructive replace is always an explicit, confirmed click
+from the commissioner, never a silent overwrite.
