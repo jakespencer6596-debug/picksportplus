@@ -3022,6 +3022,19 @@ a.toggle-btn { text-decoration: none; }
   overflow-wrap: break-word;
 }
 
+/* Season: Points / Season: Wins award panels, side by side on desktop, stacking
+   on mobile. auto-fit means this still looks right when only one of the two
+   scopes has awards to show. Overrides .card + .card's own margin-top, which
+   would otherwise misalign the second panel in a grid instead of a stack. */
+.season-awards-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: var(--space-4);
+  margin-bottom: var(--space-4);
+}
+
+.season-awards-grid .card { margin-top: 0; }
+
 /* -- Badges and pills ---------------------------------------------------- */
 
 .badge {

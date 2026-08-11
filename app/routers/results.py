@@ -6,6 +6,7 @@ app/routers/leaderboard.py."""
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from decimal import Decimal
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy import select
@@ -22,6 +23,7 @@ from app.models import Game, Pick, Pool, PoolMember, User, Week, WeekEntry
 from app.routers.picks import week_is_locked
 from app.scenarios import PlayerScenarioOutlook, RepresentativeScenario
 from app.scoring import GameOutcome, PickInput, score_pick
+from app.services import payouts as payout_service
 from app.services import scenarios as scenario_service
 from app.services.standings import weekly_leaderboard
 from app.templating import render
@@ -168,9 +170,10 @@ def results_page(
     columns: list[PlayerColumn] = []
     revealed = False
     weekly = []
-    payouts_by_user: dict[int, float] = {}
+    payouts_by_user: dict[int, Decimal] = {}
     payout_rules_exist = False
     payout_scope: str | None = None
+    payout_is_projected = False
     scenario_panel = None
     leverage_lines: list[LeverageLine] = []
     representative_lines: list[RepresentativeLine] = []
@@ -197,9 +200,31 @@ def results_page(
             # matches whichever week the switcher has selected, not always the latest.
             weekly, _ = weekly_leaderboard(db, pool, week=row, viewer_id=user.id)
 
-            # The payout column is rebuilt on the new payout engine in
-            # app/services/payouts.py; wired back in here once that lands. See
-            # DECISIONS.md, "Payout system".
+            # The payout column, rebuilt on the new payout engine in app/services/payouts.py
+            # (Payout system rebuild, Phase 5). Weekly and bowl share one week_id space, so
+            # awards_for_week/project_awards are always filtered to the one scope that
+            # actually governs this specific week rather than assumed.
+            payout_scope = "bowl" if row.is_bowl_week else "weekly"
+            if row.status == "scored":
+                # Final: the frozen numbers already written by the Phase 3 scoring hook.
+                # Read-only, never recomputed here.
+                awards = payout_service.awards_for_week(db, pool, row)
+                payouts_by_user = {
+                    award.user_id: award.amount for award in awards if award.scope == payout_scope
+                }
+                payout_rules_exist = bool(payouts_by_user) or bool(
+                    payout_service.load_rules(db, pool, scope=payout_scope)
+                )
+            else:
+                # Locked but still live: the week has not finished scoring, so there is no
+                # frozen row yet. Compute a live, unsaved projection instead, clearly flagged
+                # so the template can label it "Projected" rather than presenting it as final.
+                rules = payout_service.load_rules(db, pool, scope=payout_scope)
+                if rules:
+                    payout_rules_exist = True
+                    payout_is_projected = True
+                    projected = payout_service.project_awards(db, pool, payout_scope, week=row)
+                    payouts_by_user = {award.user_id: award.amount for award in projected}
 
             # Scenarios panel (Phase 8). Leverage and representative scenarios are computed
             # only for the signed in viewer (see week_scenario_panel's representative_for),
@@ -232,6 +257,7 @@ def results_page(
             "payouts_by_user": payouts_by_user,
             "payout_rules_exist": payout_rules_exist,
             "payout_scope": payout_scope,
+            "payout_is_projected": payout_is_projected,
             "scenario_panel": scenario_panel,
             "probability_model": model,
             "leverage_lines": leverage_lines,

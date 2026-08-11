@@ -142,47 +142,102 @@
 
 {% if show_season_awards %}
   <section class="section" aria-labelledby="season-awards-title">
-    <h2 class="section-title" id="season-awards-title">Season awards, as it stands</h2>
+    <h2 class="section-title" id="season-awards-title">Season awards</h2>
     <p class="muted">
-      Based on the current standings above, not a final result: the season is not marked over
-      anywhere in this tool, so this panel simply applies the season payout rules from Settings
-      to today's ranks. It will keep moving until the last week is scored.
+      Frozen once each season scope finishes scoring. These are real, final amounts, not a
+      live projection: a scope with nothing here yet simply has not been finalized.
     </p>
-    <div class="table-wrap">
-      <table class="table">
-        <caption class="visually-hidden">Season award amounts, matched against the current season rank.</caption>
-        <thead>
-          <tr>
-            <th scope="col">Rank</th>
-            <th scope="col">Player</th>
-            <th scope="col" class="num">Award</th>
-          </tr>
-        </thead>
-        <tbody>
-          {% for row in season %}
-            {% set amount = season_awards.get(row.user_id) %}
-            {% if amount %}
-              {% set you = row.is_you or (me is not none and row.user_id == me) %}
-              <tr class="lb-row{{ ' is-you' if you }}">
-                <td data-label="Rank">
-                  <span class="rank-badge num{% if row.rank <= 3 %} is-{{ row.rank }}{% endif %}">{{ row.rank }}</span>
-                </td>
-                <td data-label="Player">
-                  <span class="lb-name">
-                    <span class="lb-player">{{ row.display_name }}</span>
-                    {% if you %}<span class="pill pill-you">You</span>{% endif %}
-                  </span>
-                </td>
-                <td class="num" data-label="Award">{{ amount | money }} dollars</td>
-              </tr>
-            {% endif %}
-          {% endfor %}
-        </tbody>
-      </table>
+    <div class="season-awards-grid">
+      {% if season_points_awards %}
+        <div class="card">
+          <div class="card-head"><h3>Season: Points</h3></div>
+          <div class="card-body">
+            <div class="table-wrap">
+              <table class="table">
+                <caption class="visually-hidden">
+                  Season points award amounts, matched against the final season rank.
+                </caption>
+                <thead>
+                  <tr>
+                    <th scope="col">Rank</th>
+                    <th scope="col">Player</th>
+                    <th scope="col" class="num">Award</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {% for row in season %}
+                    {% set amount = season_points_awards.get(row.user_id) %}
+                    {% if amount %}
+                      {% set you = row.is_you or (me is not none and row.user_id == me) %}
+                      <tr class="lb-row{{ ' is-you' if you }}">
+                        <td data-label="Rank">
+                          <span class="rank-badge num{% if amount.place <= 3 %} is-{{ amount.place }}{% endif %}">{{ amount.place }}</span>
+                        </td>
+                        <td data-label="Player">
+                          <span class="lb-name">
+                            <span class="lb-player">{{ row.display_name }}</span>
+                            {% if you %}<span class="pill pill-you">You</span>{% endif %}
+                          </span>
+                        </td>
+                        <td class="num" data-label="Award">{{ amount.amount | money }} dollars</td>
+                      </tr>
+                    {% endif %}
+                  {% endfor %}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      {% endif %}
+
+      {% if season_wins_awards_ordered %}
+        <div class="card">
+          <div class="card-head"><h3>Season: Wins</h3></div>
+          <div class="card-body">
+            <div class="table-wrap">
+              <table class="table">
+                <caption class="visually-hidden">
+                  Season wins award amounts, ordered by place.
+                </caption>
+                <thead>
+                  <tr>
+                    <th scope="col">Rank</th>
+                    <th scope="col">Player</th>
+                    <th scope="col" class="num">Award</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {# This page has no wins-ranked StandingRow list to iterate (season is ranked
+                     by points), so display order here comes straight from each frozen award's
+                     own place field: Phase 2's allocation engine already ranked these players
+                     by weekly win count when it resolved the amounts, so re-deriving that
+                     ranking a second time here would be redundant. Only the ORDER on screen
+                     is decided this way, never the amount. #}
+                  {% for amount in season_wins_awards_ordered %}
+                    {% set you = me is not none and amount.user_id == me %}
+                    <tr class="lb-row{{ ' is-you' if you }}">
+                      <td data-label="Rank">
+                        <span class="rank-badge num{% if amount.place <= 3 %} is-{{ amount.place }}{% endif %}">{{ amount.place }}</span>
+                      </td>
+                      <td data-label="Player">
+                        <span class="lb-name">
+                          <span class="lb-player">{{ member_names.get(amount.user_id, "Former member") }}</span>
+                          {% if you %}<span class="pill pill-you">You</span>{% endif %}
+                        </span>
+                      </td>
+                      <td class="num" data-label="Award">{{ amount.amount | money }} dollars</td>
+                    </tr>
+                  {% endfor %}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      {% endif %}
     </div>
     <p class="muted lb-note">
       A tie splits the combined amount for those places evenly, to the cent; any leftover cent
-      goes to whoever sits earlier in the standings' own tiebreak order above.
+      goes to whoever submitted their picks earliest.
     </p>
   </section>
 {% endif %}
