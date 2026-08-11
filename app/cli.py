@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import datetime as dt
 import logging
+from decimal import Decimal
 from pathlib import Path
 
 import typer
@@ -15,7 +16,7 @@ from sqlalchemy import func, select
 
 from app.config import settings
 from app.db import engine, session_scope
-from app.models import Base, Pool, User, Week
+from app.models import PAYOUT_SCOPES, Base, Pool, User, Week
 from app.providers import espn
 from app.providers.http import usage_report
 
@@ -424,6 +425,199 @@ def usage_cmd() -> None:
                 _echo(f"{'':<22} last error: {row['last_error']}")
     _echo("")
     _echo("ESPN is keyless and unmetered. Schedules and scores never spend credits.")
+
+
+# Payouts ----------------------------------------------------------------------
+
+
+def _dollars(value: Decimal) -> str:
+    return f"${value:,.2f}"
+
+
+@app.command("payouts-show")
+def payouts_show_cmd(
+    scope: str | None = typer.Option(
+        None, "--scope", "-s", help="Restrict to one payout scope. Shows all four when omitted."
+    ),
+    pool_id: int | None = typer.Option(None, "--pool"),
+    year: int | None = typer.Option(
+        None,
+        "--year",
+        "-y",
+        help=(
+            "Accepted for symmetry with the other payout commands. Payout rules and the pot "
+            "are pool wide, not year scoped, so this has no effect on the output."
+        ),
+    ),
+) -> None:
+    """Print the current payout ladder and allocation summary against the effective pot.
+
+    Read only, writes nothing. Safe to run at any time, as often as you like, matching this
+    file's own guarantee that every command here is idempotent.
+    """
+    from app.payouts import allocation_summary
+    from app.services.payouts import effective_pot, load_rules
+
+    del year  # See the --year help text: payout rules and the pot are not year scoped.
+
+    if scope is not None and scope not in PAYOUT_SCOPES:
+        raise typer.Exit(
+            code=_fail(f"Unknown scope {scope!r}. Choose one of: {', '.join(PAYOUT_SCOPES)}.")
+        )
+
+    with session_scope() as db:
+        pool = _resolve_pool(db, pool_id)
+        pool_name, pool_ref = pool.name, pool.id
+        rules = load_rules(db, pool)
+        pot = effective_pot(db, pool)
+        weekly_weeks = pool.weekly_payout_weeks
+        summary = allocation_summary(rules, pot=pot, weekly_weeks=weekly_weeks)
+
+    scopes_to_show = [scope] if scope else list(PAYOUT_SCOPES)
+
+    _echo(f"Payouts for {pool_name} (id {pool_ref})")
+    _echo(f"Pot: {_dollars(pot)}")
+    _echo("")
+    for scope_name in scopes_to_show:
+        scope_summary = summary.scopes[scope_name]
+        _echo(scope_name)
+        if not scope_summary.places:
+            _echo("  (no rules configured)")
+        else:
+            for place in sorted(scope_summary.places):
+                _echo(f"  place {place}: {_dollars(scope_summary.places[place])}")
+        weeks_note = f" over {weekly_weeks} weeks" if scope_name == "weekly" else ""
+        _echo(
+            f"  category total{weeks_note}: {_dollars(scope_summary.category_total)} "
+            f"({scope_summary.percent_of_pot:.2f}% of pot)"
+        )
+        _echo("")
+
+    _echo(f"Grand total : {_dollars(summary.grand_total)}")
+    _echo(f"Pot         : {_dollars(summary.pot)}")
+    _echo(f"Unallocated : {_dollars(summary.unallocated)}")
+
+
+@app.command("payouts-preset")
+def payouts_preset_cmd(
+    pool_id: int | None = typer.Option(None, "--pool"),
+) -> None:
+    """Replace every payout rule for a pool with the known preset ladder.
+
+    Idempotent and safe to re-run: load_preset (app/services/payouts.py) always clears and
+    reseeds the same 12 rows first, so running this command twice in a row reseeds the
+    identical ladder both times, never raising and never duplicating a row.
+    """
+    from app.services.payouts import load_preset
+
+    with session_scope() as db:
+        pool = _resolve_pool(db, pool_id)
+        pool_name = pool.name
+        count = load_preset(db, pool)
+    _echo(f"Seeded {count} payout rules for {pool_name} from the preset ladder.")
+
+
+@app.command("payouts-snapshot")
+def payouts_snapshot_cmd(
+    scope: str = typer.Option(..., "--scope", "-s", help="Which payout scope to snapshot."),
+    week: int | None = typer.Option(None, "--week", "-w"),
+    year: int | None = typer.Option(None, "--year", "-y"),
+    pool_id: int | None = typer.Option(None, "--pool"),
+) -> None:
+    """Snapshot one payout scope by hand right now, freezing its awards.
+
+    --week is required for "weekly"/"bowl" and must be omitted for "season_points"/
+    "season_wins", which never carry a week. Idempotent per snapshot_awards's own contract
+    (app/services/payouts.py): re-running this with nothing changed underneath leaves the
+    existing frozen amounts exactly as they were.
+    """
+    from app.services.payouts import snapshot_awards
+
+    if scope not in PAYOUT_SCOPES:
+        raise typer.Exit(
+            code=_fail(f"Unknown scope {scope!r}. Choose one of: {', '.join(PAYOUT_SCOPES)}.")
+        )
+
+    is_season_scope = scope in ("season_points", "season_wins")
+    if is_season_scope and week is not None:
+        raise typer.Exit(code=_fail(f"--week does not apply to the {scope!r} scope. Omit it."))
+    if not is_season_scope and week is None:
+        raise typer.Exit(code=_fail(f"--week is required for the {scope!r} scope."))
+
+    with session_scope() as db:
+        pool = _resolve_pool(db, pool_id)
+        pool_name = pool.name
+        week_row = None
+        if not is_season_scope:
+            week_row = _week_or_current(db, pool, week, year)
+            if week_row is None:
+                raise typer.Exit(code=_fail(f"Week {week} has not been built yet."))
+        awards = snapshot_awards(db, pool, scope, week=week_row)
+        count = len(awards)
+
+    if is_season_scope:
+        _echo(f"Snapshotted {count} award(s) for {pool_name}, scope={scope} (season).")
+    else:
+        _echo(f"Snapshotted {count} award(s) for {pool_name}, scope={scope}, week={week}.")
+
+
+@app.command("payouts-summary")
+def payouts_summary_cmd(
+    pool_id: int | None = typer.Option(None, "--pool"),
+) -> None:
+    """Print the commissioner payout summary: one row per pool member, every scope's total,
+    the grand total, and the paid/unpaid split.
+
+    Read only, writes nothing. Reads only frozen PayoutAward rows, the same data the
+    /admin/payouts/summary page shows, safe to run at any time.
+    """
+    from app.services.payouts import payout_summary
+
+    with session_scope() as db:
+        pool = _resolve_pool(db, pool_id)
+        pool_name = pool.name
+        table = [
+            (
+                row.display_name,
+                row.weekly_total,
+                row.bowl_total,
+                row.season_points_total,
+                row.season_wins_total,
+                row.grand_total,
+                row.paid_total,
+                row.unpaid_total,
+            )
+            for row in payout_summary(db, pool)
+        ]
+
+    _echo(f"Payout summary for {pool_name}")
+    _echo("")
+    columns = ("Player", "Weekly", "Bowl", "Season Pts", "Season Wins", "Total", "Paid", "Unpaid")
+    header = f"{columns[0]:<24}" + "".join(f"{c:>12}" for c in columns[1:])
+    _echo(header)
+    _echo("-" * len(header))
+
+    # weekly, bowl, season_points, season_wins, grand, paid totals; unpaid is derived, not
+    # summed independently, so it always reconciles with the other columns by construction.
+    totals = [Decimal("0")] * 6
+    for name, weekly, bowl, season_points, season_wins, grand, paid, unpaid in table:
+        _echo(
+            f"{name:<24}"
+            f"{_dollars(weekly):>12}{_dollars(bowl):>12}{_dollars(season_points):>12}"
+            f"{_dollars(season_wins):>12}{_dollars(grand):>12}{_dollars(paid):>12}"
+            f"{_dollars(unpaid):>12}"
+        )
+        for i, value in enumerate((weekly, bowl, season_points, season_wins, grand, paid)):
+            totals[i] += value
+
+    _echo("-" * len(header))
+    total_unpaid = totals[4] - totals[5]
+    _echo(
+        f"{'Total':<24}"
+        f"{_dollars(totals[0]):>12}{_dollars(totals[1]):>12}{_dollars(totals[2]):>12}"
+        f"{_dollars(totals[3]):>12}{_dollars(totals[4]):>12}{_dollars(totals[5]):>12}"
+        f"{_dollars(total_unpaid):>12}"
+    )
 
 
 def _redact_db_url(url: str) -> str:

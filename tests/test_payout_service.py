@@ -271,6 +271,49 @@ def test_scoring_a_week_auto_creates_weekly_payout_awards(db):
     assert awards[0].amount == Decimal("50.00")
 
 
+def test_running_cron_repeatedly_does_not_duplicate_or_change_payout_awards(db):
+    """run-cron (app/cli.py) only ever hands a week to score_week_for_pool while that week's
+    status is "open" or "locked"; the moment scoring flips it to "scored" the week drops out
+    of run-cron's own live query and is never handed to score_week_for_pool by a later tick.
+    That status filter is what actually prevents a repeated or overlapping cron run from
+    re-triggering snapshot_awards for an already-scored week, since the snapshot call only
+    ever fires from inside score_week_for_pool's own "just transitioned to scored" branch
+    (app/services/results.py). This test proves the property that guarantee rests on directly:
+    calling score_week_for_pool again for a week that has already scored, exactly what a stray
+    or overlapping tick would do if that status filter were ever weakened, must never duplicate
+    a PayoutAward row, drift its amount, or clear a paid_at a commissioner already set. Three
+    calls total: one inside _build_and_score_week, two more here.
+    """
+    commissioner = _user(db, "Commissioner")
+    pool, week, alice, bob = _build_and_score_week(db)
+    _member(db, pool, commissioner, role="commissioner")
+
+    awards_after_first = list(
+        db.query(PayoutAward).filter(PayoutAward.pool_id == pool.id, PayoutAward.week_id == week.id)
+    )
+    assert len(awards_after_first) == 1
+    award_id = awards_after_first[0].id
+    amount_after_first = awards_after_first[0].amount
+
+    marked = mark_paid(db, award_id, commissioner)
+    assert marked.paid_at is not None
+    paid_at_after_mark = marked.paid_at
+
+    for _ in range(2):
+        score_week_for_pool(db, pool, week)
+        db.flush()
+
+        awards_now = list(
+            db.query(PayoutAward).filter(
+                PayoutAward.pool_id == pool.id, PayoutAward.week_id == week.id
+            )
+        )
+        assert len(awards_now) == 1
+        assert awards_now[0].id == award_id
+        assert awards_now[0].amount == amount_after_first
+        assert awards_now[0].paid_at == paid_at_after_mark
+
+
 def test_rerunning_score_week_for_pool_creates_no_duplicates_and_no_amount_drift(db):
     pool, week, alice, bob = _build_and_score_week(db)
 
