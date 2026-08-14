@@ -16,7 +16,9 @@
   </div>
   {% if week %}
     <div class="row">
-      {% if week.status == "scored" %}
+      {% if week.is_test_week %}
+        <span class="badge badge-test-week">Test week</span>
+      {% elif week.status == "scored" %}
         <span class="badge badge-final">Scored</span>
       {% else %}
         <span class="badge">{{ status_words.get(week.status, "In progress") }}</span>
@@ -25,6 +27,12 @@
     </div>
   {% endif %}
 </div>
+{% if week and week.is_test_week %}
+  <p class="form-hint">
+    This is a test week, built to try out the pick and scoring flow. It does not count toward
+    season standings or payouts.
+  </p>
+{% endif %}
 
 {% if weeks %}
   <nav class="week-switch" aria-label="Choose a week">
@@ -448,7 +456,7 @@
     {% endif %}
   </section>
 
-  {% if revealed %}
+  {% if revealed and not week.is_test_week %}
   <section class="section" aria-labelledby="scenarios-heading">
     <h2 class="section-title" id="scenarios-heading">Scenarios</h2>
 

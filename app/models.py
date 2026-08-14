@@ -360,6 +360,15 @@ class Week(Base):
     # True when any enabled league needed season_type=3 (postseason/bowl season) to find a
     # calendar window containing anchor_date.
     is_bowl_week: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    # True for a commissioner-built low-stakes test week (Phase 3: preseason and test week
+    # support), built from whatever is live right now (NFL preseason, college week 0)
+    # rather than the pool's real season. Scores normally within itself (WeekEntry rows are
+    # real and correct) but is fully quarantined from everything season-wide: excluded from
+    # season standings and weekly-win counts (app/services/standings.py), never generates a
+    # PayoutAward of any scope (the freeze hook in app/services/results.py.score_week_for_pool
+    # skips it outright), and the scenarios panel treats it as never visible
+    # (app/services/scenarios.py.week_scenario_panel). See DECISIONS.md, Phase 3.
+    is_test_week: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     label: Mapped[str] = mapped_column(String(60), nullable=False)
     status: Mapped[str] = mapped_column(String(12), default="draft", nullable=False)
     lock_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

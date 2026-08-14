@@ -37,6 +37,7 @@ LEAGUE_PATHS: dict[str, tuple[str, dict[str, str]]] = {
     "ncaaf": ("college-football", {"groups": "80"}),  # groups=80 is FBS
 }
 
+SEASON_TYPE_PRESEASON = 1
 SEASON_TYPE_REGULAR = 2
 SEASON_TYPE_POSTSEASON = 3
 

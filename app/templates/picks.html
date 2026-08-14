@@ -163,6 +163,9 @@
 
   {% if week and games %}
   <div class="row">
+    {% if week.is_test_week %}
+      <span class="badge badge-test-week">Test week</span>
+    {% endif %}
     <span class="pill">{{ slate_size }} {{ slate_size | pluralize("game") }}</span>
     {% if nfl_count and ncaaf_count %}
       <span class="pill">{{ nfl_count }} NFL, {{ ncaaf_count }} college</span>
@@ -175,6 +178,12 @@
   </div>
   {% endif %}
 </div>
+{% if week and games and week.is_test_week %}
+  <p class="form-hint">
+    This is a test week, built to try out the pick and scoring flow. It does not count toward
+    season standings or payouts.
+  </p>
+{% endif %}
 
 
 {% if preview_mode %}

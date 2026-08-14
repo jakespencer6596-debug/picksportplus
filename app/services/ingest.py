@@ -85,10 +85,13 @@ def ensure_week(
     week_number: int,
     *,
     anchor_date: dt.date | None = None,
+    is_test_week: bool = False,
 ) -> Week:
     """Get or create the pool's week row.
 
     week_number is always the pool's own 1, 2, 3... sequence, never an ESPN week number.
+    week_number 0 is reserved for a test week (TEST_WEEK_NUMBER below), so it never collides
+    with a real season week.
 
     anchor_date is the calendar Saturday each enabled league resolves its own ESPN week
     against, see app/services/calendar.py. Left unset, it is computed from
@@ -96,6 +99,11 @@ def ensure_week(
     pool with no week1_anchor_date gets a week with no anchor_date at all, and
     fetch_candidates falls back to sending week_number to ESPN directly (the pre anchor
     behaviour), with a clear warning that the pool needs configuring.
+
+    is_test_week (Phase 3) only matters the first time this week row is created: it sets
+    Week.is_test_week and labels the row "Test week" instead of "Week {N}". It is never
+    applied to an existing row on a later call, the same one-time-on-creation shape
+    upsert_games already uses for a rivalry auto-pin.
     """
     # Computed once, before branching, so a week that already exists but was created before
     # the pool had an anchor date (or before Phase 2's backfill ran) still gets backfilled
@@ -118,8 +126,9 @@ def ensure_week(
             season_year=year,
             week_number=week_number,
             anchor_date=anchor_date,
-            label=f"Week {week_number}",
+            label="Test week" if is_test_week else f"Week {week_number}",
             status="draft",
+            is_test_week=is_test_week,
         )
         db.add(week)
         db.flush()
@@ -129,6 +138,13 @@ def ensure_week(
         week.anchor_date = anchor_date
         db.flush()
     return week
+
+
+# Reserved pool week number for the commissioner's test week (Phase 3, preseason and test
+# week support). Real pool weeks are always 1, 2, 3..., so 0 can never collide with one,
+# which is what lets "Create a test week" stay idempotent (a second click rebuilds the same
+# week rather than creating a duplicate) without any extra bookkeeping.
+TEST_WEEK_NUMBER = 0
 
 
 def week_has_picks(db: Session, week: Week) -> bool:
@@ -169,6 +185,12 @@ def fetch_candidates(
     starts about three weeks earlier than the NFL and has a bowl season the NFL has no
     equivalent of on the same calendar. The resolution is recorded on week.resolved_weeks and
     week.is_bowl_week so the commissioner can see exactly what was asked for.
+
+    week.is_test_week (Phase 3) is read straight off the week row, not taken as a separate
+    parameter here: it is already set the moment ensure_week creates the row, so reading it
+    keeps this function's own signature, and therefore every existing caller, unchanged. It
+    is passed through to calendar_svc.resolve_league_week as is_test_week, which is what lets
+    a test week additionally resolve against NFL preseason.
 
     week.anchor_date is None for a week created while the pool had no week1_anchor_date
     configured. That week falls back to the pre anchor behaviour: the pool's own week_number
@@ -215,7 +237,7 @@ def fetch_candidates(
     any_bowl = False
     for league in leagues:
         resolution = calendar_svc.resolve_league_week(
-            db, league, week.season_year, week.anchor_date
+            db, league, week.season_year, week.anchor_date, is_test_week=week.is_test_week
         )
         if resolution is None:
             resolved[league] = None
@@ -884,25 +906,44 @@ def build_slate(
     allow_metered: bool = True,
     publish: bool | None = None,
     now: dt.datetime | None = None,
+    is_test_week: bool = False,
 ) -> IngestReport:
-    """Build or rebuild one week. Idempotent and safe to re-run."""
+    """Build or rebuild one week. Idempotent and safe to re-run.
+
+    is_test_week (Phase 3, preseason and test week support) builds a low-stakes week from
+    whatever is live right now (NFL preseason, college week 0 included) rather than the
+    pool's real season, for a commissioner who wants to exercise the whole pick/score loop
+    before the real season starts. It takes a different path through this function in two
+    ways: it resolves against right now (see DECISIONS.md, Phase 3, for why) instead of
+    requiring pool.week1_anchor_date, and it flows week.is_test_week down to fetch_candidates
+    so each league's calendar resolution also tries the preseason. Everything after the week
+    is created, resolving spreads, selecting the closest games, publishing, is the same
+    machinery a real week goes through, unchanged.
+    """
     report = IngestReport(week_number=week_number, season_year=year)
+    now = now or dt.datetime.now(dt.UTC)
 
-    # Refuse rather than fall back (Phase 2 remediation, see DECISIONS.md). The old fallback
-    # sent the pool's own week number straight to ESPN for every league, which is what
-    # produced a slate spanning two calendar weeks with the same team on it twice the moment
-    # NFL and college drifted apart. week1_anchor_date is now required at league creation
-    # (POST /admin/leagues/new) and backfilled for any pool that predates that (the
-    # backfill-anchor-dates CLI command), so hitting this in practice means a commissioner
-    # cleared the field from Settings.
-    if pool.week1_anchor_date is None:
-        report.warnings.append(
-            "Set your week 1 anchor date in Settings before building a slate. Without it "
-            "the tool cannot tell which NFL and college weeks belong together."
-        )
-        return report
+    if is_test_week:
+        # Resolves against right now, not pool.week1_anchor_date (which may be unset, or may
+        # point at a Saturday weeks away): the whole point of a test week is building
+        # something live before the real season is configured. See DECISIONS.md, Phase 3.
+        week = ensure_week(db, pool, year, week_number, anchor_date=now.date(), is_test_week=True)
+    else:
+        # Refuse rather than fall back (Phase 2 remediation, see DECISIONS.md). The old
+        # fallback sent the pool's own week number straight to ESPN for every league, which
+        # is what produced a slate spanning two calendar weeks with the same team on it
+        # twice the moment NFL and college drifted apart. week1_anchor_date is now required
+        # at league creation (POST /admin/leagues/new) and backfilled for any pool that
+        # predates that (the backfill-anchor-dates CLI command), so hitting this in practice
+        # means a commissioner cleared the field from Settings.
+        if pool.week1_anchor_date is None:
+            report.warnings.append(
+                "Set your week 1 anchor date in Settings before building a slate. Without it "
+                "the tool cannot tell which NFL and college weeks belong together."
+            )
+            return report
 
-    week = ensure_week(db, pool, year, week_number)
+        week = ensure_week(db, pool, year, week_number)
 
     # Once picks exist the slate is settled. Scores still refresh, the selection does not move.
     if week_has_picks(db, week):

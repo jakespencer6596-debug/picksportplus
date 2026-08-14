@@ -215,3 +215,38 @@ def test_weekly_leaderboard_member_with_no_entry_at_all_reads_as_did_not_submit(
 
     assert bob_row.did_not_submit is True
     assert bob_row.points == 0
+
+
+# Test weeks are quarantined from season standings (Phase 3) -------------------
+
+
+def test_season_standings_excludes_a_test_weeks_entries(db):
+    """A test week scores normally within itself (its own WeekEntry row is real and correct,
+    see tests/test_payout_service.py for that half), but must contribute zero to season
+    totals, correct counts, and weekly-win counts. Alice's real week 1 win is the only thing
+    that should show up in her season row; her (much bigger) test week result must not."""
+    pool = _pool(db, scoring_mode="standard")
+    alice, bob, carol = _three_players(db, pool)
+    real_week = _week(db, pool, week_number=1)
+    test_week = Week(
+        pool_id=pool.id,
+        season_year=pool.season_year,
+        week_number=0,
+        label="Test week",
+        status="scored",
+        is_test_week=True,
+    )
+    db.add(test_week)
+    db.flush()
+
+    _entry(db, pool, real_week, alice, points=10, correct=5, possible=14, is_winner=True)
+    _entry(db, pool, test_week, alice, points=999, correct=99, possible=99, is_winner=True)
+
+    rows = season_standings(db, pool)
+    alice_row = next(r for r in rows if r.display_name == "Alice")
+
+    assert alice_row.points == 10
+    assert alice_row.correct == 5
+    assert alice_row.possible == 14
+    assert alice_row.weeks_played == 1
+    assert alice_row.weekly_wins == 1  # the test week's win does not count a second time

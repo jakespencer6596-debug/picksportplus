@@ -2730,3 +2730,140 @@ in that file were not testing anchor-date behavior at all. Every test that delib
 the unanchored fallback already passed `week1_anchor_date=None` explicitly and is unaffected.
 Four `POST /admin/leagues/new` tests in `tests/test_app.py` gained an explicit
 `week1_anchor_date` in their form data for the same reason.
+
+### Phase 3, preseason and test week support
+
+**The problem.** No preseason support existed at all: `app/providers/espn.py` only defined
+`SEASON_TYPE_REGULAR = 2` and `SEASON_TYPE_POSTSEASON = 3`, so a Week 0 (college) or NFL
+preseason build returned nothing, and a commissioner had no way to build a low-stakes test
+week the week of August 17, 2026, before the real regular season starts. Added
+`SEASON_TYPE_PRESEASON = 1` next to the existing two constants.
+
+**How `is_test_week` threads through the calendar and ingest layers, in two different
+shapes.** `app/services/calendar.py`'s `resolve_league_week`/`resolve_pool_weeks` gained an
+explicit `is_test_week: bool = False` keyword, exactly as the brief specified: neither
+function has a `Week` row to read from (they take a bare `anchor_date`), so a parameter is
+the only option, and the default keeps every existing caller unchanged. When True, the
+season-type try loop becomes `(SEASON_TYPE_PRESEASON, SEASON_TYPE_REGULAR,
+SEASON_TYPE_POSTSEASON)` instead of the normal two-tuple, preseason tried first since a test
+week's whole point is "whatever is live right now" before the real season starts. College
+needed no special casing: it has no separate preseason season type, its own week 0 already
+lives inside the regular season block, so `is_test_week` only ever changes NFL's resolution
+in practice.
+
+`app/services/ingest.py`'s `fetch_candidates`, by contrast, took no new parameter at all: it
+already has the `Week` row in hand, and `Week.is_test_week` is set the moment `ensure_week`
+creates the row, so it just reads `week.is_test_week` off the row it already has and passes
+that straight through to `resolve_league_week`. This is a deliberate small departure from
+the brief's literal "thread an `is_test_week` parameter through `ensure_week`/`build_slate`/
+`fetch_candidates`" instruction: threading a second, independent boolean through
+`fetch_candidates` that has to be kept in sync with `week.is_test_week` by every caller is a
+class of bug (the parameter says False, the row says True, or vice versa) that reading the
+already-persisted flag off the row makes structurally impossible, and it means
+`fetch_candidates`'s own signature needs zero changes for a normal build, which is stronger
+than the brief's "zero changes at existing call sites" goal, not weaker. `ensure_week` and
+`build_slate` do both gain a real `is_test_week: bool = False` keyword (the flag has nowhere
+else to originate from before the `Week` row exists), and every existing call site is
+unaffected by the default.
+
+**Which anchor date a test week build resolves against, and why.** A test week still needs
+some `anchor_date` to resolve against (Phase 2 made `build_slate` refuse outright when
+`pool.week1_anchor_date` is `None`), and the brief asked me to choose sensibly between "right
+now" and the pool's own anchor minus an offset. Chose right now
+(`dt.datetime.now(dt.UTC).date()`, or an explicit `now=` in a test), for two reasons. First,
+the whole point of a test week (per the brief, and per the group's own August 17 timeline) is
+exercising the pick and scoring loop before the real season, often before `week1_anchor_date`
+is even configured yet; anchoring off a value that might not exist yet would make the feature
+useless for exactly the window it exists for. Second, `build_slate` now takes a different
+branch entirely for `is_test_week=True`: it skips the `pool.week1_anchor_date is None`
+refusal outright and calls `ensure_week(..., anchor_date=now.date(), is_test_week=True)`
+directly, so a test week never depends on a real week's anchor configuration at all, past or
+future. `ensure_week` only ever applies `anchor_date`/`is_test_week` the first time a week row
+is created (mirrors the existing rivalry-auto-pin's one-time-on-creation shape in
+`upsert_games`), so a second "Create a test week" click rebuilds the same row in place rather
+than moving its anchor underneath it.
+
+**`TEST_WEEK_NUMBER = 0`, a reserved pool week number.** Real pool weeks are always the
+sequence 1, 2, 3..., so 0 can never collide with one. This is what makes "Create a test week"
+idempotent for free (`ensure_week`'s own get-or-create already handles a second click as a
+rebuild, not a duplicate) without a second `Week` column or a lookup table, and it is a free
+side benefit everywhere a week list already sorts by `week_number` descending (the admin
+overview, the slate editor's week switcher, `_week_or_404` on `/results`): a test week always
+sorts last and is never mistaken for "the current week" by any query that was not written
+with it in mind.
+
+**Exactly which functions enforce the quarantine, and why each one is the right layer.**
+- `app/services/standings.py.season_standings` gained `Week.is_test_week.is_(False)` on its
+  own `WeekEntry` query. This is the single point of truth for season totals, correct counts,
+  and weekly-win counts, and both `app/services/payouts.py._season_points_standings` and
+  `_season_wins_standings` already read every player's totals through this same function, so
+  filtering here fixes all three (standings, and both season payout scopes) with one change
+  rather than three.
+- `app/services/results.py.score_week_for_pool`'s own scoring hook gained an early return
+  (`if week.is_test_week: db.flush(); return report`) placed after `WeekEntry` rows are
+  written and `week.status` is set to `"scored"`, but before the `payout_service.
+  snapshot_awards` calls. A test week's own `WeekEntry` rows, and its own weekly leaderboard
+  and picks grid on `/results`, are real and correct (it does score normally within itself,
+  per the brief); what it must never do is freeze a `PayoutAward` of any scope, or have
+  finishing its own scoring read as the season's bowl-week completion signal. This is the one
+  and only place a `PayoutAward` row is ever written (`snapshot_awards`), so gating it here is
+  a complete guarantee, not a partial one.
+- `app/services/scenarios.py.week_scenario_panel` gained an `if week.is_test_week` branch at
+  the very top, ahead of `panel_thresholds_met`, that always returns `visible=False` (still
+  reporting honest `final_count`/`remaining_count`, only visibility is forced off) regardless
+  of how many games are final. `app/routers/results.py`'s `results_page` additionally never
+  calls `week_scenario_panel` at all for a test week (leaving `scenario_panel=None`, not just
+  `visible=False`), and the "Scenarios" section of `results.html` is gated on
+  `not week.is_test_week` outright, so a test week gets no pending-state section either, not
+  a permanently-stuck-pending one. `POST /results/custom-scenario` also refuses a test week
+  directly (403), closing the one other entry point into the engine.
+- `app/routers/results.py`'s payout column computation (the `payout_scope`/`payouts_by_user`/
+  `payout_is_projected` block) is skipped outright for a test week (`if not
+  row.is_test_week:`), belt and suspenders with the scoring hook above: even a live,
+  unsaved "Projected" figure would be misleading for a week that will never actually pay out.
+
+**Auto-published, unlike a real week's draft-first default.** `POST /admin/test-week/create`
+passes `publish=True` explicitly to `build_slate`, rather than leaving it to
+`pool.auto_publish` (which defaults to `False`, Phase 5's whole point being that a real week
+needs deliberate commissioner review before it goes live). A test week carries none of the
+stakes a real week's `auto_publish=False` default protects against, no money, no season
+standings, so the extra review step would only cost clicks for no safety benefit; the goal is
+letting the group see picks and scoring work end to end with as little ceremony as possible.
+
+**The TEST WEEK badge reuses the existing gold "pay attention" recipe verbatim.** A new CSS
+class, `.badge-test-week`, was added (background `--decor-soft`, border `--decor`, color
+`--ink`), byte-for-byte the same declaration `.badge-live` and `.badge-pinned` already use,
+rather than reusing one of those classes directly under a different label: `badge-pinned` and
+`badge-live` both carry their own specific meaning elsewhere on the same pages a test week
+badge appears on (a pinned slate game, a live game), so giving the test week concept its own
+class name keeps `grep`-ability and template intent clear while still visually matching the
+established "gold means pay attention" convention exactly, per the house rule against
+inventing new colors. It renders on the slate editor, the picks page, and weekly results,
+each paired with a one-line, sentence-case explanation that it does not count toward
+standings or payouts.
+
+**Deletion reuses the existing cascade relationships, no new machinery.** `Week.games` and
+`Week.entries` are already `cascade="all, delete-orphan"` (and `Game.picks` the same), so
+`POST /admin/test-week/{week_id}/delete` is a plain `db.delete(week)` after confirming
+`week.is_test_week` is actually True; a real week is refused with a flash message rather than
+silently ignored, since a stale or wrong `week_id` should never be quietly swallowed.
+
+**Deliberately not built.** No CLI command for creating a test week (the admin route is
+reachable without touching the database by hand, which is what the brief actually requires;
+a CLI command would be a second, redundant entry point for a feature whose whole audience is
+a commissioner clicking a button in the UI). No change to `run-cron`/`sync_week`: they only
+ever compute a week number from `detect_week`'s anchor arithmetic, which can never produce
+`0`, so a scheduled job can never accidentally touch or rebuild a test week, which was true
+before this phase and needed no code to stay true. No "already have a test week" special
+casing beyond `TEST_WEEK_NUMBER`'s own natural idempotency: a second "Create a test week"
+click just rebuilds the one that exists, matching how a real week's "Build the slate" button
+already behaves.
+
+**Verification.** `python -m pytest -q` passed 978 tests (961 before this phase, 17 new:
+3 in `tests/test_calendar.py` for the preseason resolution flag and its default-off proof,
+5 in `tests/test_ingest.py` for `ensure_week`/`build_slate`'s test-week path and cascade
+deletion, 1 each in `tests/test_standings.py` and `tests/test_scenarios_service.py` for the
+season-standings and scenarios-panel quarantine, 1 in `tests/test_payout_service.py` proving
+a test week scores internally but freezes no `PayoutAward`, and 6 router-level tests in
+`tests/test_app.py` covering the 403 for a non-commissioner, the end-to-end create/delete
+flow for a commissioner, and the badge/explanation actually rendering).

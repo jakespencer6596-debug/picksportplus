@@ -137,8 +137,25 @@ def week_scenario_panel(
     Returns visible=False (report=None) without doing any of the real work when the week
     has not yet reached both of the pool's configured thresholds; the sweep only ever runs
     once the panel is actually going to be shown.
+
+    A test week (Phase 3, preseason and test week support) always returns visible=False,
+    regardless of how many of its games have gone final: the scenarios engine is a season-wide
+    feature (placement odds feed into weekly-win counts and payout scopes, both of which a
+    test week is quarantined from), so it is skipped outright rather than computed and then
+    hidden only by the template.
     """
     games = _week_games(db, week)
+    if week.is_test_week:
+        final_count = sum(1 for g in games if g.status in ("final", "void"))
+        return ScenarioPanelData(
+            visible=False,
+            final_count=final_count,
+            remaining_count=len(games) - final_count,
+            min_final_games=pool.scenarios_min_final_games,
+            min_remaining_games=pool.scenarios_min_remaining_games,
+            report=None,
+            remaining_games=[],
+        )
     visible, final_count, remaining_count = panel_thresholds_met(pool, games)
     if not visible:
         return ScenarioPanelData(

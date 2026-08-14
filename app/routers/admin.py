@@ -966,6 +966,69 @@ def slate_lock(
     return _redirect(f"/admin/slate?week={row.week_number}")
 
 
+# Test week -------------------------------------------------------------------
+
+
+@router.post("/test-week/create")
+def test_week_create(
+    request: Request,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_user),
+    pool: Pool = Depends(require_commissioner),
+):
+    """Build (or rebuild) the pool's one test week from whatever is live right now, NFL
+    preseason and college week 0 included (Phase 3, preseason and test week support). Reuses
+    the ordinary slate-build machinery end to end, ingest.build_slate(is_test_week=True) is
+    the only thing that differs from a real week's build. Auto-published (publish=True)
+    rather than left as a draft: the whole point of a test week is letting the group see picks
+    and scoring work end to end with as few extra clicks as possible, and it is explicitly
+    quarantined from every season-wide and money-related computation, so there is no real-week
+    caution to preserve by holding it back for a manual publish."""
+    try:
+        report = ingest.build_slate(
+            db,
+            pool,
+            pool.season_year,
+            ingest.TEST_WEEK_NUMBER,
+            publish=True,
+            is_test_week=True,
+        )
+    except ValueError as exc:
+        db.rollback()
+        flash(request, str(exc), "error")
+        return _redirect("/admin/slate")
+    db.commit()
+    flash(request, report.summary(), "ok" if report.selected else "info")
+    for note in report.notes:
+        flash(request, note, "info")
+    for warning in report.warnings:
+        flash(request, warning, "error")
+    return _redirect(f"/admin/slate?week={ingest.TEST_WEEK_NUMBER}")
+
+
+@router.post("/test-week/{week_id}/delete")
+def test_week_delete(
+    request: Request,
+    week_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_user),
+    pool: Pool = Depends(require_commissioner),
+):
+    """Delete a test week outright: its Game, Pick and WeekEntry rows all go with it through
+    the existing cascade="all, delete-orphan" relationships on Week (app/models.py). A real
+    week never allows this, so the check below is the only thing standing between this route
+    and deleting a real week's history; it refuses rather than silently no-opping so a stale
+    week_id (a real week, or one from another pool) is never quietly ignored."""
+    row = _week_for_action(db, pool, week_id)
+    if not row.is_test_week:
+        flash(request, "Only a test week can be deleted this way.", "error")
+        return _redirect("/admin/slate")
+    db.delete(row)
+    db.commit()
+    flash(request, "Test week deleted.")
+    return _redirect("/admin/slate")
+
+
 # Manual job triggers --------------------------------------------------------
 
 

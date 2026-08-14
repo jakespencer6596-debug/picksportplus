@@ -328,6 +328,134 @@ def test_build_slate_refuses_with_no_anchor_date(db):
     assert db.scalar(select(Week).where(Week.pool_id == pool.id)) is None
 
 
+# Test weeks (Phase 3, preseason and test week support) -----------------------
+
+
+def test_ensure_week_marks_is_test_week_and_labels_it_on_creation(db):
+    pool = _pool(db, week1_anchor_date=None)
+
+    week = ingest.ensure_week(
+        db, pool, 2026, ingest.TEST_WEEK_NUMBER, anchor_date=dt.date(2026, 8, 10), is_test_week=True
+    )
+
+    assert week.is_test_week is True
+    assert week.label == "Test week"
+    assert week.week_number == 0
+
+
+def test_ensure_week_does_not_retroactively_flag_an_existing_week(db):
+    """is_test_week only ever applies the first time a week row is created, the same
+    one-time-on-creation shape a rivalry auto-pin already uses (upsert_games)."""
+    pool = _pool(db, week1_anchor_date=dt.date(2026, 9, 12))
+    real_week = ingest.ensure_week(db, pool, 2026, 1)
+    assert real_week.is_test_week is False
+
+    same_week = ingest.ensure_week(db, pool, 2026, 1, is_test_week=True)
+
+    assert same_week.id == real_week.id
+    assert same_week.is_test_week is False
+
+
+def test_build_slate_test_week_resolves_preseason_without_a_pool_anchor_date(db, load_fixture):
+    """A test week needs no pool.week1_anchor_date at all (Phase 2's refusal is for a real
+    week only): it resolves against right now instead. August 10, 2026 sits inside NFL's real
+    Hall of Fame Weekend window in the recorded calendar (season type 1, week 1)."""
+    _cache_calendar(db, load_fixture, "nfl", 2026, NFL_2026_CALENDAR)
+    _cache_week(db, load_fixture, "nfl", 2026, 1, 1, NFL_SOME_GAMES)
+
+    pool = _pool(db, week1_anchor_date=None, target_nfl=4, target_ncaaf=0, num_games_per_week=4)
+
+    report = ingest.build_slate(
+        db,
+        pool,
+        2026,
+        ingest.TEST_WEEK_NUMBER,
+        allow_metered=False,
+        is_test_week=True,
+        now=dt.datetime(2026, 8, 10, 12, 0, tzinfo=UTC),
+    )
+
+    week = db.scalar(select(Week).where(Week.pool_id == pool.id))
+    assert week is not None
+    assert week.is_test_week is True
+    assert week.anchor_date == dt.date(2026, 8, 10)
+    assert week.resolved_weeks["nfl"] == {"week": 1, "season_type": espn.SEASON_TYPE_PRESEASON}
+    assert report.candidates > 0
+    assert report.selected > 0
+
+
+def test_build_slate_normal_week_does_not_pull_preseason_on_the_same_date(db, load_fixture):
+    """The exact same cached calendar and the exact same effective anchor date as the test
+    above (week1_anchor_date is set directly to August 10, so a plain week 1 build resolves
+    against it), but is_test_week left at its default False. Neither the regular season nor
+    the postseason cover August 10, so this must be a dead end, never a preseason resolution,
+    proving the default path genuinely never pulls preseason games."""
+    _cache_calendar(db, load_fixture, "nfl", 2026, NFL_2026_CALENDAR)
+    _cache_week(db, load_fixture, "nfl", 2026, 1, 1, NFL_SOME_GAMES)
+
+    pool = _pool(db, week1_anchor_date=dt.date(2026, 8, 10), sports=["nfl"])
+
+    report = ingest.build_slate(db, pool, 2026, 1, allow_metered=False)
+
+    week = db.scalar(select(Week).where(Week.pool_id == pool.id))
+    assert week is not None
+    assert week.is_test_week is False
+    assert week.resolved_weeks["nfl"] is None  # not the preseason week the fixture has cached
+    assert report.candidates == 0
+    assert report.selected == 0
+
+
+def test_test_week_can_be_deleted_and_cascades_its_games_picks_and_entries(db):
+    pool = _pool(db, week1_anchor_date=None)
+    week = ingest.ensure_week(
+        db, pool, 2026, ingest.TEST_WEEK_NUMBER, anchor_date=dt.date(2026, 8, 10), is_test_week=True
+    )
+    user = User(email="alice@example.com", password_hash="x", display_name="Alice")
+    db.add(user)
+    db.flush()
+    db.add(PoolMember(pool_id=pool.id, user_id=user.id, role_in_pool="member"))
+    game = Game(
+        week_id=week.id,
+        league="nfl",
+        espn_event_id="evt-test-1",
+        start_time=dt.datetime(2026, 8, 10, 17, 0, tzinfo=UTC),
+        home_team="Home Team",
+        away_team="Away Team",
+        home_abbr="HOM",
+        away_abbr="AWY",
+        canonical_home_key="nfl:home-test",
+        canonical_away_key="nfl:away-test",
+        in_slate=True,
+        slate_rank=1,
+    )
+    db.add(game)
+    db.flush()
+    db.add(
+        Pick(
+            user_id=user.id,
+            pool_id=pool.id,
+            week_id=week.id,
+            game_id=game.id,
+            picked_team="home",
+            confidence=1,
+        )
+    )
+    db.add(WeekEntry(user_id=user.id, pool_id=pool.id, week_id=week.id, points=0))
+    db.commit()
+
+    week_id, game_id = week.id, game.id
+    db.delete(db.get(Week, week_id))
+    db.commit()
+
+    assert db.get(Week, week_id) is None
+    assert db.get(Game, game_id) is None
+    assert db.scalar(select(Pick).where(Pick.week_id == week_id)) is None
+    assert db.scalar(select(WeekEntry).where(WeekEntry.week_id == week_id)) is None
+    # The pool and the user themselves are untouched.
+    assert db.get(Pool, pool.id) is not None
+    assert db.get(User, user.id) is not None
+
+
 # Slate span guard (Phase 2 remediation) --------------------------------------
 
 

@@ -48,8 +48,14 @@ def _member(db, pool: Pool, user: User) -> PoolMember:
     return member
 
 
-def _week(db, pool: Pool) -> Week:
-    week = Week(pool_id=pool.id, season_year=pool.season_year, week_number=1, label="Week 1")
+def _week(db, pool: Pool, *, is_test_week: bool = False) -> Week:
+    week = Week(
+        pool_id=pool.id,
+        season_year=pool.season_year,
+        week_number=0 if is_test_week else 1,
+        label="Test week" if is_test_week else "Week 1",
+        is_test_week=is_test_week,
+    )
     db.add(week)
     db.flush()
     return week
@@ -185,11 +191,11 @@ def test_panel_thresholds_met_void_games_count_as_final():
 # week_scenario_panel -------------------------------------------------------------
 
 
-def _setup_two_player_week(db, **pool_overrides):
+def _setup_two_player_week(db, *, is_test_week: bool = False, **pool_overrides):
     defaults = {"scenarios_min_final_games": 1, "scenarios_min_remaining_games": 1}
     defaults.update(pool_overrides)
     pool = _pool(db, **defaults)
-    week = _week(db, pool)
+    week = _week(db, pool, is_test_week=is_test_week)
     alice = _user(db, "Alice")
     bob = _user(db, "Bob")
     _member(db, pool, alice)
@@ -225,6 +231,24 @@ def test_week_scenario_panel_visible_computes_a_real_report(db):
     # ahead of Bob (who has 0 from the final game and can score at most 3 more).
     alice_outlook = data.report.players[alice.id]
     assert alice_outlook.clinched[1] is True
+
+
+def test_week_scenario_panel_never_visible_for_a_test_week(db):
+    """Phase 3, preseason and test week support. Same inputs that make
+    test_week_scenario_panel_visible_computes_a_real_report visible=True above, both
+    thresholds are met, one final game, one remaining game, but is_test_week=True must keep
+    the panel not visible regardless: the scenarios engine is a season-wide feature and a
+    test week is quarantined from it, at the computation layer, not only in a template."""
+    pool, week, alice, bob, final_game, remaining_game = _setup_two_player_week(
+        db, is_test_week=True
+    )
+    data = scenarios_service.week_scenario_panel(db, pool, week, representative_for=[alice.id])
+    assert data.visible is False
+    assert data.report is None
+    assert data.remaining_games == []
+    # The counts are still honestly reported, only visibility is forced off.
+    assert data.final_count == 1
+    assert data.remaining_count == 1
 
 
 def test_week_scenario_panel_includes_a_no_show_member(db):

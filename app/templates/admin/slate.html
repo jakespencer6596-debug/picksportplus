@@ -84,9 +84,19 @@
     <p class="muted">
       {{ week.label }}, {{ week.season_year }} season
       <span class="badge badge-{{ week.status }}">{{ week.status }}</span>
+      {% if week.is_test_week %}
+        <span class="badge badge-test-week">Test week</span>
+      {% endif %}
     </p>
   {% endif %}
 </div>
+{% if week and week.is_test_week %}
+  <p class="form-hint">
+    This is a test week, built from whatever is live right now (NFL preseason, college week 0
+    included) so the group can try the pick and scoring flow. It does not count toward season
+    standings or payouts.
+  </p>
+{% endif %}
 
 <nav class="subnav" aria-label="Commissioner tools">
   <a class="subnav-link" href="/admin">Overview</a>
@@ -116,7 +126,7 @@
         <a class="week-switch-link{% if week and row.id == week.id %} is-active{% endif %}"
            href="/admin/slate?week={{ row.week_number }}"
            {% if week and row.id == week.id %}aria-current="page"{% endif %}>
-          <span class="week-switch-num num">{{ row.week_number }}</span>
+          <span class="week-switch-num num">{% if row.is_test_week %}Test{% else %}{{ row.week_number }}{% endif %}</span>
           <span class="week-switch-status">{{ row.status }}</span>
         </a>
       {% endfor %}
@@ -167,6 +177,24 @@
         <div class="form-actions">
           <button class="btn btn-primary" type="submit">Build the slate</button>
         </div>
+      </form>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-head">
+      <h3>Test week</h3>
+    </div>
+    <div class="card-body">
+      <p class="form-hint">
+        Builds a low-stakes week from whatever is live right now, NFL preseason and college
+        week 0 included, so the group can try picks and scoring before the real season
+        starts. It scores normally on its own, but never counts toward season standings,
+        weekly-win counts, or payouts, and the scenarios panel skips it. Building it again
+        refreshes it the same way building a real week does.
+      </p>
+      <form method="post" action="/admin/test-week/create" class="inline-form">
+        <button class="btn btn-secondary" type="submit">Create a test week</button>
       </form>
     </div>
   </div>
@@ -223,11 +251,19 @@
             {{ ic.icon("refresh", 18) }}<span>Refresh and score now</span>
           </button>
         </form>
+        {% if week.is_test_week %}
+          <form method="post" action="/admin/test-week/{{ week.id }}/delete" class="inline-form">
+            <button class="btn btn-secondary" type="submit">Delete this test week</button>
+          </form>
+        {% endif %}
       </div>
 
       <p class="form-hint">
         Publishing opens the week for picks. Refresh and score pulls finals from ESPN and rescores
         the week. Both are free to run and safe to run again.
+        {% if week.is_test_week %}
+          Deleting this test week removes its games, picks and entries for good.
+        {% endif %}
       </p>
     </div>
 

@@ -200,48 +200,61 @@ def results_page(
             # matches whichever week the switcher has selected, not always the latest.
             weekly, _ = weekly_leaderboard(db, pool, week=row, viewer_id=user.id)
 
-            # The payout column, rebuilt on the new payout engine in app/services/payouts.py
-            # (Payout system rebuild, Phase 5). Weekly and bowl share one week_id space, so
-            # awards_for_week/project_awards are always filtered to the one scope that
-            # actually governs this specific week rather than assumed.
-            payout_scope = "bowl" if row.is_bowl_week else "weekly"
-            if row.status == "scored":
-                # Final: the frozen numbers already written by the Phase 3 scoring hook.
-                # Read-only, never recomputed here.
-                awards = payout_service.awards_for_week(db, pool, row)
-                payouts_by_user = {
-                    award.user_id: award.amount for award in awards if award.scope == payout_scope
-                }
-                payout_rules_exist = bool(payouts_by_user) or bool(
-                    payout_service.load_rules(db, pool, scope=payout_scope)
-                )
-            else:
-                # Locked but still live: the week has not finished scoring, so there is no
-                # frozen row yet. Compute a live, unsaved projection instead, clearly flagged
-                # so the template can label it "Projected" rather than presenting it as final.
-                rules = payout_service.load_rules(db, pool, scope=payout_scope)
-                if rules:
-                    payout_rules_exist = True
-                    payout_is_projected = True
-                    projected = payout_service.project_awards(db, pool, payout_scope, week=row)
-                    payouts_by_user = {award.user_id: award.amount for award in projected}
-
-            # Scenarios panel (Phase 8). Leverage and representative scenarios are computed
-            # only for the signed in viewer (see week_scenario_panel's representative_for),
-            # both being the expensive, opt-in half of the sweep; every player still gets
-            # their own placement percentages.
-            scenario_panel = scenario_service.week_scenario_panel(
-                db, pool, row, probability_model=model, representative_for=[user.id]
-            )
-            if scenario_panel.report is not None:
-                games_by_id = {g.id: g for g in games}
-                remaining_games_by_id = {g.id: g for g in scenario_panel.remaining_games}
-                viewer_outlook = scenario_panel.report.players.get(user.id)
-                if viewer_outlook is not None:
-                    leverage_lines = _leverage_lines(viewer_outlook, games_by_id)
-                    representative_lines = _representative_lines(
-                        viewer_outlook.representative_scenarios, games_by_id
+            # A test week (Phase 3, preseason and test week support) is fully quarantined
+            # from both of these: it never carries a payout column (no PayoutAward row is
+            # ever written for one, see app/services/results.py's scoring hook, and a live
+            # "Projected" figure would be just as misleading) and the scenarios engine skips
+            # it outright (app/services/scenarios.py.week_scenario_panel already returns
+            # visible=False for one, but leaving scenario_panel at None here means the whole
+            # section is left out of the page rather than rendered in a permanently-pending
+            # state). Both stay at their empty defaults for a test week.
+            if not row.is_test_week:
+                # The payout column, rebuilt on the new payout engine in
+                # app/services/payouts.py (Payout system rebuild, Phase 5). Weekly and bowl
+                # share one week_id space, so awards_for_week/project_awards are always
+                # filtered to the one scope that actually governs this specific week rather
+                # than assumed.
+                payout_scope = "bowl" if row.is_bowl_week else "weekly"
+                if row.status == "scored":
+                    # Final: the frozen numbers already written by the Phase 3 scoring hook.
+                    # Read-only, never recomputed here.
+                    awards = payout_service.awards_for_week(db, pool, row)
+                    payouts_by_user = {
+                        award.user_id: award.amount
+                        for award in awards
+                        if award.scope == payout_scope
+                    }
+                    payout_rules_exist = bool(payouts_by_user) or bool(
+                        payout_service.load_rules(db, pool, scope=payout_scope)
                     )
+                else:
+                    # Locked but still live: the week has not finished scoring, so there is no
+                    # frozen row yet. Compute a live, unsaved projection instead, clearly
+                    # flagged so the template can label it "Projected" rather than presenting
+                    # it as final.
+                    rules = payout_service.load_rules(db, pool, scope=payout_scope)
+                    if rules:
+                        payout_rules_exist = True
+                        payout_is_projected = True
+                        projected = payout_service.project_awards(db, pool, payout_scope, week=row)
+                        payouts_by_user = {award.user_id: award.amount for award in projected}
+
+                # Scenarios panel (Phase 8). Leverage and representative scenarios are
+                # computed only for the signed in viewer (see week_scenario_panel's
+                # representative_for), both being the expensive, opt-in half of the sweep;
+                # every player still gets their own placement percentages.
+                scenario_panel = scenario_service.week_scenario_panel(
+                    db, pool, row, probability_model=model, representative_for=[user.id]
+                )
+                if scenario_panel.report is not None:
+                    games_by_id = {g.id: g for g in games}
+                    remaining_games_by_id = {g.id: g for g in scenario_panel.remaining_games}
+                    viewer_outlook = scenario_panel.report.players.get(user.id)
+                    if viewer_outlook is not None:
+                        leverage_lines = _leverage_lines(viewer_outlook, games_by_id)
+                        representative_lines = _representative_lines(
+                            viewer_outlook.representative_scenarios, games_by_id
+                        )
 
     return render(
         request,
@@ -367,6 +380,14 @@ async def custom_scenario(
     if not week_is_locked(row):
         raise HTTPException(
             status.HTTP_403_FORBIDDEN, "This week has not locked yet, so there is nothing to build."
+        )
+    if row.is_test_week:
+        # Same quarantine as the panel itself (Phase 3): a test week is skipped by the
+        # scenarios engine outright, so there is no build-your-own-scenario form to post to
+        # in the first place, but this closes the route off directly too rather than relying
+        # only on the template never rendering the form.
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN, "Scenarios are not available for a test week."
         )
 
     games = list(

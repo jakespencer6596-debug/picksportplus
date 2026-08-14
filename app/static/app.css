@@ -3098,6 +3098,16 @@ a.toggle-btn { text-decoration: none; }
   color: var(--ink);            /* 11.46:1 */
 }
 
+/* A commissioner's low-stakes test week (Phase 3, preseason and test week support). Same
+   gold recipe as badge-live/badge-pinned above, this app's one "pay attention" voice,
+   deliberately unmistakable everywhere it appears: the slate editor, the picks page, and
+   weekly results. */
+.badge-test-week {
+  background: var(--decor-soft);
+  border-color: var(--decor);
+  color: var(--ink);            /* 11.46:1 */
+}
+
 /* -- Week status. badge-{{ week.status }} resolves to one of these four ---
    The palette tells the story of a week: neutral while it is a draft, green
    once picks are open, brick once it locks (the same brick .lockbar-strong

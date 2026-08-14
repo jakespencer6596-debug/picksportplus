@@ -398,6 +398,122 @@ def test_admin_pages_refused_for_a_regular_player(client, world, path):
     assert response.status_code == 403
 
 
+# Test weeks (Phase 3, preseason and test week support) -----------------------
+
+
+def test_test_week_create_refused_for_a_regular_player(client, world):
+    _login(client, "player@example.com")
+    response = client.post("/admin/test-week/create")
+    assert response.status_code == 403
+
+
+def test_test_week_delete_refused_for_a_regular_player(client, world, session_factory):
+    db = session_factory()
+    week = Week(
+        pool_id=world["pool_id"],
+        season_year=2025,
+        week_number=0,
+        label="Test week",
+        status="draft",
+        is_test_week=True,
+    )
+    db.add(week)
+    db.commit()
+    week_id = week.id
+    db.close()
+
+    _login(client, "player@example.com")
+    response = client.post(f"/admin/test-week/{week_id}/delete")
+    assert response.status_code == 403
+
+
+def test_commissioner_can_create_a_test_week(client, world, session_factory):
+    """End to end for a commissioner: no anchor date is configured for this pool at all (see
+    _make_pool), which a real week build would refuse outright (Phase 2), and which a test
+    week must not need. Nothing is cached for ESPN, so every league resolves to nothing and
+    the build itself finds no games, exactly like test_build_slate_refuses_with_no_anchor_date's
+    "dead end" shape in tests/test_ingest.py, only reached here through the real route. What
+    this test actually pins is the thing a service-level test cannot: the Week row it creates
+    is real, is_test_week is set, and it needed no anchor date to get there."""
+    db = session_factory()
+    pool = db.get(Pool, world["pool_id"])
+    assert pool.week1_anchor_date is None
+    db.close()
+
+    _login(client, "boss@example.com")
+    response = client.post("/admin/test-week/create")
+    assert response.status_code == 303
+    assert response.headers["location"] == "/admin/slate?week=0"
+
+    db = session_factory()
+    week = db.scalar(select(Week).where(Week.pool_id == world["pool_id"], Week.week_number == 0))
+    assert week is not None
+    assert week.is_test_week is True
+    assert week.label == "Test week"
+    db.close()
+
+
+def test_test_week_badge_and_explanation_render_on_the_slate_editor(client, world, session_factory):
+    db = session_factory()
+    week = Week(
+        pool_id=world["pool_id"],
+        season_year=2025,
+        week_number=0,
+        label="Test week",
+        status="draft",
+        is_test_week=True,
+    )
+    db.add(week)
+    db.commit()
+    db.close()
+
+    _login(client, "boss@example.com")
+    response = client.get("/admin/slate?week=0")
+    assert response.status_code == 200
+    assert "badge-test-week" in response.text
+    assert "does not count toward season" in response.text
+    assert "standings or payouts" in response.text
+    assert "Delete this test week" in response.text
+
+
+def test_commissioner_can_delete_a_test_week(client, world, session_factory):
+    db = session_factory()
+    week = Week(
+        pool_id=world["pool_id"],
+        season_year=2025,
+        week_number=0,
+        label="Test week",
+        status="draft",
+        is_test_week=True,
+    )
+    db.add(week)
+    db.commit()
+    week_id = week.id
+    db.close()
+
+    _login(client, "boss@example.com")
+    response = client.post(f"/admin/test-week/{week_id}/delete")
+    assert response.status_code == 303
+
+    db = session_factory()
+    assert db.get(Week, week_id) is None
+    db.close()
+
+
+def test_commissioner_cannot_delete_a_real_week_via_the_test_week_route(
+    client, world, session_factory
+):
+    """The real week from the world fixture (is_test_week False) must be refused, never
+    silently deleted, since a real week never allows deletion in this codebase."""
+    _login(client, "boss@example.com")
+    response = client.post(f"/admin/test-week/{world['week_id']}/delete")
+    assert response.status_code == 303
+
+    db = session_factory()
+    assert db.get(Week, world["week_id"]) is not None
+    db.close()
+
+
 def test_ephemeral_storage_banner_shown_to_site_admin(client, world, monkeypatch):
     """Phase 1 remediation (see DECISIONS.md): a site admin sees the brick warning on every
     page while the app is running on ephemeral storage. world's boss is both role="admin"
