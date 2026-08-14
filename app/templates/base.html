@@ -91,6 +91,18 @@
   </nav>
 </div>
 
+{% if current_user and current_user.is_admin and IS_EPHEMERAL_STORAGE %}
+  <div class="lockbar lockbar-strong" role="status">
+    <div class="lockbar-inner row">
+      {{ ic.icon("alert", 16) }}
+      <span>
+        This deployment is using temporary storage. All data will be lost when the service
+        restarts. Set DATABASE_URL to a persistent database.
+      </span>
+    </div>
+  </div>
+{% endif %}
+
 {% if current_user and current_user.is_admin and active_nav == 'admin' and pool %}
   <div class="lockbar" role="status">
     <div class="lockbar-inner row">

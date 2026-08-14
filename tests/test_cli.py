@@ -64,6 +64,35 @@ def _configure_admin_credentials(monkeypatch) -> None:
     monkeypatch.setattr(settings, "default_join_code", "TESTCODE")
 
 
+def test_doctor_warns_on_ephemeral_storage_and_reports_row_counts(isolated_db, monkeypatch, capsys):
+    """Phase 1 remediation (see DECISIONS.md): doctor is the data-loss check a commissioner or
+    site admin can run to see, at a glance, whether the last restart kept the data."""
+    from app.cli import doctor
+
+    monkeypatch.setattr(settings, "database_url", "sqlite:////tmp/picksportplus.db")
+
+    session = isolated_db()
+    session.add(User(email="a@example.com", password_hash="x", display_name="A"))
+    session.commit()
+    session.close()
+
+    doctor(pool_id=None, probe=False)
+    out = capsys.readouterr().out.lower()
+    assert "ephemeral storage" in out
+    assert "users       : 1" in out
+
+
+def test_doctor_reports_durable_storage_when_not_ephemeral(isolated_db, monkeypatch, capsys):
+    from app.cli import doctor
+
+    monkeypatch.setattr(settings, "database_url", "sqlite:///./picksportplus.db")
+
+    doctor(pool_id=None, probe=False)
+    out = capsys.readouterr().out.lower()
+    assert "storage     : durable" in out
+    assert "ephemeral" not in out
+
+
 def test_seed_admin_creates_a_pool_with_auto_publish_off(isolated_db, monkeypatch):
     _configure_admin_credentials(monkeypatch)
 

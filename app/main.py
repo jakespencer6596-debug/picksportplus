@@ -45,6 +45,24 @@ app.add_middleware(ProxyHeadersMiddleware, trusted_hosts="*")
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
 
+@app.on_event("startup")
+def _log_storage_status() -> None:
+    """Loud, impossible-to-miss log line on boot so an operator reading the Render deploy
+    log sees data-loss risk immediately, not just from a banner someone has to click into
+    (Phase 1 remediation, see DECISIONS.md)."""
+    from app.db import engine
+
+    log.info("database dialect: %s", engine.dialect.name)
+    if settings.is_ephemeral_storage:
+        log.warning(
+            "DATABASE_URL points at ephemeral storage (%s). Every account, league, pick, "
+            "payout rule and award will be LOST the next time this service sleeps or "
+            "redeploys. Set DATABASE_URL to a persistent Postgres database (for example "
+            "Neon) before inviting real players.",
+            settings.database_url,
+        )
+
+
 @app.exception_handler(StarletteHTTPException)
 async def http_exception_handler(request: Request, exc: StarletteHTTPException):
     """Redirects for signed-out users, in-theme pages for everything else."""

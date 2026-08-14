@@ -10,6 +10,19 @@ from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
+def is_ephemeral_sqlite_path(database_url: str) -> bool:
+    """True for a sqlite URL whose file lives under /tmp, the one directory Render's free
+    instance disk guarantees is writable and the one it wipes on every sleep or redeploy
+    (Phase 1 remediation, see DECISIONS.md). A non-sqlite URL (Postgres, MySQL) is never
+    ephemeral by this check; a sqlite file anywhere other than /tmp is treated as durable
+    enough for local development, even though no path on a Render free instance actually
+    survives a restart outside a persistent disk or an external database."""
+    if not database_url.startswith("sqlite"):
+        return False
+    path = database_url.split("///", 1)[-1]
+    return path == "/tmp" or path.startswith("/tmp/")
+
+
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
         env_file=".env",
@@ -127,6 +140,15 @@ class Settings(BaseSettings):
     @property
     def is_sqlite(self) -> bool:
         return self.database_url.startswith("sqlite")
+
+    @property
+    def is_ephemeral_storage(self) -> bool:
+        """True when database_url is a sqlite file under /tmp, which Render's free instance
+        disk wipes on every restart, sleep or redeploy (Phase 1 remediation, see
+        DECISIONS.md). A Postgres URL, or a sqlite file anywhere other than /tmp, is not
+        flagged: a developer's local sqlite:///./picksportplus.db survives fine between
+        runs on the same machine."""
+        return is_ephemeral_sqlite_path(self.database_url)
 
     @property
     def support_email(self) -> str:

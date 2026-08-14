@@ -252,10 +252,26 @@ a commissioner configured by hand from `/admin/payouts`: `seed-demo` reseeds its
 payout ladder on every restart, but any change made on top of that by hand in the hosted demo
 is gone the next time the free service sleeps or redeploys.
 
-To make it permanent and still free, create a database at [Neon](https://neon.tech) and set
-`DATABASE_URL` on the service to its connection string. That is the only change, no redeploy
-of code needed, and Neon's free tier does not expire the way Render's 30 day free Postgres
-does.
+### Persistent database (Neon), required before real players join
+
+Do this before inviting anyone who is going to play for money. SQLite on the instance disk
+is demo-only: it is wiped every time the free service sleeps or redeploys, taking every
+account, league, pick, payout rule and award with it.
+
+1. Create a free database at [Neon](https://neon.tech). Its free tier does not expire, unlike
+   Render's 30 day free Postgres.
+2. Copy its connection string and set it as `DATABASE_URL` on the Render service (Render
+   dashboard, Environment tab). `render.yaml` leaves `DATABASE_URL` for you to paste in at
+   deploy time for exactly this reason, rather than defaulting to the disposable file.
+3. Redeploy. No code change needed; the app only needs a standard Postgres URL and already
+   runs `alembic upgrade head` on every boot.
+4. Confirm it stuck: run `python -m app.cli doctor` (or check the site admin dashboard,
+   which shows the same warning) and confirm the storage line no longer reads ephemeral.
+
+The app also warns you if you skip this: a loud line in the server log at boot, a persistent
+brick-colored banner on every page the site admin views, and a check in `python -m app.cli
+doctor` that reports row counts and the age of the oldest row, so you can see at a glance
+whether the last restart actually kept the data.
 
 The demo runs entirely on the real 2025 weeks 5 and 6 recordings committed in `tests/fixtures`,
 and `OFFLINE_MODE` blocks outbound HTTP, so the deployed site never calls ESPN, The Odds API or
@@ -287,12 +303,9 @@ up. Add players by sharing the pool join code from the admin Members page.
 - **The web service sleeps after about 15 minutes idle** and takes roughly a minute to wake on
   the next visit. That is normal on Render's free plan. The first click on a shared link may
   therefore feel slow.
-- **The demo database is ephemeral.** See the storage note above. Swap `DATABASE_URL` to a free [Neon](https://neon.tech) database to make it permanent. Neon does not expire, unlike Render's 30 day free Postgres.
-  past 30 days, point `DATABASE_URL` at a free external Postgres such as
-  [Neon](https://neon.tech), which does not expire. It is a one line swap: replace the
-  `fromDatabase` block for `DATABASE_URL` in `render.yaml` with your Neon connection string,
-  or just paste the Neon URL into `DATABASE_URL` in the Render dashboard and delete the Render
-  database. The app only needs a standard Postgres URL.
+- **The demo database is ephemeral.** See "Persistent database (Neon)" above. Paste a Neon
+  connection string into `DATABASE_URL` in the Render dashboard to make it permanent; the app
+  only needs a standard Postgres URL.
 - **Live weekly automation is intentionally left out.** The auto slate, live scores and scoring
   are the `run-cron` command, and Render does not offer cron jobs on the free plan. Enable it
   later on a paid plan, or run `python -m app.cli run-cron` hourly from any external scheduler

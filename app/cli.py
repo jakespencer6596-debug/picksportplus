@@ -16,7 +16,7 @@ from sqlalchemy import func, select
 
 from app.config import settings
 from app.db import engine, session_scope
-from app.models import PAYOUT_SCOPES, Base, Pool, User, Week
+from app.models import PAYOUT_SCOPES, Base, PayoutAward, Pick, Pool, User, Week, utcnow
 from app.providers import espn
 from app.providers.http import usage_report
 
@@ -666,6 +666,36 @@ def doctor(
         _echo(f"  migrations  : {state}")
     else:
         _echo("  migrations  : no alembic.ini found")
+
+    if settings.is_ephemeral_storage:
+        typer.secho(
+            "  WARNING     : this is ephemeral storage. Every account, league, pick, "
+            "payout rule and award will be lost the next time the service sleeps or "
+            "redeploys. Set DATABASE_URL to a persistent database before real players join.",
+            fg=typer.colors.RED,
+        )
+    else:
+        _echo("  storage     : durable")
+
+    with session_scope() as db:
+        user_count = db.scalar(select(func.count(User.id))) or 0
+        pool_count = db.scalar(select(func.count(Pool.id))) or 0
+        pick_count = db.scalar(select(func.count(Pick.id))) or 0
+        award_count = db.scalar(select(func.count(PayoutAward.id))) or 0
+        oldest_user = db.scalar(select(func.min(User.created_at)))
+        _echo("")
+        _echo("Data survived the last restart (a commissioner or admin data-loss check)")
+        _echo(f"  users       : {user_count}")
+        _echo(f"  pools       : {pool_count}")
+        _echo(f"  picks       : {pick_count}")
+        _echo(f"  payout awards : {award_count}")
+        if oldest_user is not None:
+            age = utcnow() - (
+                oldest_user if oldest_user.tzinfo else oldest_user.replace(tzinfo=dt.UTC)
+            )
+            _echo(f"  oldest user row is {age.days} days old")
+        else:
+            _echo("  oldest user row : no users yet")
 
     _echo("")
     _echo(f"OFFLINE_MODE  : {settings.offline_mode}")

@@ -19,7 +19,7 @@ September 12, 2026.
 | Phase | Description | Status | Commit SHA |
 |---|---|---|---|
 | 0 | Baseline, branch, report | Done | (this commit) |
-| 1 | Data persistence (ephemeral SQLite) | Pending | |
+| 1 | Data persistence (ephemeral SQLite) | Done | (this commit) |
 | 2 | Week resolution / anchor date | Pending | |
 | 3 | Preseason / test week support | Pending | |
 | 4 | Split site admin vs commissioner | Pending | |
@@ -31,6 +31,20 @@ September 12, 2026.
 | 10 | Full sweep | Pending | |
 | 11 | Documentation | Pending | |
 | 12 | Merge, push, deploy, verify | Pending | |
+
+## Phase 1 notes
+
+- Startup log warning added to `app/main.py` (on the `startup` event), logging the database
+  dialect always and a loud warning when `settings.is_ephemeral_storage` is true.
+- `python -m app.cli doctor` now prints a "Data survived the last restart" section: user,
+  pool, pick and payout award counts, and the age of the oldest user row, plus the ephemeral
+  storage warning in red.
+- Site admin banner (brick, `.lockbar-strong`) shows on every page while `current_user.is_admin`
+  and storage is ephemeral; never shown to a commissioner or player.
+- `render.yaml`'s `DATABASE_URL` is now `sync: false` with no default value, so Render prompts
+  for a real connection string at deploy time.
+- `README.md` gained a "Persistent database (Neon)" section under "Deploy the free demo".
+- Test count after Phase 1: 949 (+10 over the Phase 0 baseline of 939).
 
 ## Ambiguity decisions
 

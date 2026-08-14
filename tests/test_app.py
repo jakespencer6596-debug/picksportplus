@@ -16,6 +16,7 @@ from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from app.auth import hash_password
+from app.config import settings
 from app.db import get_db
 from app.main import app
 from app.models import (
@@ -395,6 +396,33 @@ def test_admin_pages_refused_for_a_regular_player(client, world, path):
     _login(client, "player@example.com")
     response = client.get(path)
     assert response.status_code == 403
+
+
+def test_ephemeral_storage_banner_shown_to_site_admin(client, world, monkeypatch):
+    """Phase 1 remediation (see DECISIONS.md): a site admin sees the brick warning on every
+    page while the app is running on ephemeral storage. world's boss is both role="admin"
+    and this pool's commissioner."""
+    monkeypatch.setattr(settings, "database_url", "sqlite:////tmp/picksportplus.db")
+    _login(client, "boss@example.com")
+    response = client.get("/admin")
+    assert "temporary storage" in response.text
+    assert "lockbar-strong" in response.text
+
+
+def test_ephemeral_storage_banner_hidden_from_a_regular_player(client, world, monkeypatch):
+    """A regular player cannot act on the warning, so they never see it (Phase 1
+    remediation), even while the app is genuinely on ephemeral storage."""
+    monkeypatch.setattr(settings, "database_url", "sqlite:////tmp/picksportplus.db")
+    _login(client, "player@example.com")
+    response = client.get("/picks")
+    assert "temporary storage" not in response.text
+
+
+def test_ephemeral_storage_banner_hidden_when_storage_is_durable(client, world, monkeypatch):
+    monkeypatch.setattr(settings, "database_url", "sqlite:///./picksportplus.db")
+    _login(client, "boss@example.com")
+    response = client.get("/admin")
+    assert "temporary storage" not in response.text
 
 
 # Picks ----------------------------------------------------------------------

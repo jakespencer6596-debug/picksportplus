@@ -2600,3 +2600,59 @@ Decimal rule was followed anyway, since it is good practice for a real money fea
 explicit, non-negotiable instruction from the build brief regardless of its citation being
 wrong. Phase 9 adds the rule to SPEC.md for real, in section 4 (Tech stack) where it actually
 belongs, rather than leaving the document's own claim about itself inaccurate.
+
+## Remediation, August 2026
+
+Thirteen phase remediation (Phase 0 through 12) against defects found in a live walkthrough
+on August 14, 2026, ahead of a real group testing the app the week of August 17 and playing
+for money starting September 12, 2026. Branch `remediation-aug-2026`. See
+`REMEDIATION-REPORT.md` for the phase-by-phase checklist, test counts and live deploy proof.
+
+### Phase 1, data persistence
+
+The free Render blueprint (`render.yaml`) ran on `sqlite:////tmp/picksportplus.db`, which
+Render wipes on every sleep or redeploy. That is fine for a self-reseeding public demo and
+fatal for a real paid season: a user's account, and everything built on top of it, could
+vanish within a minute of them creating it.
+
+**Detection lives in `app/config.py` as a plain function** (`is_ephemeral_sqlite_path`), not
+only a property on `Settings`, specifically so it is unit testable without booting the app or
+touching a real database connection. It flags a sqlite URL whose file path starts with
+`/tmp`, `/tmp` itself, and nothing else: a Postgres URL is never flagged, and a sqlite file
+anywhere else (a developer's `./picksportplus.db`) is treated as durable enough for local
+work, even though nothing on a Render free instance actually survives a restart outside a
+persistent disk or an external database.
+
+**The banner reads freshly on every render, not once at import time.** The first pass put
+`IS_EPHEMERAL_STORAGE` into `templates.env.globals`, computed once when `app/templating.py`
+first imports. That is fine in production, since `DATABASE_URL` is fixed for the life of the
+process, but it made the flag untestable (a test's `monkeypatch.setattr(settings,
+"database_url", ...)` would never be seen) and it is one more piece of state that could in
+principle drift from the real setting during a long-lived process. Moved it into
+`render()`'s per-call context dict instead, next to `tz`, which the codebase already computes
+fresh on every render for the same reason.
+
+**The banner is gated on `current_user.is_admin`, not a route prefix.** Phase 1 lands before
+Phase 4's `/site` versus `/league` split, and the brief was explicit that a commissioner or
+player must never see this (they cannot act on it), only the site admin. Checking
+`current_user.is_admin` directly, rather than `active_nav == "admin"`, means the banner will
+keep working unchanged once Phase 4 renames the commissioner's own nav value and moves site
+admin routes to `/site`.
+
+**Reused `.lockbar-strong`, no new CSS.** It is already the brick-colored, full-bleed sticky
+bar the imminent-lock and already-locked states use (`app/static/app.css`), which is exactly
+the "persistent brick-colored warning" the brief asked for and keeps this change CSS-free,
+per the house rules.
+
+**`render.yaml`'s `DATABASE_URL` moved to `sync: false` with no `value`,** so Render prompts
+for a real connection string at deploy time rather than silently defaulting to the disposable
+file. The commented block at the top of the file, and a new README.md section ("Persistent
+database (Neon)"), spell out that this must happen before real players join, and how.
+`seed-demo`/`seed-admin` stay in the start command unchanged: whether this same service also
+runs the real season, or a real season gets its own service, is a Phase 8 (first-run
+experience) and deployment-topology question, not something Phase 1 decided.
+
+**`doctor`'s data-loss section reuses `session_scope()`, printed as a second, separate
+`with` block** rather than folded into the existing pool-info block below it, so the row
+counts and ephemeral warning are visible even when no pool exists yet (a fresh deploy), which
+the existing pool-info block returns early out of.
