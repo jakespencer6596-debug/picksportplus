@@ -59,7 +59,7 @@
 {% endmacro %}
 
 {% macro spread_form(week_id, game) %}
-  <form method="post" action="/admin/slate/game" class="action-form">
+  <form method="post" action="/league/slate/game" class="action-form">
     <input type="hidden" name="week_id" value="{{ week_id }}">
     <input type="hidden" name="game_id" value="{{ game.id }}">
     <input type="hidden" name="action" value="spread">
@@ -99,11 +99,11 @@
 {% endif %}
 
 <nav class="subnav" aria-label="Commissioner tools">
-  <a class="subnav-link" href="/admin">Overview</a>
-  <a class="subnav-link is-active" href="/admin/slate" aria-current="page">Slate</a>
-  <a class="subnav-link" href="/admin/members">Members</a>
-  <a class="subnav-link" href="/admin/settings">Settings</a>
-  <a class="subnav-link" href="/admin/payouts">Payouts</a>
+  <a class="subnav-link" href="/league">Overview</a>
+  <a class="subnav-link is-active" href="/league/slate" aria-current="page">Slate</a>
+  <a class="subnav-link" href="/league/members">Members</a>
+  <a class="subnav-link" href="/league/settings">Settings</a>
+  <a class="subnav-link" href="/league/payouts">Payouts</a>
 </nav>
 
 {% if warnings %}
@@ -124,7 +124,7 @@
     <nav class="week-switch" aria-label="Weeks in this season">
       {% for row in weeks %}
         <a class="week-switch-link{% if week and row.id == week.id %} is-active{% endif %}"
-           href="/admin/slate?week={{ row.week_number }}"
+           href="/league/slate?week={{ row.week_number }}"
            {% if week and row.id == week.id %}aria-current="page"{% endif %}>
           <span class="week-switch-num num">{% if row.is_test_week %}Test{% else %}{{ row.week_number }}{% endif %}</span>
           <span class="week-switch-status">{{ row.status }}</span>
@@ -140,7 +140,7 @@
       <h3>Build a slate</h3>
     </div>
     <div class="card-body">
-      <form method="post" action="/admin/slate/build" class="stack">
+      <form method="post" action="/league/slate/build" class="stack">
         <div class="field">
           <label class="field-label" for="week_number">Week number</label>
           <input class="input num" type="number" id="week_number" name="week_number"
@@ -193,7 +193,7 @@
         weekly-win counts, or payouts, and the scenarios panel skips it. Building it again
         refreshes it the same way building a real week does.
       </p>
-      <form method="post" action="/admin/test-week/create" class="inline-form">
+      <form method="post" action="/league/test-week/create" class="inline-form">
         <button class="btn btn-secondary" type="submit">Create a test week</button>
       </form>
     </div>
@@ -240,19 +240,19 @@
 
       <div class="row">
         {% if week.status == "draft" %}
-          <form method="post" action="/admin/slate/publish" class="inline-form">
+          <form method="post" action="/league/slate/publish" class="inline-form">
             <input type="hidden" name="week_id" value="{{ week.id }}">
             <button class="btn btn-primary" type="submit">Publish this week</button>
           </form>
         {% endif %}
-        <form method="post" action="/admin/run/results" class="inline-form">
+        <form method="post" action="/league/run/results" class="inline-form">
           <input type="hidden" name="week_id" value="{{ week.id }}">
           <button class="btn btn-secondary" type="submit">
             {{ ic.icon("refresh", 18) }}<span>Refresh and score now</span>
           </button>
         </form>
         {% if week.is_test_week %}
-          <form method="post" action="/admin/test-week/{{ week.id }}/delete" class="inline-form">
+          <form method="post" action="/league/test-week/{{ week.id }}/delete" class="inline-form">
             <button class="btn btn-secondary" type="submit">Delete this test week</button>
           </form>
         {% endif %}
@@ -284,7 +284,7 @@
             </span>
           </div>
         {% endif %}
-        <form method="post" action="/admin/slate/lock" class="stack">
+        <form method="post" action="/league/slate/lock" class="stack">
           <input type="hidden" name="week_id" value="{{ week.id }}">
           <div class="field">
             <label class="field-label" for="lock_at_local">Picks lock at</label>
@@ -353,7 +353,7 @@
                   </span>
                 </td>
                 <td data-label="Actions" class="cell-actions">
-                  <form method="post" action="/admin/slate/game" class="inline-form">
+                  <form method="post" action="/league/slate/game" class="inline-form">
                     <input type="hidden" name="week_id" value="{{ week.id }}">
                     <input type="hidden" name="game_id" value="{{ game.id }}">
                     <input type="hidden" name="action" value="{% if game.pinned %}unpin{% else %}pin{% endif %}">
@@ -365,7 +365,7 @@
                   </form>
 
                   {% if editable %}
-                    <form method="post" action="/admin/slate/game" class="inline-form">
+                    <form method="post" action="/league/slate/game" class="inline-form">
                       <input type="hidden" name="week_id" value="{{ week.id }}">
                       <input type="hidden" name="game_id" value="{{ game.id }}">
                       <input type="hidden" name="action" value="remove">
@@ -376,7 +376,7 @@
                     </form>
 
                     {% if swap_options %}
-                      <form method="post" action="/admin/slate/game" class="action-form">
+                      <form method="post" action="/league/slate/game" class="action-form">
                         <input type="hidden" name="week_id" value="{{ week.id }}">
                         <input type="hidden" name="game_id" value="{{ game.id }}">
                         <input type="hidden" name="action" value="swap">
@@ -396,7 +396,7 @@
                     {% endif %}
                   {% endif %}
 
-                  <form method="post" action="/admin/slate/game" class="inline-form">
+                  <form method="post" action="/league/slate/game" class="inline-form">
                     <input type="hidden" name="week_id" value="{{ week.id }}">
                     <input type="hidden" name="game_id" value="{{ game.id }}">
                     <input type="hidden" name="action" value="{% if game.is_void %}unvoid{% else %}void{% endif %}">
@@ -456,7 +456,7 @@
                     <span class="badge badge-pinned">Pinned</span>
                   {% endif %}
                   {% if editable %}
-                    <form method="post" action="/admin/slate/game" class="inline-form">
+                    <form method="post" action="/league/slate/game" class="inline-form">
                       <input type="hidden" name="week_id" value="{{ week.id }}">
                       <input type="hidden" name="game_id" value="{{ game.id }}">
                       <input type="hidden" name="action" value="add">
@@ -469,7 +469,7 @@
                     <span class="cell-note muted">Picks are in, the slate is fixed.</span>
                   {% endif %}
 
-                  <form method="post" action="/admin/slate/game" class="inline-form">
+                  <form method="post" action="/league/slate/game" class="inline-form">
                     <input type="hidden" name="week_id" value="{{ week.id }}">
                     <input type="hidden" name="game_id" value="{{ game.id }}">
                     <input type="hidden" name="action" value="{% if game.pinned %}unpin{% else %}pin{% endif %}">

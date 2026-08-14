@@ -143,7 +143,7 @@ def seed_admin() -> None:
                 # Real, confirmed anchor for the season (see DECISIONS.md, Phase 9b). Nullable,
                 # so leaving WEEK1_ANCHOR_DATE unset in the environment still seeds a working
                 # pool, just one that falls back to detect_week's pre-anchor behaviour until a
-                # commissioner sets it from /admin/settings.
+                # commissioner sets it from /league/settings.
                 week1_anchor_date=settings.week1_anchor_date,
             )
             db.add(pool)
@@ -153,15 +153,15 @@ def seed_admin() -> None:
             _echo(f"Pool {pool.name} already exists with join code {pool.join_code}.")
 
         # The admin is never enrolled as a PoolMember here (Post-launch fixes, see
-        # DECISIONS.md): the site admin manages every league from /admin/leagues but never
+        # DECISIONS.md): the site admin manages every league from /site/leagues but never
         # runs one, structurally, not just by convention. The pool created above still needs
-        # a real commissioner attached, either by email from /admin/leagues/new or by sharing
+        # a real commissioner attached, either by email from /site/leagues/new or by sharing
         # its commissioner invite link, before anyone can manage it day to day.
 
     _echo("")
     _echo(f"Sign in at http://localhost:8000/login as {email}")
     _echo(f"{pool.name} has no commissioner yet. Attach one from the admin portal, either by")
-    _echo("email at /admin/leagues/new or with that league's commissioner invite link.")
+    _echo("email at /site/leagues/new or with that league's commissioner invite link.")
 
 
 @app.command("seed-demo")
@@ -590,7 +590,7 @@ def payouts_summary_cmd(
     the grand total, and the paid/unpaid split.
 
     Read only, writes nothing. Reads only frozen PayoutAward rows, the same data the
-    /admin/payouts/summary page shows, safe to run at any time.
+    /league/payouts/summary page shows, safe to run at any time.
     """
     from app.services.payouts import payout_summary
 

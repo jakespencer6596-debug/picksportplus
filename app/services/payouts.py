@@ -61,7 +61,7 @@ __all__ = [
 
 @dataclass
 class PlayerPayoutRow:
-    """One row per pool member for the /admin/payouts summary page.
+    """One row per pool member for the /league/payouts summary page.
 
     awards_by_scope groups the raw, frozen PayoutAward rows by scope ("weekly", "bowl",
     "season_points", "season_wins") rather than handing back a flat list of award ids. This
@@ -453,7 +453,7 @@ def recalculate_awards(
 
 # Set Payouts editor (Payout system rebuild, Phase 4) ------------------------------------
 #
-# Everything below this line supports the commissioner-facing /admin/payouts screen
+# Everything below this line supports the commissioner-facing /league/payouts screen
 # (app/routers/payouts.py): plain create/update/delete for a single PayoutRule row, plus
 # the two bulk actions the editor offers (scale every rule to the pot, load the known
 # preset ladder). Route-level input shape/range validation (place is a positive integer,

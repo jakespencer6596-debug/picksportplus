@@ -118,11 +118,13 @@ from app.routers import (  # noqa: E402
     auth,
     leaderboard,
     leagues,
+    legacy_redirects,
     legal,
     payouts,
     picks,
     public,
     results,
+    site,
 )
 
 app.include_router(auth.router)
@@ -132,9 +134,13 @@ app.include_router(results.router)
 app.include_router(admin.router)
 app.include_router(payouts.router)
 app.include_router(leagues.router)
+app.include_router(site.router)
 app.include_router(admin_contacts.router)
 app.include_router(legal.router)
 app.include_router(public.router)
+# Registered last: every real /admin/... route from before Phase 4 is gone, so these bare
+# 301s only ever catch an old bookmark or an old link, never shadow a live route.
+app.include_router(legacy_redirects.router)
 
 
 @app.get("/", include_in_schema=False)

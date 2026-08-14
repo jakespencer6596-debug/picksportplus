@@ -53,7 +53,7 @@ class Settings(BaseSettings):
     # league's own ESPN week from this date, see DECISIONS.md, Phase 1). Real, confirmed
     # value for the 2026 season: seed_admin threads this straight onto a freshly created
     # pool's Pool.week1_anchor_date, the same field a commissioner can also edit later from
-    # /admin/settings. Nullable so a pool can be seeded without one and configured by hand
+    # /league/settings. Nullable so a pool can be seeded without one and configured by hand
     # instead, matching Pool.week1_anchor_date's own nullability.
     week1_anchor_date: dt.date | None = dt.date(2026, 9, 12)
     open_registration: bool = False

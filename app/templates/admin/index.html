@@ -1,12 +1,12 @@
 {% extends "base.html" %}
 {% import "components/icons.html" as ic %}
-{% block title %}Admin overview. {{ APP_NAME }}{% endblock %}
+{% block title %}League overview. {{ APP_NAME }}{% endblock %}
 
 {% block content %}
 <div class="page-head">
   <div>
     <p class="eyebrow">Commissioner</p>
-    <h1 class="page-title">Admin overview</h1>
+    <h1 class="page-title">League overview</h1>
   </div>
   {% if commissioner_pools | length > 1 %}
     <details class="league-switcher" data-league-switcher>
@@ -16,7 +16,7 @@
       <div class="league-switcher-panel">
         <p class="league-switcher-label">Switch league</p>
         {% for other in commissioner_pools if other.id != pool.id %}
-          <form method="post" action="/admin/switch-league" class="inline-form">
+          <form method="post" action="/league/switch-league" class="inline-form">
             <input type="hidden" name="pool_id" value="{{ other.id }}">
             <button class="league-switcher-option" type="submit">{{ other.name }}</button>
           </form>
@@ -29,11 +29,11 @@
 </div>
 
 <nav class="subnav" aria-label="Commissioner tools">
-  <a class="subnav-link is-active" href="/admin" aria-current="page">Overview</a>
-  <a class="subnav-link" href="/admin/slate">Slate</a>
-  <a class="subnav-link" href="/admin/members">Members</a>
-  <a class="subnav-link" href="/admin/settings">Settings</a>
-  <a class="subnav-link" href="/admin/payouts">Payouts</a>
+  <a class="subnav-link is-active" href="/league" aria-current="page">Overview</a>
+  <a class="subnav-link" href="/league/slate">Slate</a>
+  <a class="subnav-link" href="/league/members">Members</a>
+  <a class="subnav-link" href="/league/settings">Settings</a>
+  <a class="subnav-link" href="/league/payouts">Payouts</a>
 </nav>
 
 {% if warnings %}
@@ -153,7 +153,7 @@
           {% for week in weeks %}
             <tr>
               <td data-label="Week">
-                <a href="/admin/slate?week={{ week.week_number }}">{{ week.label }}</a>
+                <a href="/league/slate?week={{ week.week_number }}">{{ week.label }}</a>
               </td>
               <td data-label="Status">
                 <span class="badge badge-{{ week.status }}">{{ week.status }}</span>
@@ -169,7 +169,7 @@
                 {% if week.lock_at_override %}<span class="pill">Set by hand</span>{% endif %}
               </td>
               <td data-label="Actions">
-                <a class="btn btn-secondary btn-sm" href="/admin/slate?week={{ week.week_number }}">
+                <a class="btn btn-secondary btn-sm" href="/league/slate?week={{ week.week_number }}">
                   Edit slate<span class="visually-hidden">, {{ week.label }}</span>
                 </a>
               </td>
@@ -186,7 +186,7 @@
         Build the first slate and the season starts. The tool reads the schedule from ESPN,
         resolves a line for every game, and takes the closest ones.
       </p>
-      <a class="btn btn-primary" href="/admin/slate">Go to the slate editor</a>
+      <a class="btn btn-primary" href="/league/slate">Go to the slate editor</a>
     </div>
   {% endif %}
 </section>

@@ -1,0 +1,83 @@
+{% extends "base.html" %}
+{% import "components/icons.html" as ic %}
+{% block title %}Site overview. {{ APP_NAME }}{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <div>
+    <p class="eyebrow">Site admin</p>
+    <h1 class="page-title">Site overview</h1>
+  </div>
+  <div class="row">
+    <a class="btn btn-secondary" href="/site/contacts">
+      {{ ic.icon("mail", 18) }}<span>Contact submissions ({{ contact_count }})</span>
+    </a>
+    <a class="btn btn-primary" href="/site/leagues">
+      {{ ic.icon("flag", 18) }}<span>Leagues</span>
+    </a>
+  </div>
+</div>
+
+{% if IS_EPHEMERAL_STORAGE %}
+  <div class="lockbar lockbar-strong" role="status">
+    <div class="lockbar-inner row">
+      {{ ic.icon("alert", 16) }}
+      <span>
+        This deployment is using temporary storage. All data will be lost when the service
+        restarts. Set DATABASE_URL to a persistent database.
+      </span>
+    </div>
+  </div>
+{% else %}
+  <div class="flash flash-ok">
+    {{ ic.icon("check", 18) }}
+    <span>Storage is persistent. Data survives a restart or redeploy.</span>
+  </div>
+{% endif %}
+
+<section class="section" aria-labelledby="leagues-title">
+  <h2 class="section-title" id="leagues-title">Every league</h2>
+
+  {% if pool_summaries %}
+    <div class="table-wrap">
+      <table class="table">
+        <thead>
+          <tr>
+            <th scope="col">League</th>
+            <th scope="col" class="num">Season</th>
+            <th scope="col" class="num">Members</th>
+            <th scope="col">Current week</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for row in pool_summaries %}
+            <tr>
+              <td data-label="League"><strong>{{ row.pool.name }}</strong></td>
+              <td data-label="Season" class="num">{{ row.pool.season_year }}</td>
+              <td data-label="Members" class="num">{{ row.member_count }}</td>
+              <td data-label="Current week">
+                {% if row.latest_week %}
+                  {{ row.latest_week.label }}
+                  <span class="badge badge-{{ row.latest_week.status }}">{{ row.latest_week.status }}</span>
+                {% else %}
+                  <span class="muted">No weeks built yet</span>
+                {% endif %}
+              </td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    <p class="form-hint">
+      Manage join codes, commissioners and creation from <a href="/site/leagues">Leagues</a>.
+    </p>
+  {% else %}
+    <div class="empty-state">
+      {{ ic.icon("flag", 28) }}
+      <h3 class="empty-state-title">No leagues yet</h3>
+      <p>Create the first one from the Leagues page.</p>
+      <a class="btn btn-primary" href="/site/leagues/new">Create league</a>
+    </div>
+  {% endif %}
+</section>
+{% endblock %}

@@ -14,11 +14,11 @@
 </div>
 
 <nav class="subnav" aria-label="Commissioner tools">
-  <a class="subnav-link" href="/admin">Overview</a>
-  <a class="subnav-link" href="/admin/slate">Slate</a>
-  <a class="subnav-link is-active" href="/admin/members" aria-current="page">Members</a>
-  <a class="subnav-link" href="/admin/settings">Settings</a>
-  <a class="subnav-link" href="/admin/payouts">Payouts</a>
+  <a class="subnav-link" href="/league">Overview</a>
+  <a class="subnav-link" href="/league/slate">Slate</a>
+  <a class="subnav-link is-active" href="/league/members" aria-current="page">Members</a>
+  <a class="subnav-link" href="/league/settings">Settings</a>
+  <a class="subnav-link" href="/league/payouts">Payouts</a>
 </nav>
 
 <section class="section" aria-labelledby="join-code-title">
@@ -34,7 +34,7 @@
       </p>
 
       <div class="join-code-actions">
-        <form method="post" action="/admin/join-code" class="inline-form">
+        <form method="post" action="/league/join-code" class="inline-form">
           <button class="btn btn-secondary" type="submit">
             {{ ic.icon("refresh", 18) }}<span>Generate a new code</span>
           </button>
@@ -44,7 +44,7 @@
           </p>
         </form>
 
-        <form method="post" action="/admin/join-code/set" class="join-code-set">
+        <form method="post" action="/league/join-code/set" class="join-code-set">
           <div class="field">
             <label class="field-label" for="join_code">Set a code by hand</label>
             <input class="input input-code" type="text" id="join_code" name="join_code"
@@ -117,7 +117,7 @@ See you on the leaderboard.
           <button type="button" class="btn btn-secondary btn-sm" data-copy="#commissioner-link">
             Copy link
           </button>
-          <form method="post" action="/admin/commissioner-code" class="inline-form">
+          <form method="post" action="/league/commissioner-code" class="inline-form">
             <button class="btn btn-ghost btn-sm" type="submit">Generate a new link</button>
           </form>
         </div>
@@ -129,7 +129,7 @@ See you on the leaderboard.
           that needs their acceptance first, and they can never manage another commissioner.
         </p>
       {% else %}
-        <form method="post" action="/admin/commissioner-code" class="inline-form">
+        <form method="post" action="/league/commissioner-code" class="inline-form">
           <button class="btn btn-secondary btn-sm" type="submit">
             Create a commissioner invite link
           </button>
@@ -161,12 +161,12 @@ See you on the leaderboard.
           dollars collected of {{ (entry_fee * (members | length)) | money }} dollars.
         {% else %}
           {{ paid_count }} of {{ members | length }} paid. Set an entry fee in
-          <a href="/admin/settings">Settings</a> to see the pot total in dollars.
+          <a href="/league/settings">Settings</a> to see the pot total in dollars.
         {% endif %}
       </span>
     </div>
 
-    <form id="bulk-paid-form" method="post" action="/admin/members/paid/bulk"></form>
+    <form id="bulk-paid-form" method="post" action="/league/members/paid/bulk"></form>
 
     <div class="table-wrap">
       <table class="table">
@@ -209,7 +209,7 @@ See you on the leaderboard.
                 {% else %}
                   <span class="badge badge-member">Member</span>
                 {% endif %}
-                {% if player.role == "admin" %}<span class="pill">Site admin</span>{% endif %}
+                {% if player.role == "admin" %}<span class="pill">Platform owner</span>{% endif %}
                 {% if member.role_in_pool == "member" and member.co_commissioner_invited_at %}
                   <span class="badge badge-locked">Invite pending</span>
                 {% endif %}
@@ -220,7 +220,7 @@ See you on the leaderboard.
                 {% else %}
                   <span class="badge badge-void">Unpaid</span>
                 {% endif %}
-                <form method="post" action="/admin/members/{{ member.id }}/paid" class="inline-form">
+                <form method="post" action="/league/members/{{ member.id }}/paid" class="inline-form">
                   <button class="btn btn-secondary btn-sm" type="submit">
                     {% if member.paid_at %}Mark unpaid{% else %}Mark paid{% endif %}
                     <span class="visually-hidden">, {{ player.display_name }}</span>
@@ -228,7 +228,7 @@ See you on the leaderboard.
                 </form>
               </td>
               <td data-label="Venmo, for your reconciliation">
-                <form method="post" action="/admin/members/{{ member.id }}/venmo-handle" class="inline-form">
+                <form method="post" action="/league/members/{{ member.id }}/venmo-handle" class="inline-form">
                   <input class="input" type="text" name="member_venmo_handle"
                          value="{{ member.member_venmo_handle or '' }}" maxlength="80"
                          autocomplete="off" spellcheck="false"
@@ -245,7 +245,7 @@ See you on the leaderboard.
               </td>
               <td data-label="Actions" class="cell-actions">
                 {% if current_user.is_admin %}
-                  <form method="post" action="/admin/members/{{ member.id }}/role" class="inline-form">
+                  <form method="post" action="/league/members/{{ member.id }}/role" class="inline-form">
                     <input type="hidden" name="role"
                            value="{% if member.is_commissioner %}member{% else %}commissioner{% endif %}">
                     <button class="btn btn-secondary btn-sm" type="submit">
@@ -255,21 +255,21 @@ See you on the leaderboard.
                   </form>
                 {% elif can_manage_commissioners %}
                   {% if member.is_commissioner %}
-                    <form method="post" action="/admin/members/{{ member.id }}/role" class="inline-form">
+                    <form method="post" action="/league/members/{{ member.id }}/role" class="inline-form">
                       <input type="hidden" name="role" value="member">
                       <button class="btn btn-secondary btn-sm" type="submit">
                         Make a member<span class="visually-hidden">, {{ player.display_name }}</span>
                       </button>
                     </form>
                   {% elif member.co_commissioner_invited_at %}
-                    <form method="post" action="/admin/members/{{ member.id }}/co-commissioner/cancel"
+                    <form method="post" action="/league/members/{{ member.id }}/co-commissioner/cancel"
                           class="inline-form">
                       <button class="btn btn-ghost btn-sm" type="submit">
                         Cancel invite<span class="visually-hidden">, {{ player.display_name }}</span>
                       </button>
                     </form>
                   {% else %}
-                    <form method="post" action="/admin/members/{{ member.id }}/co-commissioner/invite"
+                    <form method="post" action="/league/members/{{ member.id }}/co-commissioner/invite"
                           class="inline-form">
                       <button class="btn btn-secondary btn-sm" type="submit">
                         Invite as co-commissioner
@@ -282,7 +282,7 @@ See you on the leaderboard.
                 {% if is_me %}
                   <span class="cell-note muted">You cannot remove yourself from the pool.</span>
                 {% else %}
-                  <form method="post" action="/admin/members/{{ member.id }}/remove" class="inline-form">
+                  <form method="post" action="/league/members/{{ member.id }}/remove" class="inline-form">
                     <button class="btn btn-danger btn-sm" type="submit" aria-describedby="remove-warning">
                       Remove<span class="visually-hidden"> {{ player.display_name }}</span>
                     </button>

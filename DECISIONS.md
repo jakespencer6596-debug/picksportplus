@@ -2867,3 +2867,106 @@ season-standings and scenarios-panel quarantine, 1 in `tests/test_payout_service
 a test week scores internally but freezes no `PayoutAward`, and 6 router-level tests in
 `tests/test_app.py` covering the 403 for a non-commissioner, the end-to-end create/delete
 flow for a commissioner, and the badge/explanation actually rendering).
+
+### Phase 4, splitting site admin from commissioner
+
+**The problem.** Every commissioner-scoped and every site-admin-scoped screen lived under
+one `/admin` URL namespace, with one nav tab labeled "Admin", even though the two are gated
+by completely different dependencies underneath (`require_commissioner` vs `require_admin`)
+and the word "admin" has no business appearing on a screen a commissioner, who is never a
+site admin, can see.
+
+**The split.** `app/routers/admin.py` (commissioner tools: dashboard, settings, slate,
+members, manual job triggers, the Phase 3 test-week routes) moved from `/admin` to `/league`.
+`app/routers/payouts.py` (the Set Payouts screen and the payout summary) moved from
+`/admin/payouts` to `/league/payouts`. `app/routers/leagues.py` (site-admin-only: league
+list, league creation, view-as-commissioner) moved from `/admin/leagues` to `/site/leagues`.
+`app/routers/admin_contacts.py` (site-admin-only contact submissions) moved from
+`/admin/contacts` to `/site/contacts`. Only the prefix changed on every one of these routes;
+every route's own path suffix, and every dependency gating it, is untouched. The substitution
+was done in the order the brief specified (`/admin/leagues` first, then `/admin/contacts`,
+then `/admin/payouts`, then the remaining bare `/admin`) precisely because the three are all
+more specific prefixes of the fourth, and doing it in any other order risks a double
+substitution or a missed one.
+
+**Where the new `/site` dashboard route lives.** A brand new small router,
+`app/routers/site.py`, prefix `/site`, one route (`dashboard`). Not folded into
+`app/routers/leagues.py`: that file's own module docstring is scoped to "list every pool,
+create new ones, and view as commissioner", and a fourth, different kind of thing (a
+platform-wide summary page) living in the same file would blur what a reader expects to find
+there. The dashboard itself stays deliberately light this phase: every real pool (the hidden
+`is_preview` one excluded, the same query `leagues_page` already uses) with its member count
+and its most recently built real week's label and status, a link to `/site/leagues`, a link
+to `/site/contacts` with the current submission count, and the ephemeral-storage health
+status (`settings.is_ephemeral_storage`, reused as-is from Phase 1). It deliberately does not
+build a provider-spend section; that is Phase 5's `/site/providers`, not built here.
+
+**Redirect status code: 301 for GET, nothing for POST-only paths.** Every GET path in the old
+`/admin/...` namespace a human could plausibly have bookmarked (`/admin`, `/admin/settings`,
+`/admin/members`, `/admin/slate`, `/admin/payouts`, `/admin/payouts/summary`,
+`/admin/payouts/summary.csv`, `/admin/leagues`, `/admin/leagues/new`, `/admin/contacts`) gets
+a permanent `RedirectResponse(..., status_code=301)` from a new, tiny router,
+`app/routers/legacy_redirects.py`, mounted last in `app/main.py` so it can never shadow a
+real route. The POST-only legacy paths (every settings save, slate action, member action,
+payout edit, and so on) are NOT redirected: a 301 does not reliably preserve a POST's method
+and body across every client, and nothing in this app itself will ever issue one of those old
+POST paths again once this phase's sweep of every router, every template and every test is
+done. A `308` (which does preserve method and body) was considered and rejected as
+unnecessary complexity for paths nothing live will ever hit again.
+
+**The "acting as commissioner" lockbar banner now keys off the URL, not `active_nav`.** The
+brief's own read of the old condition (`active_nav == 'admin' and pool`) as "dashboard
+specific" does not quite match what the code did before this phase (`app/routers/admin.py`
+and `app/routers/payouts.py` both already set `active_nav = "admin"` on every one of their
+own pages, so the banner already showed across settings, members and slate, not only the
+dashboard). Still, tying the banner's visibility to a `active_nav` string that has to be kept
+in perfect sync, by hand, in every router's own `_base()` helper is exactly the kind of
+"looks scoped, quietly isn't" condition this phase is about removing. `base.html` now checks
+`request.url.path.startswith('/league')` instead: independent of which `/league` sub-router a
+future page lives in, and independent of whatever string that page's own context dict happens
+to set `active_nav` to. Verified directly: a new assertion in
+`test_viewing_as_commissioner_banner_shows_for_admin_and_never_for_a_real_commissioner` checks
+the banner on `/league/slate`, `/league/members` and `/league/settings`, not only `/league`
+itself.
+
+**Nav renames.** The commissioner-facing nav tab (desktop nav, mobile tabbar) changes from
+"Admin" (`href="/admin"`, `active_nav == "admin"`) to "League" (`href="/league"`,
+`active_nav == "league"`). The site-admin-only nav tab changes from "Leagues"
+(`href="/admin/leagues"`, `active_nav == "admin_leagues"`) to "Site" (`href="/site"`,
+`active_nav in ("site", "site_leagues", "site_contacts")`), and now points at the new
+dashboard first rather than straight at the league list, matching the dashboard's own new
+role as the entry point into every site-admin surface. `app/routers/admin_contacts.py`'s own
+`active_nav` becomes `"site_contacts"`. `app/routers/leagues.py`'s becomes `"site_leagues"`.
+
+**The "Site admin" pill on the Members roster.** `app/templates/admin/members.html` shows a
+badge next to a member whose own account has `role == "admin"`, a true and useful fact (it
+explains why that person can't be removed the normal way), but it literally contained the
+word "admin". Renamed the display string only, to "Platform owner"; the underlying
+`User.role == "admin"` check is untouched. `app/templates/admin/leagues.html`,
+`league_new.html` and `contacts.html` (all three site-admin-only, never reachable by a
+commissioner) keep "Site admin" freely, per the brief's own exception. One further, smaller
+consistency edit on the same site-admin-only leagues page: its "Admin dashboard" link/copy,
+which points at the newly renamed `/league` page, became "League dashboard" so it does not
+describe that page by a name the page itself no longer uses; this one is not required by the
+no-"admin"-on-a-commissioner-page rule (only a site admin ever sees this page) but was a
+one-line fix for internal consistency while already touching that file.
+
+**The automated check.** A static grep over the templates would false-positive on
+`admin/index.html`'s "Provider budgets" section, real source text gated behind
+`{% if is_site_admin %}` that a real commissioner's browser never receives. Added
+`test_league_pages_never_render_the_word_admin_for_a_real_commissioner` in `tests/test_app.py`
+instead: a genuine non-admin commissioner (built with the existing
+`_make_pool_commissioner_who_is_not_admin` fixture, deliberately not `world`'s own
+`boss@example.com`, which is both `role="admin"` and a real commissioner at once) hits every
+`/league/...` GET page that renders and asserts `"admin" not in response.text.lower()` against
+the actual response body.
+
+**Verification.** `python -m pytest -q` passed 998 tests (984 before this phase's own new
+tests, 14 new: 6 parametrized cases proving no `/league/...` page ever renders the word
+"admin" for a real commissioner, 2 permission-boundary tests for the new `/site` dashboard
+(403 for a regular player, 403 for a non-admin pool commissioner), 2 tests for the dashboard's
+own content (pool listing with the preview pool excluded, contact count, links to
+`/site/leagues` and `/site/contacts`, ephemeral-storage status), and 10 parametrized cases
+proving every legacy GET path 301s to its new home). `python -m ruff check .` and
+`python -m black --check .` both clean. `grep -rn "—" app/ tests/ SPEC.md README.md` returns
+only the pre-existing assertion in `tests/test_app.py` that em dashes are absent.

@@ -248,7 +248,7 @@ def register_submit(
             request,
             f"You are the commissioner of {commissioner_pool.name}. Let's get your league set up.",
         )
-        return RedirectResponse("/admin", status_code=303)
+        return RedirectResponse("/league", status_code=303)
 
     if pool is not None:
         db.add(PoolMember(pool_id=pool.id, user_id=user.id, role_in_pool="member"))

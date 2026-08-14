@@ -933,7 +933,7 @@ def build_slate(
         # fallback sent the pool's own week number straight to ESPN for every league, which
         # is what produced a slate spanning two calendar weeks with the same team on it
         # twice the moment NFL and college drifted apart. week1_anchor_date is now required
-        # at league creation (POST /admin/leagues/new) and backfilled for any pool that
+        # at league creation (POST /site/leagues/new) and backfilled for any pool that
         # predates that (the backfill-anchor-dates CLI command), so hitting this in practice
         # means a commissioner cleared the field from Settings.
         if pool.week1_anchor_date is None:

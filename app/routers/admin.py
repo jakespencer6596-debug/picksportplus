@@ -1,13 +1,13 @@
 """Commissioner tools: pool settings, the slate editor, members, and manual job triggers.
 
 Everything here sits behind require_commissioner, with three exceptions. switch_league (POST
-/admin/switch-league) deliberately is not: require_commissioner resolves the pool from
+/league/switch-league) deliberately is not: require_commissioner resolves the pool from
 whatever is already active in session, and the whole point of that route is picking a
 different one. It is gated by require_user plus its own direct check, against the requested
 pool_id, for a real PoolMember row with role_in_pool in ("commissioner", "co_commissioner"). A
 regular player still cannot reach it for any pool they do not commission.
 
-co_commissioner_accept and co_commissioner_decline (POST /admin/co-commissioner/accept and
+co_commissioner_accept and co_commissioner_decline (POST /league/co-commissioner/accept and
 /decline, Post-launch fixes: co-commissioner self-service invites with confirmation) are the
 other two: the whole point is that the invited person is still a plain "member" at the moment
 they act, not yet any kind of commissioner, so require_commissioner would refuse them. Both are
@@ -61,12 +61,12 @@ from app.routers.leagues import _fresh_commissioner_invite_code
 from app.services import ingest
 from app.templating import get_zone, render
 
-router = APIRouter(prefix="/admin", tags=["admin"])
+router = APIRouter(prefix="/league", tags=["admin"])
 
 LEAGUE_LABELS = {"nfl": "NFL", "ncaaf": "College"}
 
 
-def _redirect(target: str = "/admin") -> RedirectResponse:
+def _redirect(target: str = "/league") -> RedirectResponse:
     return RedirectResponse(target, status_code=303)
 
 
@@ -84,7 +84,7 @@ def _commissioner_pools(db: Session, user: User) -> list[Pool]:
     "commissioner" or "co_commissioner"), not the global admin's "view as commissioner" case,
     which never leaves a row behind. Used only to decide whether the league switcher has
     anything to switch between; a site admin always gets an empty list here, since
-    /admin/leagues, not this switcher, is how an admin moves between pools. A co-commissioner
+    /site/leagues, not this switcher, is how an admin moves between pools. A co-commissioner
     running more than one pool sees the same switcher a full commissioner would (Post-launch
     fixes), since is_commissioner already treats both roles as equally able to operate a
     pool."""
@@ -108,7 +108,7 @@ def _base(db: Session, user: User, pool: Pool) -> dict:
         "current_user": user,
         "pool": pool,
         "is_commissioner": True,
-        "active_nav": "admin",
+        "active_nav": "league",
         # Absolute origin for the player invite link and its mailto template, built the same
         # way app/routers/public.py already builds base_url for pricing.html's mailto link.
         "base_url": settings.base_url,
@@ -232,7 +232,7 @@ def switch_league(
     active pool: the whole point here is choosing a different one. Instead this checks the
     requested pool_id directly against a real PoolMember row, so a commissioner of pool A
     cannot switch into pool B just by knowing its id. Separate concept from the site admin's
-    "view as commissioner" (POST /admin/leagues/{pool_id}/view-as, app/routers/leagues.py):
+    "view as commissioner" (POST /site/leagues/{pool_id}/view-as, app/routers/leagues.py):
     that lets an admin borrow commissioner powers for a league they don't run; this lets an
     actual commissioner move between leagues they do. A co-commissioner counts here too
     (Post-launch fixes), same as a full commissioner, since operating a pool day to day is the
@@ -246,9 +246,9 @@ def switch_league(
     )
     if member is None:
         flash(request, "You don't commission that league.", "error")
-        return _redirect("/admin")
+        return _redirect("/league")
     request.session[SESSION_POOL_KEY] = pool_id
-    return _redirect("/admin")
+    return _redirect("/league")
 
 
 # Pool settings --------------------------------------------------------------
@@ -370,7 +370,7 @@ def settings_save(
     if errors:
         for message in errors:
             flash(request, message, "error")
-        return _redirect("/admin/settings")
+        return _redirect("/league/settings")
 
     pool.name = name
     pool.season_year = season_year
@@ -403,10 +403,10 @@ def settings_save(
         )
     else:
         flash(request, "Pool settings saved.")
-    return _redirect("/admin/settings")
+    return _redirect("/league/settings")
 
 
-# Payout rules live in app/routers/payouts.py now (the Set Payouts screen at /admin/payouts:
+# Payout rules live in app/routers/payouts.py now (the Set Payouts screen at /league/payouts:
 # four scopes, dollar-or-percent modes, a pot with an override, and frozen award snapshots).
 # The old add/remove-only, float, three-scope routes that used to live here are gone; see
 # DECISIONS.md, "Payout system".
@@ -425,7 +425,7 @@ def rotate_join_code(
             pool.join_code = code
             db.commit()
             flash(request, f"New join code: {code}. The old code no longer works.")
-            return _redirect("/admin/members")
+            return _redirect("/league/members")
     raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR, "Could not generate a join code.")
 
 
@@ -440,15 +440,15 @@ def set_join_code(
     code = normalize_join_code(join_code)
     if len(code) < 4:
         flash(request, "A join code needs at least 4 characters.", "error")
-        return _redirect("/admin/members")
+        return _redirect("/league/members")
     clash = db.scalar(select(Pool).where(func.upper(Pool.join_code) == code, Pool.id != pool.id))
     if clash is not None:
         flash(request, "Another pool already uses that code.", "error")
-        return _redirect("/admin/members")
+        return _redirect("/league/members")
     pool.join_code = code
     db.commit()
     flash(request, f"Join code set to {code}.")
-    return _redirect("/admin/members")
+    return _redirect("/league/members")
 
 
 # Members --------------------------------------------------------------------
@@ -519,7 +519,7 @@ def member_paid_toggle(
         member.paid_marked_by_user_id = None
         flash(request, "Marked unpaid.")
     db.commit()
-    return _redirect("/admin/members")
+    return _redirect("/league/members")
 
 
 @router.post("/members/{member_id}/venmo-handle")
@@ -541,7 +541,7 @@ def member_venmo_handle_save(
     member.member_venmo_handle = member_venmo_handle.strip() or None
     db.commit()
     flash(request, "Venmo handle noted.")
-    return _redirect("/admin/members")
+    return _redirect("/league/members")
 
 
 @router.post("/members/paid/bulk")
@@ -567,7 +567,7 @@ def members_paid_bulk(
         flash(request, f"Marked {count} {noun} paid.")
     else:
         flash(request, "Nobody selected was still unpaid.", "info")
-    return _redirect("/admin/members")
+    return _redirect("/league/members")
 
 
 @router.post("/members/{member_id}/role")
@@ -604,7 +604,7 @@ def member_role(
     member.co_commissioner_invited_at = None
     db.commit()
     flash(request, "Member role updated.")
-    return _redirect("/admin/members")
+    return _redirect("/league/members")
 
 
 @router.post("/members/{member_id}/co-commissioner/invite")
@@ -618,21 +618,21 @@ def co_commissioner_invite(
     """A full commissioner inviting a plain member to become a co-commissioner. Unlike
     member_role above, this never changes role_in_pool on its own: it only sets
     co_commissioner_invited_at, and the invited member's own accept (POST
-    /admin/co-commissioner/accept) is what actually promotes them. See DECISIONS.md,
+    /league/co-commissioner/accept) is what actually promotes them. See DECISIONS.md,
     Post-launch fixes."""
     member = db.get(PoolMember, member_id)
     if member is None or member.pool_id != pool.id:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "That member is not in this pool.")
     if member.role_in_pool != "member":
         flash(request, "That person is already a commissioner or co-commissioner.", "info")
-        return _redirect("/admin/members")
+        return _redirect("/league/members")
     if member.co_commissioner_invited_at is not None:
         flash(request, "There is already a co-commissioner invite pending for them.", "info")
-        return _redirect("/admin/members")
+        return _redirect("/league/members")
     member.co_commissioner_invited_at = utcnow()
     db.commit()
     flash(request, "Co-commissioner invite sent. It takes effect once they accept it.")
-    return _redirect("/admin/members")
+    return _redirect("/league/members")
 
 
 @router.post("/members/{member_id}/co-commissioner/cancel")
@@ -649,7 +649,7 @@ def co_commissioner_cancel(
     member.co_commissioner_invited_at = None
     db.commit()
     flash(request, "Co-commissioner invite canceled.")
-    return _redirect("/admin/members")
+    return _redirect("/league/members")
 
 
 @router.post("/co-commissioner/accept")
@@ -672,7 +672,7 @@ def co_commissioner_accept(
     member.co_commissioner_invited_at = None
     db.commit()
     flash(request, f"You are now a co-commissioner of {pool.name}.")
-    return _redirect("/admin")
+    return _redirect("/league")
 
 
 @router.post("/co-commissioner/decline")
@@ -701,7 +701,7 @@ def rotate_commissioner_invite_code_self(
     pool: Pool = Depends(require_full_commissioner),
 ):
     """A full commissioner's self-service view of Pool.commissioner_invite_code (Post-launch
-    fixes), the same link and rotation the site admin already manages from /admin/leagues
+    fixes), the same link and rotation the site admin already manages from /site/leagues
     (app/routers/leagues.py). Gated require_full_commissioner, not require_commissioner: a
     co-commissioner never sees or rotates this link, since sharing it is functionally
     identical to creating a new full commissioner outright, no confirmation step involved.
@@ -710,7 +710,7 @@ def rotate_commissioner_invite_code_self(
     pool.commissioner_invite_code = _fresh_commissioner_invite_code(db, exclude_pool_id=pool.id)
     db.commit()
     flash(request, "New commissioner invite link generated. The old link no longer works.")
-    return _redirect("/admin/members")
+    return _redirect("/league/members")
 
 
 @router.post("/members/{member_id}/remove")
@@ -726,12 +726,12 @@ def member_remove(
         raise HTTPException(status.HTTP_404_NOT_FOUND, "That member is not in this pool.")
     if member.user_id == user.id:
         flash(request, "You cannot remove yourself from the pool.", "error")
-        return _redirect("/admin/members")
+        return _redirect("/league/members")
     # Their picks and week entries go with them, which keeps the leaderboard honest.
     db.delete(member)
     db.commit()
     flash(request, "Member removed.")
-    return _redirect("/admin/members")
+    return _redirect("/league/members")
 
 
 # Slate editor ---------------------------------------------------------------
@@ -845,14 +845,14 @@ def slate_build(
         # from the slate editor below.
         db.rollback()
         flash(request, str(exc), "error")
-        return _redirect(f"/admin/slate?week={week_number}")
+        return _redirect(f"/league/slate?week={week_number}")
     db.commit()
     flash(request, report.summary(), "ok" if report.selected else "info")
     for note in report.notes:
         flash(request, note, "info")
     for warning in report.warnings:
         flash(request, warning, "error")
-    return _redirect(f"/admin/slate?week={week_number}")
+    return _redirect(f"/league/slate?week={week_number}")
 
 
 @router.post("/slate/publish")
@@ -875,7 +875,7 @@ def slate_publish(
         else:
             db.commit()
             flash(request, f"Week {row.week_number} is open for picks.")
-    return _redirect(f"/admin/slate?week={row.week_number}")
+    return _redirect(f"/league/slate?week={row.week_number}")
 
 
 @router.post("/slate/game")
@@ -928,7 +928,7 @@ def slate_game_action(
     except ValueError as exc:
         db.rollback()
         flash(request, str(exc), "error")
-    return _redirect(f"/admin/slate?week={row.week_number}")
+    return _redirect(f"/league/slate?week={row.week_number}")
 
 
 @router.post("/slate/lock")
@@ -947,23 +947,23 @@ def slate_lock(
         ingest.recompute_lock(db, row)
         db.commit()
         flash(request, "Lock time is back to the first kickoff.")
-        return _redirect(f"/admin/slate?week={row.week_number}")
+        return _redirect(f"/league/slate?week={row.week_number}")
 
     if not lock_at_local:
         flash(request, "Enter a lock time.", "error")
-        return _redirect(f"/admin/slate?week={row.week_number}")
+        return _redirect(f"/league/slate?week={row.week_number}")
     try:
         naive = dt.datetime.fromisoformat(lock_at_local)
     except ValueError:
         flash(request, "That is not a valid date and time.", "error")
-        return _redirect(f"/admin/slate?week={row.week_number}")
+        return _redirect(f"/league/slate?week={row.week_number}")
 
     local = naive.replace(tzinfo=get_zone(pool.timezone))
     row.lock_at = local.astimezone(dt.UTC)
     row.lock_at_override = True
     db.commit()
     flash(request, "Lock time set.")
-    return _redirect(f"/admin/slate?week={row.week_number}")
+    return _redirect(f"/league/slate?week={row.week_number}")
 
 
 # Test week -------------------------------------------------------------------
@@ -996,14 +996,14 @@ def test_week_create(
     except ValueError as exc:
         db.rollback()
         flash(request, str(exc), "error")
-        return _redirect("/admin/slate")
+        return _redirect("/league/slate")
     db.commit()
     flash(request, report.summary(), "ok" if report.selected else "info")
     for note in report.notes:
         flash(request, note, "info")
     for warning in report.warnings:
         flash(request, warning, "error")
-    return _redirect(f"/admin/slate?week={ingest.TEST_WEEK_NUMBER}")
+    return _redirect(f"/league/slate?week={ingest.TEST_WEEK_NUMBER}")
 
 
 @router.post("/test-week/{week_id}/delete")
@@ -1022,11 +1022,11 @@ def test_week_delete(
     row = _week_for_action(db, pool, week_id)
     if not row.is_test_week:
         flash(request, "Only a test week can be deleted this way.", "error")
-        return _redirect("/admin/slate")
+        return _redirect("/league/slate")
     db.delete(row)
     db.commit()
     flash(request, "Test week deleted.")
-    return _redirect("/admin/slate")
+    return _redirect("/league/slate")
 
 
 # Manual job triggers --------------------------------------------------------
@@ -1050,7 +1050,7 @@ def run_results(
     flash(request, score.summary())
     for warning in results.warnings:
         flash(request, warning, "error")
-    return _redirect(f"/admin/slate?week={row.week_number}")
+    return _redirect(f"/league/slate?week={row.week_number}")
 
 
 __all__ = ["router"]

@@ -4723,7 +4723,7 @@ a.toggle-btn { text-decoration: none; }
 
 /* ==========================================================================
    16  PAYOUTS: POT FIGURES, DOLLAR/PERCENT MODE TOGGLE
-   The Set Payouts editor (Payout system rebuild, Phase 4, /admin/payouts). No existing
+   The Set Payouts editor (Payout system rebuild, Phase 4, /league/payouts). No existing
    component covered a two-way segmented toggle, so .mode-toggle is new here; everything
    else reuses .card / .table / .field / .btn-secondary etc, unchanged.
    ========================================================================== */

@@ -8,7 +8,7 @@ session fixture tests/test_payout_service.py uses: these tests exercise real HTT
 against the real router and the real template, not the service layer directly.
 
 save_rule's own docstring (app/routers/payouts.py) documents the create-versus-update contract
-this file's own tests assume: a POST to /admin/payouts/rule with no rule_id is always a
+this file's own tests assume: a POST to /league/payouts/rule with no rule_id is always a
 create (rejected if it collides with an existing (scope, place) pair), and a POST with an
 existing rule_id is always an update of that exact row, never a second insert.
 """
@@ -129,12 +129,12 @@ def _login(client: TestClient, email: str) -> None:
 @pytest.mark.parametrize(
     "method,path,data",
     [
-        ("get", "/admin/payouts", None),
-        ("post", "/admin/payouts/pot", {}),
-        ("post", "/admin/payouts/rule", {}),
-        ("post", "/admin/payouts/rule/1/delete", {}),
-        ("post", "/admin/payouts/scale-to-pot", {}),
-        ("post", "/admin/payouts/load-preset", {}),
+        ("get", "/league/payouts", None),
+        ("post", "/league/payouts/pot", {}),
+        ("post", "/league/payouts/rule", {}),
+        ("post", "/league/payouts/rule/1/delete", {}),
+        ("post", "/league/payouts/scale-to-pot", {}),
+        ("post", "/league/payouts/load-preset", {}),
     ],
 )
 def test_payout_routes_refused_for_a_regular_player(client, world, method, path, data):
@@ -153,7 +153,7 @@ def test_payout_routes_refused_for_a_regular_player(client, world, method, path,
 def test_create_rule_persists_to_db(client, world, session_factory):
     _login(client, "boss@example.com")
     response = client.post(
-        "/admin/payouts/rule",
+        "/league/payouts/rule",
         data={"scope": "weekly", "place": "1", "mode": "amount", "value": "105", "label": "1st"},
     )
     assert response.status_code == 303
@@ -178,7 +178,7 @@ def test_update_rule_via_rule_id_replaces_the_row(client, world, session_factory
     than erroring on the (pool_id, scope, place) unique constraint or inserting a second row."""
     _login(client, "boss@example.com")
     client.post(
-        "/admin/payouts/rule",
+        "/league/payouts/rule",
         data={"scope": "weekly", "place": "1", "mode": "amount", "value": "105"},
     )
     db = session_factory()
@@ -191,7 +191,7 @@ def test_update_rule_via_rule_id_replaces_the_row(client, world, session_factory
     db.close()
 
     response = client.post(
-        "/admin/payouts/rule",
+        "/league/payouts/rule",
         data={
             "scope": "weekly",
             "place": "1",
@@ -220,14 +220,14 @@ def test_update_rule_via_rule_id_replaces_the_row(client, world, session_factory
 def test_delete_rule_removes_it(client, world, session_factory):
     _login(client, "boss@example.com")
     client.post(
-        "/admin/payouts/rule",
+        "/league/payouts/rule",
         data={"scope": "bowl", "place": "1", "mode": "amount", "value": "250"},
     )
     db = session_factory()
     rule_id = db.scalar(select(PayoutRule.id).where(PayoutRule.pool_id == world["pool_id"]))
     db.close()
 
-    response = client.post(f"/admin/payouts/rule/{rule_id}/delete")
+    response = client.post(f"/league/payouts/rule/{rule_id}/delete")
     assert response.status_code == 303
 
     db = session_factory()
@@ -238,11 +238,11 @@ def test_delete_rule_removes_it(client, world, session_factory):
 def test_duplicate_scope_place_on_create_is_rejected(client, world, session_factory):
     _login(client, "boss@example.com")
     client.post(
-        "/admin/payouts/rule",
+        "/league/payouts/rule",
         data={"scope": "weekly", "place": "1", "mode": "amount", "value": "105"},
     )
     response = client.post(
-        "/admin/payouts/rule",
+        "/league/payouts/rule",
         data={"scope": "weekly", "place": "1", "mode": "amount", "value": "999"},
     )
     # A flash-and-redirect, never a 500 from a raw IntegrityError.
@@ -264,7 +264,7 @@ def test_duplicate_scope_place_on_create_is_rejected(client, world, session_fact
 def test_negative_value_is_rejected(client, world, session_factory):
     _login(client, "boss@example.com")
     response = client.post(
-        "/admin/payouts/rule",
+        "/league/payouts/rule",
         data={"scope": "weekly", "place": "1", "mode": "amount", "value": "-5"},
     )
     assert response.status_code == 303
@@ -276,7 +276,7 @@ def test_negative_value_is_rejected(client, world, session_factory):
 def test_percent_value_over_100_is_rejected(client, world, session_factory):
     _login(client, "boss@example.com")
     response = client.post(
-        "/admin/payouts/rule",
+        "/league/payouts/rule",
         data={"scope": "weekly", "place": "1", "mode": "percent", "value": "150"},
     )
     assert response.status_code == 303
@@ -288,7 +288,7 @@ def test_percent_value_over_100_is_rejected(client, world, session_factory):
 def test_unknown_scope_is_rejected(client, world, session_factory):
     _login(client, "boss@example.com")
     response = client.post(
-        "/admin/payouts/rule",
+        "/league/payouts/rule",
         data={"scope": "not_a_scope", "place": "1", "mode": "amount", "value": "5"},
     )
     assert response.status_code == 303
@@ -300,7 +300,7 @@ def test_unknown_scope_is_rejected(client, world, session_factory):
 def test_unknown_mode_is_rejected(client, world, session_factory):
     _login(client, "boss@example.com")
     response = client.post(
-        "/admin/payouts/rule",
+        "/league/payouts/rule",
         data={"scope": "weekly", "place": "1", "mode": "bitcoin", "value": "5"},
     )
     assert response.status_code == 303
@@ -314,7 +314,7 @@ def test_non_integer_place_is_rejected_by_fastapi(client, world):
     (and therefore before this router's own explicit validation) ever runs."""
     _login(client, "boss@example.com")
     response = client.post(
-        "/admin/payouts/rule",
+        "/league/payouts/rule",
         data={"scope": "weekly", "place": "one", "mode": "amount", "value": "5"},
     )
     assert response.status_code == 422
@@ -323,7 +323,7 @@ def test_non_integer_place_is_rejected_by_fastapi(client, world):
 def test_weekly_payout_weeks_out_of_range_is_rejected(client, world, session_factory):
     _login(client, "boss@example.com")
     response = client.post(
-        "/admin/payouts/pot",
+        "/league/payouts/pot",
         data={
             "entry_fee": "",
             "pot_override": "",
@@ -344,7 +344,7 @@ def test_weekly_payout_weeks_out_of_range_is_rejected(client, world, session_fac
 
 def test_load_preset_seeds_twelve_rules_across_four_scopes(client, world, session_factory):
     _login(client, "boss@example.com")
-    response = client.post("/admin/payouts/load-preset")
+    response = client.post("/league/payouts/load-preset")
     assert response.status_code == 303
 
     db = session_factory()
@@ -369,8 +369,8 @@ def test_summary_renders_known_ladder_totals(client, world, session_factory):
     db.commit()
     db.close()
 
-    client.post("/admin/payouts/load-preset")
-    response = client.get("/admin/payouts")
+    client.post("/league/payouts/load-preset")
+    response = client.get("/league/payouts")
     assert response.status_code == 200
     # fmt_money drops the trailing .00 on a whole dollar figure (app/templating.py), so a
     # comma-formatted "2,775" would never actually appear; assert the bare digit run instead.
@@ -388,7 +388,7 @@ def test_scale_to_pot_converts_every_rule_and_keeps_resolved_dollars_unchanged(
     db.commit()
     db.close()
 
-    client.post("/admin/payouts/load-preset")
+    client.post("/league/payouts/load-preset")
 
     db = session_factory()
     pool = db.get(Pool, world["pool_id"])
@@ -409,7 +409,7 @@ def test_scale_to_pot_converts_every_rule_and_keeps_resolved_dollars_unchanged(
     }
     db.close()
 
-    response = client.post("/admin/payouts/scale-to-pot")
+    response = client.post("/league/payouts/scale-to-pot")
     assert response.status_code == 303
 
     db = session_factory()
@@ -434,10 +434,10 @@ def test_scale_to_pot_with_no_pot_flashes_error_and_changes_nothing(client, worl
     scaling must refuse rather than dividing by zero."""
     _login(client, "boss@example.com")
     client.post(
-        "/admin/payouts/rule",
+        "/league/payouts/rule",
         data={"scope": "weekly", "place": "1", "mode": "amount", "value": "105"},
     )
-    response = client.post("/admin/payouts/scale-to-pot")
+    response = client.post("/league/payouts/scale-to-pot")
     assert response.status_code == 303
 
     db = session_factory()
@@ -457,10 +457,10 @@ def test_over_allocated_pot_saves_successfully_and_shows_exceed_banner(
     db.commit()
     db.close()
 
-    response = client.post("/admin/payouts/load-preset")
+    response = client.post("/league/payouts/load-preset")
     assert response.status_code == 303  # saving succeeds regardless of balance
 
-    page = client.get("/admin/payouts")
+    page = client.get("/league/payouts")
     assert page.status_code == 200
     assert "exceed" in page.text.lower()
 
@@ -482,11 +482,11 @@ def test_pot_override_takes_precedence_over_computed_pot_in_summary(client, worl
     # A one-time scope (no weekly_payout_weeks multiplier) so the math stays simple: 100% of
     # the pot resolves to exactly the pot, whichever pot is actually in force.
     client.post(
-        "/admin/payouts/rule",
+        "/league/payouts/rule",
         data={"scope": "bowl", "place": "1", "mode": "percent", "value": "100"},
     )
 
-    response = client.get("/admin/payouts")
+    response = client.get("/league/payouts")
     assert response.status_code == 200
     assert "Computed (not in use)" in response.text
     assert "Override (in use)" in response.text

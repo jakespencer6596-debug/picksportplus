@@ -6,18 +6,18 @@ in this router is one of them). This router owns only the editor: the pot panel 
 override, weekly payout weeks, rounding, tiebreak), the four scope tables (weekly, bowl,
 season_points, season_wins), scale-to-pot, and load-preset.
 
-Also here (Payout system rebuild, Phase 6): GET /admin/payouts/summary, the commissioner
+Also here (Payout system rebuild, Phase 6): GET /league/payouts/summary, the commissioner
 facing payout summary page (one row per pool member, a Paid checkbox, a running settlement
-line, an unpaid-only filter); POST /admin/payouts/player/{user_id}/paid, the one-checkbox-
+line, an unpaid-only filter); POST /league/payouts/player/{user_id}/paid, the one-checkbox-
 per-player Paid toggle that drives it, returned as an HTMX partial swap; POST
-/admin/payouts/award/{id}/paid, the narrower single-award toggle kept for a later, more
-granular UI; and GET /admin/payouts/summary.csv, a plain decimal CSV export. See each route's
+/league/payouts/award/{id}/paid, the narrower single-award toggle kept for a later, more
+granular UI; and GET /league/payouts/summary.csv, a plain decimal CSV export. See each route's
 own docstring, and app.services.payouts.mark_paid/unmark_paid, for the money-safety and
-design-choice reasoning behind them. POST /admin/payouts/recalculate is still not built here;
+design-choice reasoning behind them. POST /league/payouts/recalculate is still not built here;
 nothing in this phase needed it.
 
 Every mutating route here (/pot, /rule, /rule/{id}/delete, /scale-to-pot, /load-preset) is a
-plain form POST that redirects back to GET /admin/payouts with a 303 on both success and
+plain form POST that redirects back to GET /league/payouts with a 303 on both success and
 failure (flash-and-redirect, exactly admin.py's own convention). This is a deliberate
 simplification versus the original brief's "no page reload" ask for the live summary table: an
 HTMX partial-swap version was considered, but redirecting an HTMX request on a validation
@@ -58,15 +58,15 @@ from app.services import payouts as payout_service
 from app.services.payouts import PlayerPayoutRow
 from app.templating import fmt_money, render
 
-router = APIRouter(prefix="/admin/payouts", tags=["payouts"])
+router = APIRouter(prefix="/league/payouts", tags=["payouts"])
 
 
-def _redirect(target: str = "/admin/payouts") -> RedirectResponse:
+def _redirect(target: str = "/league/payouts") -> RedirectResponse:
     return RedirectResponse(target, status_code=303)
 
 
 def _redirect_to_summary(unpaid_only: bool) -> RedirectResponse:
-    target = "/admin/payouts/summary" + ("?unpaid=1" if unpaid_only else "")
+    target = "/league/payouts/summary" + ("?unpaid=1" if unpaid_only else "")
     return _redirect(target)
 
 
@@ -75,7 +75,7 @@ def _base(user: User, pool: Pool) -> dict:
         "current_user": user,
         "pool": pool,
         "is_commissioner": True,
-        "active_nav": "admin",
+        "active_nav": "league",
     }
 
 
@@ -493,7 +493,7 @@ def toggle_player_paid(
 
     Design choice: a player can hold PayoutAward rows in up to four scopes at once, so there
     is no single award id that means "this player's payout" the way POST
-    /admin/payouts/award/{id}/paid (below) addresses one award. Rather than a checkbox per
+    /league/payouts/award/{id}/paid (below) addresses one award. Rather than a checkbox per
     award nested under each player, this route marks every one of that player's currently
     unpaid awards paid in one action, or unmarks every one of their currently paid awards, in
     a single DB transaction with one db.commit() at the end, treating "Paid" as one property

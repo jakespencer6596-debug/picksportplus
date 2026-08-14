@@ -1,6 +1,6 @@
 """Router level tests for the commissioner facing payout summary page (Payout system rebuild,
 Phase 6, app/routers/payouts.py's summary/player-paid-toggle/csv routes and
-app/templates/admin/payout_summary.html).
+app/templates/league/payout_summary.html).
 
 Follows tests/test_payout_routes.py's own client/world/session_factory/_login fixture pattern
 (Phase 4's closest sibling), a throwaway in-memory SQLite database wired into a real TestClient
@@ -179,10 +179,10 @@ def _login(client: TestClient, email: str) -> None:
 @pytest.mark.parametrize(
     "method,path,data",
     [
-        ("get", "/admin/payouts/summary", None),
-        ("post", "/admin/payouts/player/1/paid", {}),
-        ("post", "/admin/payouts/award/1/paid", {}),
-        ("get", "/admin/payouts/summary.csv", None),
+        ("get", "/league/payouts/summary", None),
+        ("post", "/league/payouts/player/1/paid", {}),
+        ("post", "/league/payouts/award/1/paid", {}),
+        ("get", "/league/payouts/summary.csv", None),
     ],
 )
 def test_new_payout_routes_refused_for_a_regular_player(client, world, method, path, data):
@@ -212,7 +212,7 @@ def test_summary_reconciles_with_raw_award_amounts(client, world, session_factor
     db.close()
     assert raw_total == Decimal("1130.00")  # 100 + 50 + 600 + 325 + 55
 
-    response = client.get("/admin/payouts/summary")
+    response = client.get("/league/payouts/summary")
     assert response.status_code == 200
     expected = fmt_money(raw_total)
     # The running settlement line and the table's own totals row must both show the same,
@@ -231,7 +231,7 @@ def test_summary_reconciles_with_raw_award_amounts(client, world, session_factor
 def test_player_paid_toggle_round_trips(client, world, session_factory):
     _login(client, "boss@example.com")
 
-    response = client.post(f"/admin/payouts/player/{world['alice_id']}/paid", data={})
+    response = client.post(f"/league/payouts/player/{world['alice_id']}/paid", data={})
     assert response.status_code == 200  # an HTMX partial swap, never a redirect
 
     db = session_factory()
@@ -246,7 +246,7 @@ def test_player_paid_toggle_round_trips(client, world, session_factory):
     assert all(a.paid_at is not None for a in alice_awards)
     db.close()
 
-    response = client.post(f"/admin/payouts/player/{world['alice_id']}/paid", data={})
+    response = client.post(f"/league/payouts/player/{world['alice_id']}/paid", data={})
     assert response.status_code == 200
 
     db = session_factory()
@@ -266,7 +266,7 @@ def test_player_paid_toggle_round_trips(client, world, session_factory):
 
 def test_csv_export_parses_with_expected_header_and_rows(client, world):
     _login(client, "boss@example.com")
-    response = client.get("/admin/payouts/summary.csv")
+    response = client.get("/league/payouts/summary.csv")
     assert response.status_code == 200
     assert response.headers["content-type"].startswith("text/csv")
     assert response.headers["content-disposition"] == 'attachment; filename="payout-summary.csv"'
@@ -298,7 +298,7 @@ def test_csv_export_parses_with_expected_header_and_rows(client, world):
 
 def test_unpaid_filter_shows_only_players_still_owed_money(client, world):
     _login(client, "boss@example.com")
-    response = client.get("/admin/payouts/summary?unpaid=1")
+    response = client.get("/league/payouts/summary?unpaid=1")
     assert response.status_code == 200
     assert "Alice Anderson" in response.text  # unpaid_total > 0
     assert "Bob, Jr." not in response.text  # fully paid, unpaid_total == 0
@@ -323,7 +323,7 @@ def test_player_with_all_four_scopes_totals_correctly(client, world, session_fac
     assert expected_grand_total == Decimal("1075.00")
 
     _login(client, "boss@example.com")
-    response = client.get("/admin/payouts/summary.csv")
+    response = client.get("/league/payouts/summary.csv")
     rows = list(csv.reader(io.StringIO(response.text)))
     alice_row = next(row for row in rows if row[0] == "Alice Anderson")
     assert alice_row[1:5] == ["100.00", "50.00", "600.00", "325.00"]

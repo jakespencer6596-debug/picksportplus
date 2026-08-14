@@ -125,7 +125,7 @@ class Pool(Base):
     # member) and the product owner was explicit that rotating one must never affect the
     # other (Post-launch fixes: commissioner invite links). Every existing pool is backfilled
     # with a fresh one in the migration that adds this column; every new pool gets one at
-    # creation time in POST /admin/leagues/new, so in practice this is never left null, but
+    # creation time in POST /site/leagues/new, so in practice this is never left null, but
     # the column stays nullable at the type level since nothing here structurally requires
     # every pool to always have one (matching Pool.venmo_handle and Pool.entry_fee's own
     # nullable, "no value set yet" convention rather than forcing a NOT NULL with a synthetic
@@ -287,10 +287,10 @@ class PoolMember(Base):
         DateTime(timezone=True), default=utcnow, server_default=func.now(), nullable=False
     )
     # Set the moment a full commissioner invites this still-plain member to become a
-    # co-commissioner (POST /admin/members/{id}/co-commissioner/invite). role_in_pool stays
+    # co-commissioner (POST /league/members/{id}/co-commissioner/invite). role_in_pool stays
     # "member" until the invited member accepts it themselves (POST
-    # /admin/co-commissioner/accept), which sets role_in_pool = "co_commissioner" and clears
-    # this back to null; declining (POST /admin/co-commissioner/decline) also clears it to
+    # /league/co-commissioner/accept), which sets role_in_pool = "co_commissioner" and clears
+    # this back to null; declining (POST /league/co-commissioner/decline) also clears it to
     # null with no other change. Unlike the site admin's existing instant member_role toggle,
     # a full commissioner's promotion never takes effect on its own, exactly the confirmation
     # step the product owner asked for. Null the rest of the time: no invite pending. See
@@ -298,7 +298,7 @@ class PoolMember(Base):
     co_commissioner_invited_at: Mapped[dt.datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
-    # Set the moment a commissioner marks this member paid (POST /admin/members/{id}/paid or
+    # Set the moment a commissioner marks this member paid (POST /league/members/{id}/paid or
     # the bulk action), cleared to unmark. Null means unpaid, the only state the Venmo gate
     # (Pool.payment_required_to_pick) checks; there is no separate "confirmed by whom" table,
     # paid_marked_by_user_id below is enough for accountability.
@@ -550,7 +550,7 @@ class PayoutRule(Base):
     "This will be done manually, so if there's a way in settings to Set Payouts for weekly,
     bowl week, season points, and season wins... it's a function of total $$ pool." Ships with
     zero rows for every pool, always: the commissioner enters every real number by hand from
-    /admin/payouts, never a seeded or hard coded figure (see DECISIONS.md, "Payout system").
+    /league/payouts, never a seeded or hard coded figure (see DECISIONS.md, "Payout system").
     Matched against rank at read time (app/payouts.py, app/services/payouts.py), never stored
     against a specific week or player itself, so the same structure applies to every week
     without re-entering it; PayoutAward below is the frozen, per-week/per-player result.
@@ -652,7 +652,7 @@ class ContactSubmission(Base):
     """One submission from the public /contact page (Post-launch fixes: a real contact form,
     replacing the old bare mailto link). A lead capture form, not a support ticket system: no
     status, no assignment, no reply-from-here feature. The site admin reads these from
-    GET /admin/contacts and replies to the submitter directly, over their own normal email
+    GET /site/contacts and replies to the submitter directly, over their own normal email
     client, within 24 hours. No email is ever sent by this model or by POST /contact.
     """
 

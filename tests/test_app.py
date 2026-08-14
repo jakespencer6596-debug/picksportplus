@@ -384,14 +384,18 @@ def test_open_picks_page_includes_row_expand_toggle(client, world):
         assert f'id="game-detail-{gid}"' in response.text
 
 
-@pytest.mark.parametrize("path", ["/admin", "/admin/slate", "/admin/members", "/admin/settings"])
+@pytest.mark.parametrize(
+    "path", ["/league", "/league/slate", "/league/members", "/league/settings"]
+)
 def test_admin_pages_render_for_commissioner(client, world, path):
     _login(client, "boss@example.com")
     response = client.get(path)
     assert response.status_code == 200, response.text[:800]
 
 
-@pytest.mark.parametrize("path", ["/admin", "/admin/slate", "/admin/members", "/admin/settings"])
+@pytest.mark.parametrize(
+    "path", ["/league", "/league/slate", "/league/members", "/league/settings"]
+)
 def test_admin_pages_refused_for_a_regular_player(client, world, path):
     _login(client, "player@example.com")
     response = client.get(path)
@@ -403,7 +407,7 @@ def test_admin_pages_refused_for_a_regular_player(client, world, path):
 
 def test_test_week_create_refused_for_a_regular_player(client, world):
     _login(client, "player@example.com")
-    response = client.post("/admin/test-week/create")
+    response = client.post("/league/test-week/create")
     assert response.status_code == 403
 
 
@@ -423,7 +427,7 @@ def test_test_week_delete_refused_for_a_regular_player(client, world, session_fa
     db.close()
 
     _login(client, "player@example.com")
-    response = client.post(f"/admin/test-week/{week_id}/delete")
+    response = client.post(f"/league/test-week/{week_id}/delete")
     assert response.status_code == 403
 
 
@@ -441,9 +445,9 @@ def test_commissioner_can_create_a_test_week(client, world, session_factory):
     db.close()
 
     _login(client, "boss@example.com")
-    response = client.post("/admin/test-week/create")
+    response = client.post("/league/test-week/create")
     assert response.status_code == 303
-    assert response.headers["location"] == "/admin/slate?week=0"
+    assert response.headers["location"] == "/league/slate?week=0"
 
     db = session_factory()
     week = db.scalar(select(Week).where(Week.pool_id == world["pool_id"], Week.week_number == 0))
@@ -468,7 +472,7 @@ def test_test_week_badge_and_explanation_render_on_the_slate_editor(client, worl
     db.close()
 
     _login(client, "boss@example.com")
-    response = client.get("/admin/slate?week=0")
+    response = client.get("/league/slate?week=0")
     assert response.status_code == 200
     assert "badge-test-week" in response.text
     assert "does not count toward season" in response.text
@@ -492,7 +496,7 @@ def test_commissioner_can_delete_a_test_week(client, world, session_factory):
     db.close()
 
     _login(client, "boss@example.com")
-    response = client.post(f"/admin/test-week/{week_id}/delete")
+    response = client.post(f"/league/test-week/{week_id}/delete")
     assert response.status_code == 303
 
     db = session_factory()
@@ -506,7 +510,7 @@ def test_commissioner_cannot_delete_a_real_week_via_the_test_week_route(
     """The real week from the world fixture (is_test_week False) must be refused, never
     silently deleted, since a real week never allows deletion in this codebase."""
     _login(client, "boss@example.com")
-    response = client.post(f"/admin/test-week/{world['week_id']}/delete")
+    response = client.post(f"/league/test-week/{world['week_id']}/delete")
     assert response.status_code == 303
 
     db = session_factory()
@@ -520,7 +524,7 @@ def test_ephemeral_storage_banner_shown_to_site_admin(client, world, monkeypatch
     and this pool's commissioner."""
     monkeypatch.setattr(settings, "database_url", "sqlite:////tmp/picksportplus.db")
     _login(client, "boss@example.com")
-    response = client.get("/admin")
+    response = client.get("/league")
     assert "temporary storage" in response.text
     assert "lockbar-strong" in response.text
 
@@ -537,7 +541,7 @@ def test_ephemeral_storage_banner_hidden_from_a_regular_player(client, world, mo
 def test_ephemeral_storage_banner_hidden_when_storage_is_durable(client, world, monkeypatch):
     monkeypatch.setattr(settings, "database_url", "sqlite:///./picksportplus.db")
     _login(client, "boss@example.com")
-    response = client.get("/admin")
+    response = client.get("/league")
     assert "temporary storage" not in response.text
 
 
@@ -1255,7 +1259,7 @@ def test_a_voided_game_scores_nobody_and_leaves_the_possible_count(client, world
 def test_commissioner_can_change_the_slate_size(client, world, session_factory):
     _login(client, "boss@example.com")
     response = client.post(
-        "/admin/settings",
+        "/league/settings",
         data={
             "name": "Renamed League",
             "season_year": "2025",
@@ -1292,7 +1296,7 @@ def test_commissioner_cannot_set_picks_required_above_the_slate_size(
 ):
     _login(client, "boss@example.com")
     response = client.post(
-        "/admin/settings",
+        "/league/settings",
         data={
             "name": "Test Pool",
             "season_year": "2025",
@@ -1321,7 +1325,7 @@ def test_commissioner_cannot_set_picks_required_above_the_slate_size(
 def test_commissioner_can_change_the_scenarios_panel_thresholds(client, world, session_factory):
     _login(client, "boss@example.com")
     response = client.post(
-        "/admin/settings",
+        "/league/settings",
         data={
             "name": "Test Pool",
             "season_year": "2025",
@@ -1350,7 +1354,7 @@ def test_commissioner_cannot_set_scenarios_min_remaining_games_below_one(
 ):
     _login(client, "boss@example.com")
     response = client.post(
-        "/admin/settings",
+        "/league/settings",
         data={
             "name": "Test Pool",
             "season_year": "2025",
@@ -1440,7 +1444,7 @@ def test_the_error_partial_lists_each_problem_separately(client, world):
 
 def test_join_code_rotation_invalidates_the_old_code(client, world, session_factory):
     _login(client, "boss@example.com")
-    response = client.post("/admin/join-code")
+    response = client.post("/league/join-code")
     assert response.status_code == 303
 
     db = session_factory()
@@ -1587,7 +1591,7 @@ def test_member_paid_toggle_marks_and_unmarks(client, world, session_factory):
     member = _member_row(session_factory, world["pool_id"], world["player_id"])
     _login(client, "boss@example.com")
 
-    response = client.post(f"/admin/members/{member.id}/paid")
+    response = client.post(f"/league/members/{member.id}/paid")
     assert response.status_code == 303
     db = session_factory()
     refreshed = db.get(PoolMember, member.id)
@@ -1595,7 +1599,7 @@ def test_member_paid_toggle_marks_and_unmarks(client, world, session_factory):
     assert refreshed.paid_marked_by_user_id == world["boss_id"]
     db.close()
 
-    client.post(f"/admin/members/{member.id}/paid")
+    client.post(f"/league/members/{member.id}/paid")
     db = session_factory()
     refreshed = db.get(PoolMember, member.id)
     assert refreshed.paid_at is None
@@ -1626,7 +1630,7 @@ def test_members_paid_bulk_marks_only_the_selected_unpaid(client, world, session
 
     _login(client, "boss@example.com")
     response = client.post(
-        "/admin/members/paid/bulk",
+        "/league/members/paid/bulk",
         data={"member_ids": [player_member.id, third_member.id, boss_member.id]},
     )
     assert response.status_code == 303
@@ -1648,32 +1652,34 @@ def test_duplicate_venmo_handle_warning_fires_for_shared_handle_not_for_differen
 
     # Different, non empty handles: no warning for either.
     client.post(
-        f"/admin/members/{player_member.id}/venmo-handle",
+        f"/league/members/{player_member.id}/venmo-handle",
         data={"member_venmo_handle": "player-handle"},
     )
     client.post(
-        f"/admin/members/{boss_member.id}/venmo-handle",
+        f"/league/members/{boss_member.id}/venmo-handle",
         data={"member_venmo_handle": "boss-handle"},
     )
-    response = client.get("/admin/members")
+    response = client.get("/league/members")
     assert "Possible duplicate account" not in response.text
 
     # Both empty: no warning either (an empty handle is not a shared account).
-    client.post(f"/admin/members/{player_member.id}/venmo-handle", data={"member_venmo_handle": ""})
-    client.post(f"/admin/members/{boss_member.id}/venmo-handle", data={"member_venmo_handle": ""})
-    response = client.get("/admin/members")
+    client.post(
+        f"/league/members/{player_member.id}/venmo-handle", data={"member_venmo_handle": ""}
+    )
+    client.post(f"/league/members/{boss_member.id}/venmo-handle", data={"member_venmo_handle": ""})
+    response = client.get("/league/members")
     assert "Possible duplicate account" not in response.text
 
     # Same handle (case and whitespace variations): both rows flagged.
     client.post(
-        f"/admin/members/{player_member.id}/venmo-handle",
+        f"/league/members/{player_member.id}/venmo-handle",
         data={"member_venmo_handle": "SharedHandle"},
     )
     client.post(
-        f"/admin/members/{boss_member.id}/venmo-handle",
+        f"/league/members/{boss_member.id}/venmo-handle",
         data={"member_venmo_handle": " sharedhandle "},
     )
-    response = client.get("/admin/members")
+    response = client.get("/league/members")
     assert response.text.count("Possible duplicate account") == 2
 
 
@@ -1683,7 +1689,7 @@ def test_duplicate_venmo_handle_warning_fires_for_shared_handle_not_for_differen
 def test_settings_save_persists_venmo_and_payment_fields(client, world, session_factory):
     _login(client, "boss@example.com")
     response = client.post(
-        "/admin/settings",
+        "/league/settings",
         data={
             "name": "Test Pool",
             "season_year": "2025",
@@ -1717,7 +1723,7 @@ def test_settings_save_persists_venmo_and_payment_fields(client, world, session_
 def test_settings_save_rejects_a_negative_entry_fee(client, world, session_factory):
     _login(client, "boss@example.com")
     response = client.post(
-        "/admin/settings",
+        "/league/settings",
         data={
             "name": "Test Pool",
             "season_year": "2025",
@@ -1744,7 +1750,7 @@ def test_settings_save_rejects_a_negative_entry_fee(client, world, session_facto
 def test_settings_save_rejects_a_non_saturday_anchor_date(client, world, session_factory):
     """Phase 2 remediation (see DECISIONS.md)."""
     response = client.post(
-        "/admin/settings",
+        "/league/settings",
         data={
             "name": "Test Pool",
             "season_year": "2025",
@@ -1975,13 +1981,47 @@ def _make_pool_commissioner_who_is_not_admin(db: Session, pool: Pool) -> User:
 
 
 @pytest.mark.parametrize(
+    "path",
+    [
+        "/league",
+        "/league/slate",
+        "/league/members",
+        "/league/settings",
+        "/league/payouts",
+        "/league/payouts/summary",
+    ],
+)
+def test_league_pages_never_render_the_word_admin_for_a_real_commissioner(
+    client, session_factory, path
+):
+    """Phase 4 remediation (see DECISIONS.md): the word "admin" must never reach a real
+    commissioner's screen. A static grep over the template source would false-positive on
+    admin/index.html's Provider budgets section, which is real source text gated behind
+    {% if is_site_admin %} and never rendered for anyone else. The only way to check this
+    honestly is a real rendered response for a genuine non-admin commissioner, which is what
+    this does: world's own boss@example.com is deliberately both role="admin" and this pool's
+    commissioner (see the block comment above), which is exactly the case this test must NOT
+    use, so it builds its own plain commissioner instead."""
+    db = session_factory()
+    pool = _make_pool(db)
+    _make_pool_commissioner_who_is_not_admin(db, pool)
+    db.commit()
+    db.close()
+
+    _login(client, "commish@example.com")
+    response = client.get(path)
+    assert response.status_code == 200, response.text[:800]
+    assert "admin" not in response.text.lower(), path
+
+
+@pytest.mark.parametrize(
     "method,path,data",
     [
-        ("get", "/admin/leagues", None),
-        ("post", "/admin/leagues/new", _NEW_LEAGUE_FORM),
-        ("post", "/admin/leagues/{pool_id}/view-as", None),
-        ("post", "/admin/leagues/{pool_id}/commissioner-code", None),
-        ("post", "/admin/leagues/{pool_id}/commissioner-code/set", _SET_COMMISSIONER_CODE_FORM),
+        ("get", "/site/leagues", None),
+        ("post", "/site/leagues/new", _NEW_LEAGUE_FORM),
+        ("post", "/site/leagues/{pool_id}/view-as", None),
+        ("post", "/site/leagues/{pool_id}/commissioner-code", None),
+        ("post", "/site/leagues/{pool_id}/commissioner-code/set", _SET_COMMISSIONER_CODE_FORM),
     ],
 )
 def test_leagues_admin_routes_refused_for_a_regular_player(client, world, method, path, data):
@@ -1996,11 +2036,11 @@ def test_leagues_admin_routes_refused_for_a_regular_player(client, world, method
 @pytest.mark.parametrize(
     "method,path,data",
     [
-        ("get", "/admin/leagues", None),
-        ("post", "/admin/leagues/new", _NEW_LEAGUE_FORM),
-        ("post", "/admin/leagues/{pool_id}/view-as", None),
-        ("post", "/admin/leagues/{pool_id}/commissioner-code", None),
-        ("post", "/admin/leagues/{pool_id}/commissioner-code/set", _SET_COMMISSIONER_CODE_FORM),
+        ("get", "/site/leagues", None),
+        ("post", "/site/leagues/new", _NEW_LEAGUE_FORM),
+        ("post", "/site/leagues/{pool_id}/view-as", None),
+        ("post", "/site/leagues/{pool_id}/commissioner-code", None),
+        ("post", "/site/leagues/{pool_id}/commissioner-code/set", _SET_COMMISSIONER_CODE_FORM),
     ],
 )
 def test_leagues_admin_routes_refused_for_a_pool_commissioner_who_is_not_a_site_admin(
@@ -2030,7 +2070,7 @@ def test_leagues_page_lists_every_pool_not_just_the_admins_own(client, world, se
     db.close()
 
     _login(client, "boss@example.com")
-    response = client.get("/admin/leagues")
+    response = client.get("/site/leagues")
     assert response.status_code == 200
     assert "Test Pool" in response.text
     assert other_name in response.text
@@ -2046,7 +2086,7 @@ def test_leagues_page_shows_a_pools_commissioners(client, session_factory):
     db.close()
 
     _login(client, "siteadmin1@example.com")
-    response = client.get("/admin/leagues")
+    response = client.get("/site/leagues")
     assert response.status_code == 200
     assert commish_name in response.text
 
@@ -2059,7 +2099,7 @@ def test_create_league_makes_a_pool_with_seed_admin_defaults(client, session_fac
 
     _login(client, "siteadmin2@example.com")
     response = client.post(
-        "/admin/leagues/new",
+        "/site/leagues/new",
         data={
             "name": "Created League",
             "join_code": "CREATED1",
@@ -2092,7 +2132,7 @@ def test_create_league_rejects_a_blank_anchor_date(client, session_factory):
 
     _login(client, "siteadmin-blank-anchor@example.com")
     response = client.post(
-        "/admin/leagues/new",
+        "/site/leagues/new",
         data={
             "name": "No Anchor League",
             "join_code": "NOANCHOR",
@@ -2115,7 +2155,7 @@ def test_create_league_rejects_a_non_saturday_anchor_date(client, session_factor
 
     _login(client, "siteadmin-nonsat@example.com")
     response = client.post(
-        "/admin/leagues/new",
+        "/site/leagues/new",
         data={
             "name": "Wrong Day League",
             "join_code": "WRONGDAY",
@@ -2140,7 +2180,7 @@ def test_create_league_attaches_an_existing_user_as_commissioner_by_email(client
 
     _login(client, "siteadmin3@example.com")
     response = client.post(
-        "/admin/leagues/new",
+        "/site/leagues/new",
         data={
             "name": "Attached League",
             "join_code": "ATTACHED",
@@ -2183,7 +2223,7 @@ def test_create_league_rejects_the_site_admins_own_email_but_still_attaches_othe
 
     _login(client, "siteguard@example.com")
     response = client.post(
-        "/admin/leagues/new",
+        "/site/leagues/new",
         data={
             "name": "Guarded League",
             "join_code": "GUARDED1",
@@ -2198,7 +2238,7 @@ def test_create_league_rejects_the_site_admins_own_email_but_still_attaches_othe
     # The redirect target renders and pops the flashes. Jinja autoescapes the apostrophe in
     # "can't" to &#39;, so the assertion checks the text either side of it rather than the
     # literal punctuation.
-    leagues_page = client.get("/admin/leagues")
+    leagues_page = client.get("/site/leagues")
     assert leagues_page.status_code == 200
     assert f"{admin_email} is the site admin and can" in leagues_page.text
     assert "t be added as a commissioner." in leagues_page.text
@@ -2235,11 +2275,11 @@ def test_admin_can_view_as_commissioner_of_a_pool_never_joined(client, session_f
     db.close()
 
     _login(client, "siteadmin4@example.com")
-    view_as = client.post(f"/admin/leagues/{target_pool_id}/view-as")
+    view_as = client.post(f"/site/leagues/{target_pool_id}/view-as")
     assert view_as.status_code == 303
-    assert view_as.headers["location"] == "/admin"
+    assert view_as.headers["location"] == "/league"
 
-    dashboard = client.get("/admin")
+    dashboard = client.get("/league")
     assert dashboard.status_code == 200
     assert target_pool_name in dashboard.text
     assert "Admin Home Pool" not in dashboard.text
@@ -2301,9 +2341,9 @@ def test_viewing_as_commissioner_banner_shows_for_admin_and_never_for_a_real_com
     db.commit()
     db.close()
 
-    # A real commissioner, not a site admin, never sees the banner on their own /admin page.
+    # A real commissioner, not a site admin, never sees the banner on their own /league page.
     _login(client, "commish@example.com")
-    response = client.get("/admin")
+    response = client.get("/league")
     assert response.status_code == 200
     assert "as commissioner" not in response.text
 
@@ -2311,22 +2351,30 @@ def test_viewing_as_commissioner_banner_shows_for_admin_and_never_for_a_real_com
 
     # The site admin, viewing the same pool, does see it.
     _login(client, "boss@example.com")
-    response = client.get("/admin")
+    response = client.get("/league")
     assert response.status_code == 200
     assert "as commissioner" in response.text
     assert "Exit to leagues" in response.text
 
+    # The banner is not just a dashboard thing: it shows across the whole /league section,
+    # not only the landing page (Phase 4 remediation, see DECISIONS.md).
+    for path in ("/league/slate", "/league/members", "/league/settings"):
+        sub_response = client.get(path)
+        assert sub_response.status_code == 200
+        assert "as commissioner" in sub_response.text, path
+        assert "Exit to leagues" in sub_response.text, path
+
     # And it is absent on the leagues portal itself, which isn't a view of any single pool.
     # ("View as commissioner" is the per-row button text on this page, a different string
     # from the banner's own "Exit to leagues", so that is what distinguishes them here.)
-    leagues_response = client.get("/admin/leagues")
+    leagues_response = client.get("/site/leagues")
     assert leagues_response.status_code == 200
     assert "Exit to leagues" not in leagues_response.text
 
 
 # Multi-league commissioner switcher (Post-launch fixes) ----------------------
 # A commissioner who runs only one league sees the plain, existing pool-name text; a
-# commissioner of more than one gets a small switcher, and POST /admin/switch-league is the
+# commissioner of more than one gets a small switcher, and POST /league/switch-league is the
 # only way to move between them, only for pools they actually commission.
 
 
@@ -2337,7 +2385,7 @@ def test_single_league_commissioner_sees_no_switcher(client, world, session_fact
     db.close()
 
     _login(client, "commish@example.com")
-    response = client.get("/admin")
+    response = client.get("/league")
     assert response.status_code == 200
     assert "data-league-switcher" not in response.text
 
@@ -2355,16 +2403,16 @@ def test_two_league_commissioner_sees_switcher_and_can_switch(client, session_fa
     db.close()
 
     _login(client, "multi.commish@example.com")
-    response = client.get("/admin")
+    response = client.get("/league")
     assert response.status_code == 200
     assert "data-league-switcher" in response.text
     assert pool_a_name in response.text  # first PoolMember by id is the active pool at login
 
-    switch = client.post("/admin/switch-league", data={"pool_id": pool_b_id})
+    switch = client.post("/league/switch-league", data={"pool_id": pool_b_id})
     assert switch.status_code == 303
-    assert switch.headers["location"] == "/admin"
+    assert switch.headers["location"] == "/league"
 
-    after = client.get("/admin")
+    after = client.get("/league")
     assert after.status_code == 200
     assert "Second League" in after.text
 
@@ -2381,14 +2429,14 @@ def test_switch_league_rejects_a_pool_the_user_does_not_commission(client, sessi
     db.close()
 
     _login(client, "onlya.commish@example.com")
-    before = client.get("/admin")
+    before = client.get("/league")
     assert before.status_code == 200
     assert pool_a_name in before.text
 
-    switch = client.post("/admin/switch-league", data={"pool_id": pool_b_id})
+    switch = client.post("/league/switch-league", data={"pool_id": pool_b_id})
     assert switch.status_code == 303
 
-    after = client.get("/admin")
+    after = client.get("/league")
     assert after.status_code == 200
     assert pool_a_name in after.text
     assert "Not Mine League" not in after.text
@@ -2396,7 +2444,7 @@ def test_switch_league_rejects_a_pool_the_user_does_not_commission(client, sessi
 
 # Commissioner invite links (Post-launch fixes) -------------------------------
 # The workflow: the site admin talks to a prospective commissioner outside the app, then
-# hands them a link generated from /admin/leagues. Opening it presents the normal /register
+# hands them a link generated from /site/leagues. Opening it presents the normal /register
 # form, but completing it makes them a commissioner of that specific pool, not a member. A
 # fully separate code and query param from the player join code on purpose, see
 # DECISIONS.md, Post-launch fixes.
@@ -2434,7 +2482,7 @@ def test_register_with_a_valid_commissioner_code_creates_a_commissioner_not_an_a
         },
     )
     assert response.status_code == 303
-    assert response.headers["location"] == "/admin"
+    assert response.headers["location"] == "/league"
 
     db = session_factory()
     user = db.scalar(select(User).where(User.email == "newcommish@example.com"))
@@ -2505,7 +2553,7 @@ def test_rotating_commissioner_invite_code_never_touches_join_code_and_vice_vers
     db.close()
 
     _login(client, "boss@example.com")
-    rotate = client.post(f"/admin/leagues/{world['pool_id']}/commissioner-code")
+    rotate = client.post(f"/site/leagues/{world['pool_id']}/commissioner-code")
     assert rotate.status_code == 303
 
     db = session_factory()
@@ -2532,7 +2580,7 @@ def test_rotating_commissioner_invite_code_never_touches_join_code_and_vice_vers
 
     # And the reverse: rotating the player join code never touches the commissioner code.
     _login(client, "boss@example.com")
-    join_rotate = client.post("/admin/join-code")
+    join_rotate = client.post("/league/join-code")
     assert join_rotate.status_code == 303
 
     db = session_factory()
@@ -2545,7 +2593,7 @@ def test_rotating_commissioner_invite_code_never_touches_join_code_and_vice_vers
 def test_set_commissioner_invite_code_by_hand(client, world, session_factory):
     _login(client, "boss@example.com")
     response = client.post(
-        f"/admin/leagues/{world['pool_id']}/commissioner-code/set",
+        f"/site/leagues/{world['pool_id']}/commissioner-code/set",
         data={"commissioner_invite_code": "handpicked"},
     )
     assert response.status_code == 303
@@ -2564,7 +2612,7 @@ def test_create_league_gives_the_new_pool_its_own_commissioner_invite_code(clien
 
     _login(client, "siteadmin6@example.com")
     response = client.post(
-        "/admin/leagues/new",
+        "/site/leagues/new",
         data={
             "name": "Fresh League",
             "join_code": "FRESHLG1",
@@ -2585,7 +2633,7 @@ def test_create_league_gives_the_new_pool_its_own_commissioner_invite_code(clien
 
 def test_members_page_shows_the_invite_link_and_a_working_mailto(client, world):
     _login(client, "boss@example.com")
-    response = client.get("/admin/members")
+    response = client.get("/league/members")
     assert response.status_code == 200
     assert "register?code=TESTCODE" in response.text
     assert "mailto:" in response.text
@@ -2648,7 +2696,7 @@ def test_full_commissioner_invite_does_not_promote_the_member_immediately(client
     db.close()
 
     _login(client, "commish@example.com")
-    response = client.post(f"/admin/members/{w['member_pool_member_id']}/co-commissioner/invite")
+    response = client.post(f"/league/members/{w['member_pool_member_id']}/co-commissioner/invite")
     assert response.status_code == 303
 
     db = session_factory()
@@ -2664,11 +2712,11 @@ def test_invited_member_accepting_becomes_a_co_commissioner(client, session_fact
     db.close()
 
     _login(client, "commish@example.com")
-    client.post(f"/admin/members/{w['member_pool_member_id']}/co-commissioner/invite")
+    client.post(f"/league/members/{w['member_pool_member_id']}/co-commissioner/invite")
     client.post("/logout")
 
     _login(client, "member1@example.com")
-    response = client.post("/admin/co-commissioner/accept")
+    response = client.post("/league/co-commissioner/accept")
     assert response.status_code == 303
 
     db = session_factory()
@@ -2684,11 +2732,11 @@ def test_invited_member_declining_stays_a_plain_member(client, session_factory):
     db.close()
 
     _login(client, "commish@example.com")
-    client.post(f"/admin/members/{w['member_pool_member_id']}/co-commissioner/invite")
+    client.post(f"/league/members/{w['member_pool_member_id']}/co-commissioner/invite")
     client.post("/logout")
 
     _login(client, "member1@example.com")
-    response = client.post("/admin/co-commissioner/decline")
+    response = client.post("/league/co-commissioner/decline")
     assert response.status_code == 303
 
     db = session_factory()
@@ -2704,14 +2752,14 @@ def test_a_second_invite_to_an_already_pending_member_is_a_no_op(client, session
     db.close()
 
     _login(client, "commish@example.com")
-    first = client.post(f"/admin/members/{w['member_pool_member_id']}/co-commissioner/invite")
+    first = client.post(f"/league/members/{w['member_pool_member_id']}/co-commissioner/invite")
     assert first.status_code == 303
 
     db = session_factory()
     first_invited_at = db.get(PoolMember, w["member_pool_member_id"]).co_commissioner_invited_at
     db.close()
 
-    second = client.post(f"/admin/members/{w['member_pool_member_id']}/co-commissioner/invite")
+    second = client.post(f"/league/members/{w['member_pool_member_id']}/co-commissioner/invite")
     assert second.status_code == 303
 
     db = session_factory()
@@ -2724,12 +2772,12 @@ def test_a_second_invite_to_an_already_pending_member_is_a_no_op(client, session
 @pytest.mark.parametrize(
     "method,path,data",
     [
-        ("post", "/admin/members/{member_id}/co-commissioner/invite", None),
-        ("post", "/admin/members/{member_id}/role", {"role": "commissioner"}),
-        ("post", "/admin/members/{commish_member_id}/role", {"role": "member"}),
-        ("post", "/admin/members/{coco_member_id}/role", {"role": "member"}),
-        ("post", "/admin/members/{coco_member_id}/co-commissioner/cancel", None),
-        ("post", "/admin/commissioner-code", None),
+        ("post", "/league/members/{member_id}/co-commissioner/invite", None),
+        ("post", "/league/members/{member_id}/role", {"role": "commissioner"}),
+        ("post", "/league/members/{commish_member_id}/role", {"role": "member"}),
+        ("post", "/league/members/{coco_member_id}/role", {"role": "member"}),
+        ("post", "/league/members/{coco_member_id}/co-commissioner/cancel", None),
+        ("post", "/league/commissioner-code", None),
     ],
 )
 def test_co_commissioner_cannot_manage_anyones_commissioner_status(
@@ -2761,14 +2809,14 @@ def test_co_commissioner_cannot_see_the_commissioner_invite_link(client, session
     db.close()
 
     _login(client, "coco@example.com")
-    response = client.get("/admin/members")
+    response = client.get("/league/members")
     assert response.status_code == 200
     assert "commissioner_code=COCOCODE" not in response.text
     assert "Commissioner invite link" not in response.text
     client.post("/logout")
 
     _login(client, "commish@example.com")
-    response = client.get("/admin/members")
+    response = client.get("/league/members")
     assert response.status_code == 200
     assert "commissioner_code=COCOCODE" in response.text
     assert "Commissioner invite link" in response.text
@@ -2784,7 +2832,7 @@ def test_full_commissioner_can_rotate_their_own_commissioner_invite_link(client,
     db.close()
 
     _login(client, "commish@example.com")
-    response = client.post("/admin/commissioner-code")
+    response = client.post("/league/commissioner-code")
     assert response.status_code == 303
 
     db = session_factory()
@@ -2800,7 +2848,7 @@ def test_full_commissioner_can_demote_a_co_commissioner_instantly(client, sessio
     db.close()
 
     _login(client, "commish@example.com")
-    response = client.post(f"/admin/members/{w['coco_member_id']}/role", data={"role": "member"})
+    response = client.post(f"/league/members/{w['coco_member_id']}/role", data={"role": "member"})
     assert response.status_code == 303
 
     db = session_factory()
@@ -2821,7 +2869,7 @@ def test_full_commissioner_can_demote_another_commissioner_instantly(client, ses
     db.close()
 
     _login(client, "commish@example.com")
-    response = client.post(f"/admin/members/{peer_member_id}/role", data={"role": "member"})
+    response = client.post(f"/league/members/{peer_member_id}/role", data={"role": "member"})
     assert response.status_code == 303
 
     db = session_factory()
@@ -2830,7 +2878,9 @@ def test_full_commissioner_can_demote_another_commissioner_instantly(client, ses
     db.close()
 
 
-@pytest.mark.parametrize("path", ["/admin", "/admin/slate", "/admin/members", "/admin/settings"])
+@pytest.mark.parametrize(
+    "path", ["/league", "/league/slate", "/league/members", "/league/settings"]
+)
 def test_co_commissioner_reaches_the_same_operational_admin_pages_as_a_commissioner(
     client, session_factory, path
 ):
@@ -2849,7 +2899,7 @@ def test_co_commissioner_can_mark_a_member_paid_and_unpaid(client, session_facto
     db.close()
 
     _login(client, "coco@example.com")
-    response = client.post(f"/admin/members/{w['member_id']}/paid")
+    response = client.post(f"/league/members/{w['member_id']}/paid")
     assert response.status_code == 303
 
     db = session_factory()
@@ -2857,7 +2907,7 @@ def test_co_commissioner_can_mark_a_member_paid_and_unpaid(client, session_facto
     assert member.paid_at is not None
     db.close()
 
-    response = client.post(f"/admin/members/{w['member_id']}/paid")
+    response = client.post(f"/league/members/{w['member_id']}/paid")
     assert response.status_code == 303
     db = session_factory()
     member = db.get(PoolMember, w["member_id"])
@@ -2879,13 +2929,13 @@ def test_admin_promote_and_demote_power_is_unaffected_by_co_commissioner_work(
     db.close()
 
     _login(client, "boss@example.com")
-    promote = client.post(f"/admin/members/{player_member_id}/role", data={"role": "commissioner"})
+    promote = client.post(f"/league/members/{player_member_id}/role", data={"role": "commissioner"})
     assert promote.status_code == 303
     db = session_factory()
     assert db.get(PoolMember, player_member_id).role_in_pool == "commissioner"
     db.close()
 
-    demote = client.post(f"/admin/members/{player_member_id}/role", data={"role": "member"})
+    demote = client.post(f"/league/members/{player_member_id}/role", data={"role": "member"})
     assert demote.status_code == 303
     db = session_factory()
     assert db.get(PoolMember, player_member_id).role_in_pool == "member"
@@ -2906,14 +2956,14 @@ def test_co_commissioner_of_two_pools_sees_the_switcher_and_can_switch(client, s
     db.close()
 
     _login(client, "multi.coco@example.com")
-    response = client.get("/admin")
+    response = client.get("/league")
     assert response.status_code == 200
     assert "data-league-switcher" in response.text
 
-    switch = client.post("/admin/switch-league", data={"pool_id": pool_b_id})
+    switch = client.post("/league/switch-league", data={"pool_id": pool_b_id})
     assert switch.status_code == 303
 
-    after = client.get("/admin")
+    after = client.get("/league")
     assert "Second Co Pool" in after.text
 
 
@@ -3010,13 +3060,13 @@ def test_admin_contacts_page_refused_for_a_non_admin_commissioner(client, sessio
     db.close()
 
     _login(client, "commish@example.com")
-    response = client.get("/admin/contacts")
+    response = client.get("/site/contacts")
     assert response.status_code == 403
 
 
 def test_admin_contacts_page_refused_for_a_regular_player(client, world):
     _login(client, "player@example.com")
-    response = client.get("/admin/contacts")
+    response = client.get("/site/contacts")
     assert response.status_code == 403
 
 
@@ -3027,7 +3077,7 @@ def test_admin_contacts_page_shows_submissions_for_the_site_admin(client, world,
     db.close()
 
     _login(client, "boss@example.com")  # world's boss is role="admin"
-    response = client.get("/admin/contacts")
+    response = client.get("/site/contacts")
     assert response.status_code == 200
     assert "Lead One" in response.text
     assert "lead1@example.com" in response.text
@@ -3131,7 +3181,7 @@ def test_preview_pool_never_appears_in_admin_leagues_listing(client, world, sess
     db.close()
 
     _login(client, "boss@example.com")
-    response = client.get("/admin/leagues")
+    response = client.get("/site/leagues")
     assert response.status_code == 200
     assert "Test Pool" in response.text  # the real league still shows
     assert preview_name not in response.text
@@ -3153,7 +3203,95 @@ def test_preview_pool_never_appears_in_a_commissioners_multi_league_switcher(
     db.close()
 
     _login(client, "commish@example.com")
-    response = client.get("/admin")
+    response = client.get("/league")
     assert response.status_code == 200
     assert "data-league-switcher" not in response.text
     assert "PickSportPlus Preview" not in response.text
+
+
+# Site admin dashboard and legacy /admin redirects (Phase 4 remediation) ------
+#
+# /site is the new, light, platform wide dashboard added this phase (app/routers/site.py):
+# every pool with its member count and season status, a link to /site/leagues, a link to
+# /site/contacts with the current submission count, and the ephemeral storage health status.
+# Everything under old /admin/... still resolves, as a 301 to its new /league or /site home,
+# for every GET path a human could plausibly have bookmarked (app/routers/legacy_redirects.py).
+
+
+def test_site_dashboard_refused_for_a_regular_player(client, world):
+    _login(client, "player@example.com")
+    response = client.get("/site")
+    assert response.status_code == 403
+
+
+def test_site_dashboard_refused_for_a_pool_commissioner_who_is_not_a_site_admin(
+    client, session_factory
+):
+    db = session_factory()
+    pool = _make_pool(db)
+    _make_pool_commissioner_who_is_not_admin(db, pool)
+    db.commit()
+    db.close()
+
+    _login(client, "commish@example.com")
+    response = client.get("/site")
+    assert response.status_code == 403
+
+
+def test_site_dashboard_shows_pools_contact_count_and_storage_status_for_the_site_admin(
+    client, world, session_factory
+):
+    db = session_factory()
+    db.add(ContactSubmission(name="Lead One", email="lead1@example.com", message="Hi there."))
+    preview_pool = _make_preview_pool(db)
+    week = _make_week(db, preview_pool)
+    _make_games(db, week)  # even with a real, built slate, the preview pool stays hidden
+    db.commit()
+    preview_name = preview_pool.name
+    db.close()
+
+    _login(client, "boss@example.com")
+    response = client.get("/site")
+    assert response.status_code == 200
+    assert "Test Pool" in response.text
+    assert preview_name not in response.text
+    assert "Contact submissions (1)" in response.text
+    assert "/site/leagues" in response.text
+    assert "/site/contacts" in response.text
+
+
+def test_site_dashboard_shows_ephemeral_storage_status(client, world, monkeypatch):
+    _login(client, "boss@example.com")
+
+    monkeypatch.setattr(settings, "database_url", "sqlite:////tmp/picksportplus.db")
+    response = client.get("/site")
+    assert "temporary storage" in response.text
+
+    monkeypatch.setattr(settings, "database_url", "sqlite:///./picksportplus.db")
+    response = client.get("/site")
+    assert "temporary storage" not in response.text
+
+
+@pytest.mark.parametrize(
+    "old_path,new_path",
+    [
+        ("/admin", "/league"),
+        ("/admin/settings", "/league/settings"),
+        ("/admin/members", "/league/members"),
+        ("/admin/slate", "/league/slate"),
+        ("/admin/payouts", "/league/payouts"),
+        ("/admin/payouts/summary", "/league/payouts/summary"),
+        ("/admin/payouts/summary.csv", "/league/payouts/summary.csv"),
+        ("/admin/leagues", "/site/leagues"),
+        ("/admin/leagues/new", "/site/leagues/new"),
+        ("/admin/contacts", "/site/contacts"),
+    ],
+)
+def test_legacy_admin_get_paths_redirect_permanently(client, old_path, new_path):
+    """No login needed: the redirect itself does not check who is asking, exactly like every
+    other route still checks its own permission once the browser follows it to the new
+    address. A signed out request still gets the 301, proving the redirect really is
+    unconditional."""
+    response = client.get(old_path)
+    assert response.status_code == 301
+    assert response.headers["location"] == new_path
