@@ -16,9 +16,9 @@ import datetime as dt
 import pytest
 from sqlalchemy import select
 
-from app.models import Game, Pick, Pool, PoolMember, User, Week, WeekEntry
+from app.models import Game, Pick, PlatformSetting, Pool, PoolMember, User, Week, WeekEntry
 from app.providers import espn
-from app.providers.http import cache_put
+from app.providers.http import cache_put, get_platform_settings
 from app.providers.teams import canonical_key
 from app.services import ingest, results
 
@@ -326,6 +326,91 @@ def test_build_slate_refuses_with_no_anchor_date(db):
     assert len(report.warnings) == 1
     assert "Set your week 1 anchor date in Settings" in report.warnings[0]
     assert db.scalar(select(Week).where(Week.pool_id == pool.id)) is None
+
+
+# The global "ESPN only" switch (Phase 5 remediation) --------------------------
+#
+# Replaces the old per-build commissioner checkbox: build_slate now ANDs its own
+# allow_metered parameter (still True by default, unchanged for every existing caller) with
+# the site admin's persisted, global PlatformSetting.espn_only, read fresh from the database
+# on every call via app.providers.http.get_platform_settings. These two tests prove the AND
+# actually gates the metered providers, not just the report's own bookkeeping: neither
+# odds_api.fetch_spreads nor cfbd.fetch_lines is ever called while the switch is on, and both
+# are called, exactly as before this phase, while it is off.
+
+
+def test_build_slate_espn_only_switch_on_skips_odds_api_and_cfbd(db, load_fixture, monkeypatch):
+    _cache_calendar(db, load_fixture, "nfl", 2026, NFL_2026_CALENDAR)
+    _cache_calendar(db, load_fixture, "ncaaf", 2026, CFB_2026_CALENDAR)
+    _cache_week(db, load_fixture, "ncaaf", 2026, 2, 1, CFB_SOME_GAMES)
+
+    pool = _pool(db, target_nfl=0, target_ncaaf=4, num_games_per_week=4)
+    ingest.ensure_week(db, pool, 2026, 1, anchor_date=dt.date(2026, 8, 29))
+    db.add(PlatformSetting(espn_only=True))
+    db.commit()
+
+    odds_api_calls: list[str] = []
+    cfbd_calls: list[tuple[int, int]] = []
+    monkeypatch.setattr(
+        ingest.odds_api,
+        "fetch_spreads",
+        lambda db, league, ttl_minutes=None: (odds_api_calls.append(league), ([], "live"))[1],
+    )
+    monkeypatch.setattr(
+        ingest.cfbd,
+        "fetch_lines",
+        lambda db, year, week, season_type="regular": (
+            cfbd_calls.append((year, week)),
+            ([], "live"),
+        )[1],
+    )
+
+    # allow_metered defaults to True here, exactly the value every existing caller (the old
+    # commissioner checkbox, app/cli.py, sync_week) already passes or defaults to. The switch
+    # alone is what must stop these calls.
+    report = ingest.build_slate(db, pool, 2026, 1)
+
+    assert report.candidates == 24
+    assert odds_api_calls == []
+    assert cfbd_calls == []
+    assert any("metered lookups were skipped" in w for w in report.warnings)
+
+
+def test_build_slate_espn_only_switch_off_calls_odds_api_and_cfbd_as_before(
+    db, load_fixture, monkeypatch
+):
+    _cache_calendar(db, load_fixture, "nfl", 2026, NFL_2026_CALENDAR)
+    _cache_calendar(db, load_fixture, "ncaaf", 2026, CFB_2026_CALENDAR)
+    _cache_week(db, load_fixture, "ncaaf", 2026, 2, 1, CFB_SOME_GAMES)
+
+    pool = _pool(db, target_nfl=0, target_ncaaf=4, num_games_per_week=4)
+    ingest.ensure_week(db, pool, 2026, 1, anchor_date=dt.date(2026, 8, 29))
+    # No PlatformSetting row at all: get_platform_settings creates one on first read, with
+    # espn_only defaulting to False, exactly the "off by default" the brief requires.
+    assert db.scalar(select(PlatformSetting)) is None
+
+    odds_api_calls: list[str] = []
+    cfbd_calls: list[tuple[int, int]] = []
+    monkeypatch.setattr(
+        ingest.odds_api,
+        "fetch_spreads",
+        lambda db, league, ttl_minutes=None: (odds_api_calls.append(league), ([], "live"))[1],
+    )
+    monkeypatch.setattr(
+        ingest.cfbd,
+        "fetch_lines",
+        lambda db, year, week, season_type="regular": (
+            cfbd_calls.append((year, week)),
+            ([], "live"),
+        )[1],
+    )
+
+    report = ingest.build_slate(db, pool, 2026, 1)
+
+    assert report.candidates == 24
+    assert odds_api_calls == ["ncaaf"]
+    assert cfbd_calls == [(2026, 1)]
+    assert get_platform_settings(db).espn_only is False
 
 
 # Test weeks (Phase 3, preseason and test week support) -----------------------

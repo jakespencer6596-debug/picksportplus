@@ -2970,3 +2970,158 @@ own content (pool listing with the preview pool excluded, contact count, links t
 proving every legacy GET path 301s to its new home). `python -m ruff check .` and
 `python -m black --check .` both clean. `grep -rn "—" app/ tests/ SPEC.md README.md` returns
 only the pre-existing assertion in `tests/test_app.py` that em dashes are absent.
+
+### Phase 5, provider controls move to site admin
+
+**The problem.** `/league/slate`'s build form carried two checkboxes: "Open it for picks
+straight away" (redundant, the same page already has a dedicated "Publish this week" button
+once a draft exists) and "ESPN only, spend no API credits". The second one asked a
+commissioner to reason about something they have no way to reason about: what a provider
+credit costs, whether the shared account is near its monthly cap, or that ticking it degrades
+their spreads. It was a billing lever dressed as a slate-quality checkbox, set per build by
+whichever commissioner happened to be clicking, which is how a shared budget gets spent
+without anyone deciding to spend it. Phase 4 left the "Provider budgets" section on `/league`
+(gated `{% if is_site_admin %}`) as a placeholder, explicitly deferring the real fix to this
+phase.
+
+**The fix, in one sentence.** The checkbox is gone; in its place is one global, persisted,
+site-admin-only switch (`/site/providers`) that every league's build respects at once, and the
+old "Provider budgets" section moved off `/league` entirely onto that same page.
+
+**Where the global switch lives: a new, deliberately single-purpose table, not a Pool
+column and not a generic settings table.** `app.models.PlatformSetting`, one row
+(`espn_only: bool`, default `False`), fetched via a new `get_platform_settings(db)` helper in
+`app/providers/http.py`, right next to `get_usage`, whose own get-or-create shape it copies
+exactly: read `select(PlatformSetting)`, and if the table is still empty, create and flush a
+default row. Not a `Pool` column: the brief is explicit that this switch is platform-wide,
+affecting every league's builds at once, and a per-pool column would let it drift into a
+per-league preference the moment two commissioners disagreed about it, exactly the shared
+resource problem this phase exists to fix. Not a generic key-value settings table either:
+`espn_only` is the only platform-wide toggle this codebase needs today, and building a
+generic table for one boolean is exactly the over-engineering the brief warned against.
+Migration `b1c4f8a2d5e7_add_platform_settings.py` creates the table with a matching
+`server_default=false()`, the same belt-and-braces pattern `a3f7c9d21b46_add_is_preview_to_pools.py`
+already used for a boolean default. Read fresh from the database on every call, never cached
+in process memory or on `settings` (a `pydantic-settings` env-var object, which would need a
+restart to pick up a change and was explicitly ruled out by the brief for exactly that
+reason): a site admin's toggle takes effect on the very next build, no redeploy needed.
+
+**How `build_slate` sources it: an AND against the existing `allow_metered` parameter, not a
+parameter removal.** `ingest.build_slate(..., allow_metered: bool = True, ...)` keeps its
+existing signature and default. Internally, right before calling `resolve_spreads`, it computes
+`effective_allow_metered = allow_metered and not get_platform_settings(db).espn_only` and
+passes that through instead of the raw parameter. `resolve_spreads` itself is untouched: its
+own `allow_metered` parameter and default are exactly as they were, since it is the lower
+level function and every existing direct caller of it (the idempotency test in
+`tests/test_ingest.py`, which deliberately bypasses `build_slate` to exercise the pre-anchor
+fallback) still means exactly what it always meant. This was chosen over threading a second
+parameter through `resolve_spreads`, or having `resolve_spreads` read the switch itself,
+because it keeps the AND in exactly one place, keeps `resolve_spreads` a pure function of its
+own arguments (easier to test in isolation, which the two new
+`test_build_slate_espn_only_switch_on/off_*` tests in `tests/test_ingest.py` rely on), and
+means every existing caller of `build_slate` needed zero changes to its call site to pick up
+the new global behaviour, the smallest-diff option the brief explicitly asked for. The AND is
+deliberately one directional: passing `allow_metered=True` can never force metered calls back
+on while the global switch is on (`True and not True` is `False`), but passing
+`allow_metered=False` always forces ESPN only regardless of the switch (`False and anything`
+is `False`). That asymmetry is the whole point: nobody, commissioner or CLI operator, spends a
+credit while the switch is on, but a trusted caller can always be *more* restrictive than the
+global default, never less.
+
+**What happened to `app/cli.py`'s own `--no-metered` flag: kept, unchanged, now reads as "force
+this one run ESPN only regardless of the global switch".** `build-slate --no-metered`,
+`sync-week --no-metered` and `seed-preview --no-metered` all still pass
+`allow_metered=not no_metered` exactly as before. Before this phase that literally meant "skip
+the metered providers for this run"; after this phase, thanks to the AND above, it still means
+exactly that, an override that can only make a run *more* restrictive, never less. A CLI
+operator is trusted (this whole codebase's existing convention, see `app/cli.py`'s module
+docstring: "Render Cron Jobs call these, there is no in-process scheduler," and every command
+here already runs unsupervised), so keeping a way to force one manual run ESPN only, for
+example while debugging a provider outage, without needing to flip the global switch and
+remember to flip it back, is a reasonable convenience. What the flag could **not** be given,
+and was not: a way to force metered calls back on while the global switch is on. There is no
+`--force-metered` flag and none was added; that would defeat the entire point of a global
+switch the site admin controls. `build_slate_cmd`, `sync_week_cmd` and `seed_preview_cmd`
+needed zero code changes, exactly the "keep every existing caller working with minimal
+changes" outcome the brief asked for.
+
+**`/league/slate/build`: down to one field.** `app/templates/admin/slate.html`'s build form
+lost both `<div class="field">` blocks (`publish`, `no_metered`) and their help text; only
+`week_number` and the "Build the slate" button remain. `POST /league/slate/build`
+(`app/routers/admin.py`, `slate_build`) no longer declares `publish` or `no_metered` as
+`Form(...)` parameters at all, and no longer passes `allow_metered` or `publish` to
+`build_slate`, so a build always follows `pool.auto_publish` (`publish=None`, `build_slate`'s
+own default), exactly what the removed checkbox's own help text already promised for its
+unchecked state, and always respects the global switch, since `allow_metered` now defaults to
+`True` and the AND happens inside `build_slate` itself. FastAPI silently ignores unknown form
+fields rather than 422ing, so a stale bookmarked form that still posts the old field names (a
+browser tab left open across the deploy) degrades gracefully instead of erroring; a test pins
+this (`test_slate_build_route_ignores_publish_and_no_metered_even_if_posted`).
+`app/routers/admin.py`'s `test_week_create` route was already not passing `allow_metered`
+(it only ever set `publish=True`, a deliberate, non-user-controlled choice, unchanged), so it
+picks up the global switch automatically too: a test week's build now also respects "ESPN
+only" the same way a real week's does, which is the correct reading of "global, affecting
+every league's builds at once."
+
+**The commissioner's neutral note.** `slate_page` (`app/routers/admin.py`) now passes
+`espn_only: get_platform_settings(db).espn_only` to `admin/slate.html`, which shows, inside
+the build card, whenever the switch is on: "Some games may not have a line yet. You can set
+one by hand." No mention of credits, budgets or providers, matching SPEC.md Section 3h's
+existing sentence-case, plainspoken, no-billing-language-to-a-commissioner rule; a test
+(`test_slate_page_shows_neutral_note_when_espn_only_is_on_and_never_billing_language`) checks
+both the note's presence and the absence of "api credit", "monthly budget", "spend no" and
+"billing" anywhere on the rendered page. This is read fresh on every render of the slate page,
+same as everywhere else this phase touches the switch, and shown regardless of whether this
+particular build actually hit a missing spread, per the brief.
+
+**`/site/providers`: the old "Provider budgets" markup, moved verbatim, plus the switch.**
+Added to `app/routers/site.py` rather than a new router file: the file's own module docstring
+already flagged `/site/providers` as "Phase 5's job, not yet built" and it is a light,
+`require_admin`-gated page in exactly the same shape as the existing `/site` dashboard route
+in the same file, so a second small file would have split one coherent "site admin surfaces"
+concern for no real benefit. `GET /site/providers` reuses `usage_report(db)` and
+`provider_warnings(db)` from `app/providers/http.py` completely unchanged (per the brief,
+"reuse it verbatim, do not rewrite it"), and `app/templates/admin/site_providers.html` is the
+`budget-grid`/`budget-card`/`meter` markup from the old `admin/index.html` section, moved
+essentially unchanged (same CSS classes, same fields), with one addition: a "Key: set / NOT
+SET" line per provider, reusing `usage_report`'s own `configured` boolean (itself
+`bool(_api_key_for(provider))`, the identical presence-only check `app/cli.py`'s `doctor`
+command already uses), so the value itself is never rendered, only whether it is present.
+`POST /site/providers/espn-only` flips `PlatformSetting.espn_only` and redirects back with a
+flash message; it is a plain toggle with no form value, since the page only ever shows one
+button at a time ("Turn ESPN only on" or "Turn ESPN only off"), matching the brief's own "flips
+the persisted setting" phrasing.
+
+**`/league` loses "Provider budgets" entirely, not just its own gate.** `app/routers/admin.py`'s
+`dashboard` route no longer computes or passes `usage`, `warnings` or `is_site_admin`;
+`admin/index.html` lost both the `{% if is_site_admin %}...{% endif %}` "Provider budgets"
+section and, one level up, its own "Feed warnings" section (the `{% if warnings %}` block
+above "Where the pool stands"), which rendered the exact same `provider_warnings(db)` output
+the router only ever populated for `user.is_admin` (an empty list otherwise, so the block
+never actually rendered for a real commissioner, but it depended on the same context key this
+phase removes, and it is the same billing-adjacent content moving to `/site/providers`, so
+leaving a dead, never-populated block behind would be worse than removing it). This is a
+different call site from `slate_page`'s own `provider_warnings(db)` call (the "Feed warnings"
+section on `/league/slate`, driven by `spread_source`/missing-line state, not by provider
+budgets specifically), which the brief explicitly said not to touch and was not touched.
+
+**Nav and dashboard wiring.** `app/templates/base.html`'s "Site" tab's active-state check
+gained `'site_providers'` alongside `'site'`, `'site_leagues'`, `'site_contacts'`, so it stays
+highlighted on the new page the same way it already does on the other three site-admin pages.
+`admin/site_dashboard.html` gained a "Providers" button next to "Contact submissions" and
+"Leagues", so the new page is discoverable from the entry point into every site-admin surface,
+matching how the other two site-admin pages are already linked from there.
+
+**Verification.** `python -m pytest -q` passed 1008 tests (998 before this phase's own new
+tests, 10 new: 2 in `tests/test_app.py` proving the build form no longer needs or is broken by
+`publish`/`no_metered`, 1 proving the neutral note on `/league/slate` and the absence of
+billing language, 2 permission-boundary tests for `/site/providers` (403 for a regular player,
+403 for a non-admin pool commissioner), 1 content test for `/site/providers` (key presence,
+the budget grid, the switch's current state), 2 permission-boundary tests for the toggle route,
+1 test proving the toggle persists and reads back fresh across two separate requests; and 2 in
+`tests/test_ingest.py` proving the global switch actually gates `odds_api.fetch_spreads` and
+`cfbd.fetch_lines` inside `build_slate`, not just the report's own bookkeeping, one with the
+switch on (both calls skipped even though `allow_metered` defaults to `True`) and one with it
+off (both calls made, exactly as before this phase)). `python -m ruff check .` and
+`python -m black --check .` both clean. `grep -rn "—" app/ tests/ SPEC.md README.md` returns
+only the pre-existing assertion in `tests/test_app.py` that em dashes are absent.

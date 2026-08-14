@@ -55,7 +55,7 @@ from app.models import (
     Week,
     utcnow,
 )
-from app.providers.http import provider_warnings, usage_report
+from app.providers.http import get_platform_settings, provider_warnings
 from app.providers.teams import canonical_key, display_name
 from app.routers.leagues import _fresh_commissioner_invite_code
 from app.services import ingest
@@ -209,12 +209,6 @@ def dashboard(
             "slate_counts": counts,
             "pick_counts": pick_counts,
             "member_count": member_count,
-            "is_site_admin": user.is_admin,
-            # Provider call budgets are cost/vendor detail, site admin only. A real
-            # commissioner never sees them, and the values are not even computed for
-            # anyone else, matching the template's own {% if is_site_admin %} gate below.
-            "usage": usage_report(db) if user.is_admin else [],
-            "warnings": provider_warnings(db) if user.is_admin else [],
         },
         **_base(db, user, pool),
     )
@@ -808,6 +802,10 @@ def slate_page(
             "pinned_count": pinned_count,
             "missing_spread_count": missing_spread_count,
             "slate_span": slate_span_info,
+            # The global switch (Phase 5 remediation), read fresh so the neutral note below
+            # always reflects whatever the site admin has it set to right now, never a stale
+            # value. No billing/credit language reaches the commissioner: see slate.html.
+            "espn_only": get_platform_settings(db).espn_only,
         },
         **_base(db, user, pool),
     )
@@ -824,20 +822,24 @@ def _week_for_action(db: Session, pool: Pool, week_id: int) -> Week:
 def slate_build(
     request: Request,
     week_number: int = Form(...),
-    publish: str = Form(""),
-    no_metered: str = Form(""),
     db: Session = Depends(get_db),
     user: User = Depends(require_user),
     pool: Pool = Depends(require_commissioner),
 ):
+    """No publish or no_metered fields anymore (Phase 5 remediation, see DECISIONS.md).
+    Publishing is a separate, deliberate action (POST /league/slate/publish, the "Publish
+    this week" button lower on this same page); this route always follows pool.auto_publish
+    (publish=None, build_slate's own default) exactly as the removed checkbox's own help text
+    already promised for its unchecked state. Whether metered providers get called at all is
+    no longer a per-build choice either: it is the site admin's global "ESPN only" switch
+    (POST /site/providers/espn-only), which ingest.build_slate reads fresh on every call, so
+    this route no longer passes allow_metered here at all."""
     try:
         report = ingest.build_slate(
             db,
             pool,
             pool.season_year,
             week_number,
-            allow_metered=not bool(no_metered),
-            publish=True if publish else None,
         )
     except ValueError as exc:
         # Most likely more games are pinned than the slate total allows (app.slate raises

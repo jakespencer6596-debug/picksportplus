@@ -705,3 +705,29 @@ class ProviderUsage(Base):
         DateTime(timezone=True), nullable=True
     )
     last_error: Mapped[str | None] = mapped_column(String(255), nullable=True)
+
+
+class PlatformSetting(Base):
+    """The one platform-wide, site-admin-controlled settings row (Phase 5 remediation,
+    provider controls move to site admin).
+
+    Exactly one row ever exists in practice: app.providers.http.get_platform_settings creates
+    it on first read if the table is still empty, the same get-or-create shape
+    app.providers.http.get_usage already uses for ProviderUsage. Deliberately not a generic
+    key-value settings table: espn_only is the only platform-wide toggle this codebase needs
+    today, and a generic table would be over-engineering for one boolean (see DECISIONS.md,
+    Phase 5). Deliberately not a Pool column either: this switch is explicitly global, read by
+    app.services.ingest.build_slate for every pool's build at once, not a per-league
+    preference a commissioner could set.
+    """
+
+    __tablename__ = "platform_settings"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    # When True, build_slate skips The Odds API and CollegeFootballData entirely for every
+    # pool's build, ESPN only, regardless of any per-call allow_metered a caller passes (see
+    # ingest.build_slate's own docstring). Off by default: the full provider path with
+    # existing spend limits intact. Read fresh from the database on every build, never cached
+    # in process memory, so a toggle from POST /site/providers/espn-only takes effect on the
+    # very next build with no redeploy and no restart.
+    espn_only: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)

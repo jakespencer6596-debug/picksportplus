@@ -27,7 +27,7 @@ from sqlalchemy.orm import Session
 from app.config import settings
 from app.models import Game, Pick, Pool, Week, utcnow
 from app.providers import cfbd, espn, odds_api
-from app.providers.http import BudgetExceeded, ProviderError
+from app.providers.http import BudgetExceeded, ProviderError, get_platform_settings
 from app.providers.teams import match_by_teams_and_date
 from app.services import calendar as calendar_svc
 from app.slate import Candidate, compute_lock_at, select_slate_by_targets
@@ -919,6 +919,19 @@ def build_slate(
     so each league's calendar resolution also tries the preseason. Everything after the week
     is created, resolving spreads, selecting the closest games, publishing, is the same
     machinery a real week goes through, unchanged.
+
+    allow_metered (Phase 5 remediation: provider controls move to site admin) is no longer a
+    commissioner's per-build choice; it is ANDed with the site admin's global, persisted
+    "ESPN only" switch (app.providers.http.get_platform_settings, read fresh here on every
+    call, never cached), so a commissioner cannot bypass it and a caller cannot force metered
+    calls back on while the switch is on. It still defaults to True and stays a real
+    parameter, both for a smaller diff (every existing caller, app/cli.py's build-slate,
+    sync-week and seed-preview commands among them, keeps working unchanged) and so a trusted
+    CLI operator can still pass allow_metered=False (build-slate's own --no-metered flag) to
+    force one manual run ESPN only regardless of the global switch. There is no equivalent way
+    to force allow_metered=True past an "on" global switch: the AND is one directional, on
+    purpose, since the whole point of the switch is that nobody, commissioner or CLI operator,
+    spends a credit while it is on. See DECISIONS.md, Phase 5.
     """
     report = IngestReport(week_number=week_number, season_year=year)
     now = now or dt.datetime.now(dt.UTC)
@@ -976,7 +989,10 @@ def build_slate(
 
     before_refreshes = week.spread_refreshes
     before_cfbd = week.cfbd_calls
-    spreads, warnings = resolve_spreads(db, week, games, allow_metered=allow_metered)
+    # The global switch always wins over a stale True default; it never overrides an explicit
+    # allow_metered=False from a trusted caller. See this function's own docstring above.
+    effective_allow_metered = allow_metered and not get_platform_settings(db).espn_only
+    spreads, warnings = resolve_spreads(db, week, games, allow_metered=effective_allow_metered)
     report.warnings.extend(warnings)
     report.live_metered_calls = (week.spread_refreshes - before_refreshes) + (
         week.cfbd_calls - before_cfbd

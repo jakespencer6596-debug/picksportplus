@@ -40,8 +40,8 @@
              {{ 'aria-current=page' if active_nav == 'league' }}>League</a>
         {% endif %}
         {% if current_user.is_admin %}
-          <a class="nav-link {{ 'is-active' if active_nav in ('site', 'site_leagues', 'site_contacts') }}" href="/site"
-             {{ 'aria-current=page' if active_nav in ('site', 'site_leagues', 'site_contacts') }}>Site</a>
+          <a class="nav-link {{ 'is-active' if active_nav in ('site', 'site_leagues', 'site_contacts', 'site_providers') }}" href="/site"
+             {{ 'aria-current=page' if active_nav in ('site', 'site_leagues', 'site_contacts', 'site_providers') }}>Site</a>
         {% endif %}
       </nav>
 

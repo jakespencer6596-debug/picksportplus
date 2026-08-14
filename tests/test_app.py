@@ -24,6 +24,7 @@ from app.models import (
     ContactSubmission,
     Game,
     Pick,
+    PlatformSetting,
     Pool,
     PoolMember,
     User,
@@ -400,6 +401,54 @@ def test_admin_pages_refused_for_a_regular_player(client, world, path):
     _login(client, "player@example.com")
     response = client.get(path)
     assert response.status_code == 403
+
+
+def test_slate_build_route_no_longer_accepts_publish_or_no_metered(client, world):
+    """Phase 5 remediation, see DECISIONS.md: the build form dropped both checkboxes, and
+    POST /league/slate/build no longer reads publish or no_metered from the form at all. This
+    posts only week_number, exactly what the trimmed form now sends, and checks the route
+    still runs end to end (force_offline_mode in conftest makes the actual ESPN fetch fail,
+    which is fine, this only proves the route no longer errors on the missing fields, the
+    request still reaches ingest.build_slate and redirects normally)."""
+    _login(client, "boss@example.com")
+    response = client.post("/league/slate/build", data={"week_number": 9})
+    assert response.status_code == 303
+    assert response.headers["location"] == "/league/slate?week=9"
+
+
+def test_slate_build_route_ignores_publish_and_no_metered_even_if_posted(client, world):
+    """Belt and suspenders: even a client that still posts the old field names (a stale
+    bookmarked form, a browser that had the page open across the deploy) is not refused with a
+    422, since FastAPI simply ignores form fields no Form(...) parameter declares."""
+    _login(client, "boss@example.com")
+    response = client.post(
+        "/league/slate/build",
+        data={"week_number": 9, "publish": "1", "no_metered": "1"},
+    )
+    assert response.status_code == 303
+
+
+def test_slate_page_shows_neutral_note_when_espn_only_is_on_and_never_billing_language(
+    client, world, session_factory
+):
+    """Phase 5 remediation: a commissioner gets a plain, neutral heads up while the site
+    admin's global switch is on, never the word credit, budget or billing (see DECISIONS.md,
+    Phase 5, and SPEC.md Section 3h)."""
+    _login(client, "boss@example.com")
+
+    response = client.get("/league/slate")
+    assert "Some games may not have a line yet." not in response.text
+
+    db = session_factory()
+    db.add(PlatformSetting(espn_only=True))
+    db.commit()
+    db.close()
+
+    response = client.get("/league/slate")
+    assert response.status_code == 200
+    assert "Some games may not have a line yet. You can set one by hand." in response.text
+    for phrase in ("api credit", "monthly budget", "spend no", "billing"):
+        assert phrase not in response.text.lower()
 
 
 # Test weeks (Phase 3, preseason and test week support) -----------------------
@@ -1995,13 +2044,15 @@ def test_league_pages_never_render_the_word_admin_for_a_real_commissioner(
     client, session_factory, path
 ):
     """Phase 4 remediation (see DECISIONS.md): the word "admin" must never reach a real
-    commissioner's screen. A static grep over the template source would false-positive on
-    admin/index.html's Provider budgets section, which is real source text gated behind
-    {% if is_site_admin %} and never rendered for anyone else. The only way to check this
-    honestly is a real rendered response for a genuine non-admin commissioner, which is what
-    this does: world's own boss@example.com is deliberately both role="admin" and this pool's
-    commissioner (see the block comment above), which is exactly the case this test must NOT
-    use, so it builds its own plain commissioner instead."""
+    commissioner's screen. Before Phase 5, a static grep over the template source would have
+    false-positived on admin/index.html's Provider budgets section, real source text gated
+    behind {% if is_site_admin %} and never rendered for anyone else; that whole section has
+    since moved to /site/providers (Phase 5, provider controls move to site admin), so
+    admin/index.html no longer has any site-admin-only content at all, but this test still
+    checks a real rendered response rather than the template source, which is the only honest
+    way to verify it. world's own boss@example.com is deliberately both role="admin" and this
+    pool's commissioner (see the block comment above), which is exactly the case this test
+    must NOT use, so it builds its own plain commissioner instead."""
     db = session_factory()
     pool = _make_pool(db)
     _make_pool_commissioner_who_is_not_admin(db, pool)
@@ -3270,6 +3321,109 @@ def test_site_dashboard_shows_ephemeral_storage_status(client, world, monkeypatc
     monkeypatch.setattr(settings, "database_url", "sqlite:///./picksportplus.db")
     response = client.get("/site")
     assert "temporary storage" not in response.text
+
+
+# Provider controls (Phase 5 remediation: provider controls move to site admin) -------------
+#
+# /site/providers is where the old /league "Provider budgets" section moved to, site admin
+# only, plus the new global "ESPN only" switch (POST /site/providers/espn-only). See
+# DECISIONS.md, Phase 5.
+
+
+def test_site_providers_refused_for_a_regular_player(client, world):
+    _login(client, "player@example.com")
+    response = client.get("/site/providers")
+    assert response.status_code == 403
+
+
+def test_site_providers_refused_for_a_pool_commissioner_who_is_not_a_site_admin(
+    client, session_factory
+):
+    db = session_factory()
+    pool = _make_pool(db)
+    _make_pool_commissioner_who_is_not_admin(db, pool)
+    db.commit()
+    db.close()
+
+    _login(client, "commish@example.com")
+    response = client.get("/site/providers")
+    assert response.status_code == 403
+
+
+def test_site_providers_shows_key_presence_spend_and_last_call_for_the_site_admin(
+    client, world, monkeypatch
+):
+    # This developer's own .env may carry real keys (never a test's business to depend on
+    # that), so both are pinned explicitly: one unset, one set, presence only, matching
+    # app/cli.py's own doctor command wording, never the value itself.
+    monkeypatch.setattr(settings, "odds_api_key", "")
+    monkeypatch.setattr(settings, "cfbd_api_key", "a-real-looking-key")
+
+    _login(client, "boss@example.com")
+    response = client.get("/site/providers")
+    assert response.status_code == 200
+    assert "The Odds API" in response.text
+    assert "CollegeFootballData" in response.text
+    assert "NOT SET" in response.text
+    assert "a-real-looking-key" not in response.text
+    assert "ESPN only" in response.text
+    assert "Currently off" in response.text
+
+
+def test_site_providers_espn_only_toggle_refused_for_non_site_admins(
+    client, world, session_factory
+):
+    db = session_factory()
+    pool = db.get(Pool, world["pool_id"])
+    _make_pool_commissioner_who_is_not_admin(db, pool)
+    db.commit()
+    db.close()
+
+    _login(client, "player@example.com")
+    response = client.post("/site/providers/espn-only")
+    assert response.status_code == 403
+
+    _login(client, "commish@example.com")
+    response = client.post("/site/providers/espn-only")
+    assert response.status_code == 403
+
+
+def test_site_providers_espn_only_toggle_persists_and_reads_back_fresh(
+    client, world, session_factory
+):
+    """The switch survives being read back fresh, not cached across requests: two separate
+    TestClient requests, two separate database sessions under the hood, and the second one
+    must see exactly what the first one wrote, immediately, no redeploy or restart involved."""
+    db = session_factory()
+    assert db.scalar(select(PlatformSetting)) is None  # nothing created until first read
+    db.close()
+
+    _login(client, "boss@example.com")
+
+    response = client.post("/site/providers/espn-only")
+    assert response.status_code == 303
+    assert response.headers["location"] == "/site/providers"
+
+    db = session_factory()
+    row = db.scalar(select(PlatformSetting))
+    assert row is not None
+    assert row.espn_only is True
+    db.close()
+
+    response = client.get("/site/providers")
+    assert "Currently on" in response.text
+
+    # Flip it back off, and the change is visible immediately on the very next read.
+    response = client.post("/site/providers/espn-only")
+    assert response.status_code == 303
+
+    db = session_factory()
+    row = db.scalar(select(PlatformSetting))
+    assert row.espn_only is False
+    db.close()
+
+    response = client.get("/site/providers")
+    assert "Currently off" in response.text
 
 
 @pytest.mark.parametrize(

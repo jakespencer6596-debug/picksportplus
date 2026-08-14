@@ -36,18 +36,6 @@
   <a class="subnav-link" href="/league/payouts">Payouts</a>
 </nav>
 
-{% if warnings %}
-  <section class="section" aria-labelledby="warnings-title">
-    <h2 class="section-title" id="warnings-title">Feed warnings</h2>
-    {% for warning in warnings %}
-      <div class="flash flash-error">
-        {{ ic.icon("alert", 18) }}<span>{{ warning }}</span>
-      </div>
-    {% endfor %}
-    <p class="form-hint">Warnings never stop a week. ESPN carries the schedule and the scores on its own.</p>
-  </section>
-{% endif %}
-
 <section class="section" aria-labelledby="standing-title">
   <h2 class="section-title" id="standing-title">Where the pool stands</h2>
   <div class="stat-grid">
@@ -65,73 +53,6 @@
     </div>
   </div>
 </section>
-
-{% if is_site_admin %}
-<section class="section" aria-labelledby="budget-title">
-  <h2 class="section-title" id="budget-title">Provider budgets</h2>
-  <p class="muted">Site admin only. Commissioners never see provider call budgets.</p>
-  <p class="budget-intro">
-    ESPN is keyless and unmetered, so schedules, live status and final scores never spend a
-    credit. The two feeds below are asked only for a point spread ESPN did not carry, and only
-    when the week has budget left.
-  </p>
-
-  <div class="budget-grid">
-    {% for item in usage %}
-      <article class="panel budget-card{% if item.exhausted %} is-exhausted{% endif %}">
-        <div class="budget-head">
-          <h3 class="budget-name">{{ item.label }}</h3>
-          <span class="pill num">{{ item.period }}</span>
-        </div>
-
-        {% if item.configured %}
-          <p class="budget-figure num">
-            <strong>{{ item.used }}</strong> of {{ item.budget }} credits used, {{ item.pct }}%
-          </p>
-          <div class="meter" role="img"
-               aria-label="{{ item.used }} of {{ item.budget }} credits used, {{ item.pct }} percent">
-            <span class="meter-fill" style="width: {{ [item.pct, 100] | min }}%"></span>
-          </div>
-
-          <dl class="budget-facts">
-            <dt>Left in our budget</dt>
-            <dd class="num">{{ item.remaining }}</dd>
-            <dt>Provider reports left</dt>
-            <dd class="num">
-              {% if item.provider_remaining is not none %}{{ item.provider_remaining }}{% else %}Not reported{% endif %}
-            </dd>
-            <dt>Last call</dt>
-            <dd>
-              {% if item.last_called_at %}{{ item.last_called_at | kickoff_long(tz) }}{% else %}Not called yet{% endif %}
-            </dd>
-          </dl>
-
-          {% if item.exhausted %}
-            <div class="flash flash-error">
-              {{ ic.icon("alert", 18) }}
-              <span>
-                Budget spent for {{ item.period }}. Spreads fall back to ESPN until the month
-                rolls over. Nothing else breaks.
-              </span>
-            </div>
-          {% endif %}
-
-          {% if item.last_error %}
-            <div class="flash flash-error">
-              {{ ic.icon("alert", 18) }}<span>Last call reported: {{ item.last_error }}</span>
-            </div>
-          {% endif %}
-        {% else %}
-          <p class="muted">
-            No key set, so this feed is never called and it costs nothing. Add a key in the
-            environment if you want it as a spread fallback.
-          </p>
-        {% endif %}
-      </article>
-    {% endfor %}
-  </div>
-</section>
-{% endif %}
 
 <section class="section" aria-labelledby="weeks-title">
   <h2 class="section-title" id="weeks-title">Weeks</h2>

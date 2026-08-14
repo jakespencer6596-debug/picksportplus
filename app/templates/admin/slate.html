@@ -148,30 +148,15 @@
                  min="1" max="25" step="1" required>
           <p class="form-hint">
             Building a week that already exists refreshes its candidate pool and reselects the
-            closest games. A line you set by hand is never overwritten by a feed.
+            closest games. A line you set by hand is never overwritten by a feed. Publishing
+            follows the auto publish setting, currently {{ "on" if pool.auto_publish else "off" }};
+            use the Publish button below to open a drafted week by hand.
           </p>
-        </div>
-
-        <div class="field">
-          <label class="checkbox" for="publish">
-            <input type="checkbox" id="publish" name="publish" value="1">
-            <span>Open it for picks straight away</span>
-          </label>
-          <p class="form-hint">
-            Leave this off to follow the auto publish setting, currently
-            {{ "on" if pool.auto_publish else "off" }}.
-          </p>
-        </div>
-
-        <div class="field">
-          <label class="checkbox" for="no_metered">
-            <input type="checkbox" id="no_metered" name="no_metered" value="1">
-            <span>ESPN only, spend no API credits</span>
-          </label>
-          <p class="form-hint">
-            The Odds API and CollegeFootballData are not called at all. Any game ESPN has no line
-            for stays without one until you set it by hand.
-          </p>
+          {% if espn_only %}
+            <p class="form-hint">
+              Some games may not have a line yet. You can set one by hand.
+            </p>
+          {% endif %}
         </div>
 
         <div class="form-actions">
