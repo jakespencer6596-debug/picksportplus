@@ -23,7 +23,7 @@ September 12, 2026.
 | 2 | Week resolution / anchor date | Done | `f0a0117` |
 | 3 | Preseason / test week support | Done | `1a6c199` |
 | 4 | Split site admin vs commissioner | Done | `5cb32c4` |
-| 5 | Move provider controls to site admin | Pending | |
+| 5 | Move provider controls to site admin | Done | `957d718` |
 | 6 | Fix slate build interaction | Pending | |
 | 7 | Transactional email | Pending | |
 | 8 | First-run experience | Pending | |
@@ -106,6 +106,29 @@ September 12, 2026.
   budgets block on `/league` legitimately contains the word in source but never renders for a
   real commissioner.
 - Test count after Phase 4: 998 (+20 over Phase 3's 978, +59 over the Phase 0 baseline).
+
+## Phase 5 notes
+
+- New `PlatformSetting` singleton (`espn_only: bool`, migration `b1c4f8a2d5e7`), read fresh via
+  `get_platform_settings(db)`, never cached; independently verified upgrade/downgrade/upgrade
+  on a scratch database.
+- Slate build form is one field again (week number); the `publish`/`no_metered` checkboxes are
+  gone from `app/routers/admin.py`'s `slate_build` entirely.
+- New `GET /site/providers` (key presence, spend, last call, global ESPN-only toggle) and
+  `POST /site/providers/espn-only`, site admin only. Old dashboard "Provider budgets" section
+  removed from `/league` entirely, not just re-gated.
+- `build_slate` ANDs the global switch into `allow_metered` right before `resolve_spreads`; a
+  trusted CLI caller's own `--no-metered` flag still works as a stricter per-run override, it
+  just can never bypass the switch when the switch is on.
+- **Live-tested in a real browser against a throwaway seeded database** (not just pytest):
+  logged in as the demo commissioner, confirmed the build form shows one field and no
+  checkboxes; logged in as the site admin, confirmed `/site/providers` renders key
+  presence/spend/last-call, toggled "ESPN only" on and back, and confirmed the change was
+  immediate; confirmed the commissioner's slate page then showed the neutral note "Some games
+  may not have a line yet. You can set one by hand." with no billing language. Also live-
+  verified Phase 3's test-week create/delete flow and Phase 4's `/league`/`/site` nav, badges
+  and copy while testing this phase. No defects found in any of it.
+- Test count after Phase 5: 1008 (+10 over Phase 4's 998, +69 over the Phase 0 baseline).
 
 ## Ambiguity decisions
 
