@@ -99,6 +99,16 @@ class Settings(BaseSettings):
     http_timeout_seconds: float = 15.0
     http_retries: int = 2
 
+    # Phase 6 remediation (see DECISIONS.md): a whole build_slate call has no wall-clock
+    # budget of its own, only the per-HTTP-call timeout above, so a slow or hanging provider
+    # could otherwise hold a build open indefinitely with the commissioner staring at a blank
+    # page. 90 seconds comfortably covers a real build (ESPN for the schedule, then up to a
+    # few Odds API/CFBD calls, one per league, each bounded by http_timeout_seconds) while
+    # still failing loud well before a commissioner gives up and reloads. Tests that want a
+    # deterministic, fast timeout pass ingest.build_slate(..., time_budget_seconds=...) directly
+    # rather than lowering this setting.
+    slate_build_timeout_seconds: float = 90.0
+
     # The commissioner sets the real numbers per pool. These bounds only stop nonsense.
     # ClassVar keeps pydantic from treating them as settings fields.
     MIN_SLATE: ClassVar[int] = 2

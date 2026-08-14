@@ -159,8 +159,26 @@
           {% endif %}
         </div>
 
+        {# Phase 6 remediation, see DECISIONS.md: this used to give no feedback at all while
+           the build ran, several seconds to just under a minute, so a commissioner reasonably
+           assumed the click did nothing and clicked again. Starts hidden, app.js flips it on
+           for the duration of the request (htmx:beforeRequest/afterRequest, the same event
+           pair picks.html's own Save button already reacts to for its save-state badge). #}
+        <p class="form-hint" data-build-note hidden>
+          Building the slate reads the schedule from ESPN and resolves a line for every game.
+          This can take up to a minute.
+        </p>
+
         <div class="form-actions">
-          <button class="btn btn-primary" type="submit">Build the slate</button>
+          <button class="btn btn-primary"
+                  type="submit"
+                  data-build-btn
+                  hx-post="/league/slate/build"
+                  hx-target="this"
+                  hx-swap="none"
+                  hx-include="closest form">
+            Build the slate
+          </button>
         </div>
       </form>
     </div>

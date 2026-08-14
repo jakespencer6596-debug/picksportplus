@@ -3125,3 +3125,159 @@ switch on (both calls skipped even though `allow_metered` defaults to `True`) an
 off (both calls made, exactly as before this phase)). `python -m ruff check .` and
 `python -m black --check .` both clean. `grep -rn "—" app/ tests/ SPEC.md README.md` returns
 only the pre-existing assertion in `tests/test_app.py` that em dashes are absent.
+
+### Phase 6, slate build interaction
+
+**The problem.** Clicking "Build the slate" on `/league/slate` is a plain, synchronous HTML
+form POST with zero loading feedback, and a real build can legitimately take several seconds to
+just under a minute (ESPN for the schedule, then up to `MAX_CORE_ODDS_LOOKUPS` (60) ESPN core
+odds lookups, one per candidate game still missing a spread, then possibly one Odds API and one
+CFBD call). A commissioner staring at an unchanged page after ten seconds reasonably assumes
+the click did nothing and clicks again, which used to be able to start a second, fully
+independent `build_slate` call racing the first. Reproduced and measured for real: see
+`REMEDIATION-REPORT.md`'s `## Phase 6 notes`, 6.41 seconds for a small, ESPN-only preseason
+build; a full 20-game, two-league build with metered fallbacks would run considerably longer.
+
+**Loading state: htmx on the existing button, not a new pattern.** `admin/slate.html`'s "Build
+a slate" form keeps its plain `method="post" action="/league/slate/build"` (the no-JS
+fallback), and the button itself additionally carries `hx-post`, `hx-target="this"`,
+`hx-swap="none"` and `hx-include="closest form"`, exactly the shape `picks.html`'s own "Save
+picks" button already uses (hx-* attributes on the button, not the form, `hx-include` pulling
+the surrounding fields in). `hx-swap="none"` because this route never returns a partial to
+swap, only ever a redirect (see below), so there is nothing to render into `hx-target` in the
+success case; `hx-target="this"` is set anyway so an unexpected non-redirect response (a bug,
+not a designed path) has somewhere harmless to land rather than replacing the whole page.
+`app/static/app.js` gained one more `htmx:beforeRequest`/`htmx:afterRequest` pair, following
+the exact event pair and one-badge-driven-by-JS shape the picks page's own
+`data-save-btn`/`data-save-state`/`markSaved` pattern already established: on
+`beforeRequest`, disable the button, swap its label to "Building the slate", and reveal a
+`data-build-note` paragraph explaining the ESPN-plus-possibly-Odds-API-and-CFBD cost and that it
+can take up to a minute; `afterRequest` restores both. `hx-disabled-elt` (a native htmx 2.x
+attribute that would do the disabling automatically) was deliberately not used: nothing else in
+this codebase uses it, and the manual JS toggle keeps this consistent with the one loading-state
+pattern already in use rather than introducing a second one for a single button. No new CSS: the
+existing `.btn[disabled]` treatment (`app/static/app.css`) already renders a disabled primary
+button correctly, and the progress note reuses the plain `.form-hint` class already used
+everywhere else on this same form.
+
+**Why the response has to stay a redirect, and why that redirect needs a header for htmx.**
+The brief explicitly asked to keep `slate_build`'s response shape a redirect-with-flash, not
+restructure it into a partial. htmx follows a plain 303 transparently at the XHR level (its own
+documented behaviour), which sounds convenient until you notice what "transparently" means
+here: the browser's `XMLHttpRequest` follows the redirect itself and hands htmx the
+*redirected-to* page's full HTML as this request's own response, which htmx would then swap
+into the button's small `hx-target`, corrupting the page with a nested full `<html>` document,
+exactly the trap `app/routers/payouts.py`'s own module docstring already documents for this
+same reason. The fix already exists in this codebase: `app/routers/picks.py`'s
+`picks_lock`/`picks_unlock` routes return `Response(status_code=200, headers={"HX-Redirect":
+target})` for an htmx request instead of a 303, which htmx turns into a real
+`window.location` navigation rather than a swap. `slate_build` now does the same, via a new
+`_redirect_or_hx(request, target)` helper in `app/routers/admin.py` (checks `request.headers.get
+("HX-Request") == "true"`, otherwise falls back to the existing plain `_redirect`), used for
+every one of this route's exit paths (success, the pre-existing `ValueError` branch, and the
+two new exceptions below), so a commissioner whose browser follows the htmx path always lands
+on a full, freshly rendered `/league/slate` page with the flash message on it, identical to
+what the no-JS form post has always produced. This also means the loading state clears itself
+naturally on every real outcome (the whole page, including the button, is replaced by
+navigation); `htmx:afterRequest`'s manual reset in `app.js` only matters for the one path that
+never reaches the server at all, a genuine network failure.
+
+**Idempotency: an in-process, lock-guarded set, not a queue and not a database lock.** A second
+build request for a week already being built is refused outright
+(`ingest.BuildInProgress`, "This week is already being built. Wait for it to finish."), never
+queued. This app runs as a single `uvicorn` process with no `--workers` flag (`render.yaml`'s
+`startCommand`), so a plain, module level `set[tuple[pool_id, week_number]]` guarded by a
+`threading.Lock` (`app/services/ingest.py`: `_builds_in_progress`, `_builds_lock`,
+`_acquire_build_lock`/`_release_build_lock`, wrapped as the `slate_build_guard` context
+manager) is a real, sufficient guard: check-and-add happens under the lock, so two threads
+racing the same key can never both win. **This would not be sufficient if this service were
+ever run with multiple worker processes or across multiple instances**, since each process gets
+its own, unshared copy of the set; a future move to `--workers N` or horizontal scaling would
+need a database row or an external lock (Redis, Postgres advisory lock) instead. Not built now:
+out of scope for a single free-tier Render instance, and speculative infrastructure for a
+deployment shape this app does not use would be exactly the over-engineering the brief warns
+against elsewhere. The guard lives inside `build_slate` itself (a thin wrapper, `build_slate`,
+now wraps the actual work, renamed `_build_slate_impl`, in `slate_build_guard(pool.id,
+week_number)` plus a wall clock duration log line), not only in the router, so every caller
+(the commissioner's route, `sync_week`'s cron path, every `app/cli.py` command) is protected
+identically, and a test can acquire the guard directly to simulate a race deterministically
+without real threads (`tests/test_ingest.py`,
+`test_build_slate_refuses_when_the_guard_is_already_held_for_that_week`). The router maps
+`BuildInProgress` to a flash-and-redirect exactly like the pre-existing `ValueError` branch,
+no new response shape.
+
+**Hard timeout: a checked deadline threaded through, not a signal-based interrupt.** A whole
+`build_slate` call had no wall-clock budget of its own, only each individual HTTP call's own
+`settings.http_timeout_seconds`/`http_retries`, so a slow or hanging provider could hold a
+build open indefinitely. `app/config.py` gained `slate_build_timeout_seconds: float = 90.0`.
+`app/services/ingest.py` gained a small `_Deadline` dataclass (`at: float` from
+`time.monotonic()`, `budget_seconds` for the message) with one `check(what)` method, threaded
+as an optional `deadline` keyword through `fetch_candidates` and `resolve_spreads`, checked
+once before each ESPN schedule call (naming "ESPN for the NFL schedule" or "...college
+schedule") and once before each of the three spread-resolution stages (ESPN core odds, The
+Odds API, CollegeFootballData), never inside the per-game core odds loop itself. That keeps
+every check at "major step" granularity rather than a tight per-game loop, the same periodic
+wall-clock check `app/scenarios.py`'s own 2 second budget already uses (see that module's own
+docstring) rather than a true preemptive, signal-based interrupt, which Python cannot cleanly
+deliver mid-`httpx` call anyway without real risk of leaving a connection or a database
+transaction in a half-finished state. `BuildTimeout`'s message names exactly which stage was
+about to run, for example "Build timed out after 90 seconds while waiting for a response from
+The Odds API." `build_slate(..., time_budget_seconds=...)` lets a caller (chiefly tests)
+override the 90 second default with a small, deterministic value rather than lowering the
+setting globally; `0` or a negative number disables the budget entirely (used nowhere in this
+app, kept only because it is what "no deadline built" naturally falls out to, and because
+forcing every caller to always pass a positive number would make `_make_deadline`'s own
+contract more fragile, not less). The router maps `BuildTimeout` to the same flash-and-redirect
+shape as `BuildInProgress` and the pre-existing `ValueError`.
+
+**The success flash: a new sentence, not an edit to `IngestReport.summary()`.** The brief's
+exact requested wording ("Week 1 built. 20 games, 8 NFL and 12 college, 0 missing a line.")
+does not match `summary()`'s own existing sentence ("Week {N}: {candidates} candidates, {with_spread}
+with a spread, {selected} on the slate. league mix: ..."), which several other callers
+(`app/cli.py`'s five build/sync commands, `app/services/demo.py`) still rely on verbatim; editing
+it in place would have changed CLI and demo-seeding output for no reason this phase asked for.
+Instead, `app/routers/admin.py`'s `slate_build` builds the new sentence directly from
+`IngestReport` fields, only when a real build actually happened (`report.selected and not
+report.locked_out`, so the "picks already exist, slate left alone" and "dead end, nothing to
+select from" paths keep using `summary()` exactly as before, since "Week N built" would be
+misleading for either). `IngestReport` gained one new field, `missing_spread: int`, computed in
+`build_slate` right after `apply_slate` as `sum(1 for c in result.selected if c.closeness is
+None)`: `Selected` (`app/slate.py`) carries `closeness`, not `spread_home` directly, but
+`closeness_of(spread_home)` is `None` exactly when `spread_home` is, so this reads the same
+fact without a second database round trip back through the games just selected. League counts
+in the sentence come straight from `report.per_league`, defaulting a missing league to 0 rather
+than omitting it, since this app only ever has two leagues and always showing both ("0 NFL and
+20 college" for a college-only pool) is simpler and more consistent than conditionally
+suppressing one.
+
+**Verification.** `python -m pytest -q` passed 1017 tests (1008 before this phase's own new
+tests, 9 new: `tests/test_ingest.py` gained
+`test_slate_build_guard_rejects_a_second_concurrent_build_for_the_same_week` and
+`test_build_slate_refuses_when_the_guard_is_already_held_for_that_week` (the guard, acquired
+directly to simulate a race deterministically, and through `build_slate` itself, proving no
+`Game` rows are written when refused), `test_build_slate_times_out_naming_the_provider_in_flight`
+and `test_build_slate_schedule_call_times_out_naming_espn_and_the_league` (a slow monkeypatched
+provider call plus a tiny budget, deterministic, naming The Odds API and ESPN respectively),
+and `test_build_slate_logs_wall_clock_duration`; `tests/test_app.py` gained
+`test_slate_build_form_has_the_htmx_loading_attributes` (the rendered button and note markup,
+not just the route), `test_slate_build_via_htmx_gets_an_hx_redirect_not_a_swapped_partial`,
+`test_slate_build_refused_with_a_specific_message_when_already_running` (both the plain-post
+and htmx response shapes), and `test_slate_build_flashes_the_built_summary_with_real_numbers`
+(a real cached-fixture build, asserting the flash sentence against numbers read back from the
+database after the build, never a predicted or hard coded value). `python -m ruff check .` and
+`python -m black --check .` both clean. `grep -rn "—" app/ tests/ SPEC.md README.md` returns
+only the pre-existing assertion in `tests/test_app.py` that em dashes are absent.
+
+**Tested by code inspection, not a live browser click.** No browser automation tool was
+available in this environment for this phase, so the actual defect fix (does a real mouse
+click on the real button actually show the loading state and land on the built week) was
+verified by: reading the rendered HTML directly (the button is a real `<button type="submit">`
+inside the real `<form>`, no stray `disabled` attribute, correct `hx-*` attributes, the note
+starts `hidden`), reading `app/static/app.js` end to end to confirm nothing else in this file
+attaches a submit-swallowing listener to this form or button (the only other `htmx:beforeRequest`
+listener targets `[data-save-btn]`, a different button entirely, on a different page), and
+exercising the htmx request/response contract through `TestClient` with an `HX-Request: true`
+header, which confirms the server sends exactly the header htmx's own documented redirect
+handling expects. This is real evidence the wiring is correct, but it is not the same as
+watching a click happen in a browser; flagged explicitly per the brief's own instruction to say
+so rather than imply more than was actually verified.

@@ -8,6 +8,7 @@ conftest guarantees it.
 from __future__ import annotations
 
 import datetime as dt
+import re
 
 import pytest
 from fastapi.testclient import TestClient
@@ -449,6 +450,147 @@ def test_slate_page_shows_neutral_note_when_espn_only_is_on_and_never_billing_la
     assert "Some games may not have a line yet. You can set one by hand." in response.text
     for phrase in ("api credit", "monthly budget", "spend no", "billing"):
         assert phrase not in response.text.lower()
+
+
+# Slate build loading state, idempotency and timeout (Phase 6 remediation) ----
+#
+# See DECISIONS.md, Phase 6, for the full reasoning: the build POST used to give no feedback
+# at all while it ran, several seconds to just under a minute, so a commissioner reasonably
+# clicked again. These pin the router side of the fix: the build button is a real htmx request
+# wired to app.js's loading state, a build already running for the same week is refused with a
+# specific message rather than left to race, and a successful build's flash names real numbers.
+
+
+def test_slate_build_form_has_the_htmx_loading_attributes(client, world):
+    """The rendered markup, not just the route: a real <button type="submit"> inside the real
+    <form>, carrying hx-post/hx-target/hx-swap/hx-include so app.js's htmx:beforeRequest and
+    htmx:afterRequest listeners (data-build-btn) actually fire, and the hidden progress note
+    they toggle. This is the part of the phase's own defect (a plain form POST with zero
+    loading feedback) that a scripted POST to the route can never catch, only the markup can."""
+    _login(client, "boss@example.com")
+    response = client.get("/league/slate")
+    assert response.status_code == 200
+    body = response.text
+
+    form_start = body.index('action="/league/slate/build"')
+    form_end = body.index("</form>", form_start)
+    form_html = body[form_start:form_end]
+
+    button_match = re.search(r"<button[^>]*data-build-btn[^>]*>", form_html)
+    assert button_match is not None, "the build button is not inside its own form"
+    button_html = button_match.group(0)
+    assert 'type="submit"' in button_html
+    assert 'hx-post="/league/slate/build"' in button_html
+    assert 'hx-include="closest form"' in button_html
+    assert "disabled" not in button_html  # never server rendered pre-disabled
+
+    note_match = re.search(r"<p[^>]*data-build-note[^>]*>", form_html)
+    assert note_match is not None
+    assert "hidden" in note_match.group(0)  # starts hidden, app.js reveals it while in flight
+
+
+def test_slate_build_via_htmx_gets_an_hx_redirect_not_a_swapped_partial(client, world):
+    """htmx follows a plain 303 transparently and would swap the *whole* redirected page into
+    the button's own hx-target, exactly the trap app/routers/payouts.py's docstring documents.
+    An htmx request (HX-Request: true, what the real button sends) must instead get a 200 with
+    an HX-Redirect header, which htmx turns into a real, full page navigation. A plain form
+    post (no header, the no-JS fallback) still gets the original, unchanged 303."""
+    _login(client, "boss@example.com")
+
+    response = client.post(
+        "/league/slate/build",
+        data={"week_number": 9},
+        headers={"HX-Request": "true"},
+    )
+    assert response.status_code == 200
+    assert response.headers["HX-Redirect"] == "/league/slate?week=9"
+
+    plain = client.post("/league/slate/build", data={"week_number": 9})
+    assert plain.status_code == 303
+    assert plain.headers["location"] == "/league/slate?week=9"
+    assert "HX-Redirect" not in plain.headers
+
+
+def test_slate_build_refused_with_a_specific_message_when_already_running(
+    client, world, session_factory
+):
+    """The idempotency guard is server side (app.services.ingest.slate_build_guard), not just
+    the button's own disabled state, so a request that reaches the route while another build
+    for the exact same pool and week is already in flight is refused outright, both for a
+    plain form post and for htmx, with the specific message a commissioner should see rather
+    than a generic error."""
+    from app.services import ingest
+
+    _login(client, "boss@example.com")
+    ingest._acquire_build_lock(world["pool_id"], 9)
+    try:
+        response = client.post("/league/slate/build", data={"week_number": 9})
+        assert response.status_code == 303
+        assert response.headers["location"] == "/league/slate?week=9"
+
+        followup = client.get(response.headers["location"])
+        assert "This week is already being built. Wait for it to finish." in followup.text
+
+        hx_response = client.post(
+            "/league/slate/build",
+            data={"week_number": 9},
+            headers={"HX-Request": "true"},
+        )
+        assert hx_response.status_code == 200
+        assert hx_response.headers["HX-Redirect"] == "/league/slate?week=9"
+    finally:
+        ingest._release_build_lock(world["pool_id"], 9)
+
+    # Released, so building the same week normally afterwards is not refused forever.
+    response = client.post("/league/slate/build", data={"week_number": 9})
+    assert response.status_code == 303
+
+
+def test_slate_build_flashes_the_built_summary_with_real_numbers(
+    client, world, session_factory, load_fixture
+):
+    """The exact phrasing from the brief ("Week N built. X games, Y NFL and Z college, W
+    missing a line."), with the numbers read back from the database after the build, not
+    predicted from the fixture, so this genuinely proves the flash reflects what was built
+    rather than a plausible-looking hard coded string."""
+    from app.providers.http import cache_put
+
+    db = session_factory()
+    pool = db.get(Pool, world["pool_id"])
+    pool.season_year = 2026
+    pool.week1_anchor_date = dt.date(2026, 8, 29)
+    pool.sports = ["ncaaf"]
+    pool.target_nfl = 0
+    pool.target_ncaaf = 2
+    pool.num_games_per_week = 2
+    pool.auto_publish = False
+    db.commit()
+
+    cache_put(db, "espn:scoreboard:ncaaf:2026:2:None", load_fixture("espn_cfb_2026_calendar.json"))
+    cache_put(db, "espn:scoreboard:ncaaf:2026:2:1", load_fixture("espn_cfb_2025_w5.json"))
+    db.commit()
+    db.close()
+
+    _login(client, "boss@example.com")
+    response = client.post("/league/slate/build", data={"week_number": 1})
+    assert response.status_code == 303
+    followup = client.get(response.headers["location"])
+    assert followup.status_code == 200
+
+    db2 = session_factory()
+    week = db2.scalar(select(Week).where(Week.pool_id == pool.id, Week.week_number == 1))
+    on_slate = [g for g in db2.scalars(select(Game).where(Game.week_id == week.id)) if g.in_slate]
+    nfl_count = sum(1 for g in on_slate if g.league == "nfl")
+    college_count = sum(1 for g in on_slate if g.league == "ncaaf")
+    missing = sum(1 for g in on_slate if g.spread_home is None)
+    db2.close()
+
+    assert on_slate  # a real build genuinely selected something, not a dead end
+    expected = (
+        f"Week 1 built. {len(on_slate)} games, {nfl_count} NFL and {college_count} college, "
+        f"{missing} missing a line."
+    )
+    assert expected in followup.text
 
 
 # Test weeks (Phase 3, preseason and test week support) -----------------------

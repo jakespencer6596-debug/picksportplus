@@ -27,7 +27,7 @@ import re
 from decimal import Decimal, InvalidOperation
 
 from fastapi import APIRouter, Depends, Form, HTTPException, Request, status
-from fastapi.responses import RedirectResponse
+from fastapi.responses import RedirectResponse, Response
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
@@ -68,6 +68,24 @@ LEAGUE_LABELS = {"nfl": "NFL", "ncaaf": "College"}
 
 def _redirect(target: str = "/league") -> RedirectResponse:
     return RedirectResponse(target, status_code=303)
+
+
+def _redirect_or_hx(request: Request, target: str) -> RedirectResponse | Response:
+    """A plain 303 for a normal form post; a real, full page navigation for an htmx one.
+
+    htmx follows a plain 303 transparently at the XHR level (per its own docs), which means
+    the *redirected-to* page's full HTML, not just its status, comes back as this request's
+    response, and htmx would then swap that whole page into whatever small hx-target issued
+    the request, exactly the trap app/routers/payouts.py's own module docstring documents. The
+    HX-Redirect response header sidesteps it entirely: htmx sees the header and does a real
+    `window.location` navigation instead of a swap, the same pattern
+    app/routers/picks.py's picks_lock/picks_unlock already use. Used by slate_build (Phase 6
+    remediation, see DECISIONS.md) so the build form's loading state, wired up as a normal
+    htmx request, still lands on a full, freshly rendered /league/slate page with the flash
+    message on it, exactly like the non-JS form post always has."""
+    if request.headers.get("HX-Request") == "true":
+        return Response(status_code=200, headers={"HX-Redirect": target})
+    return _redirect(target)
 
 
 def _week_or_none(db: Session, pool: Pool, week_number: int | None) -> Week | None:
@@ -833,7 +851,19 @@ def slate_build(
     already promised for its unchecked state. Whether metered providers get called at all is
     no longer a per-build choice either: it is the site admin's global "ESPN only" switch
     (POST /site/providers/espn-only), which ingest.build_slate reads fresh on every call, so
-    this route no longer passes allow_metered here at all."""
+    this route no longer passes allow_metered here at all.
+
+    Phase 6 remediation (see DECISIONS.md): this can legitimately take several seconds to just
+    under a minute (ESPN for the schedule, then possibly The Odds API/CFBD for every candidate
+    game), and used to give no feedback at all while it ran. Three things changed, all here:
+    the response shape now uses _redirect_or_hx so the build form's htmx request (see
+    admin/slate.html) gets a real full page navigation instead of a swapped partial;
+    ingest.build_slate now refuses a second concurrent build for the same pool week
+    (BuildInProgress) instead of letting two runs race; and it now carries a 90 second wall
+    clock budget (BuildTimeout) that names whichever provider call was in flight when it ran
+    out. Neither new exception changes this route's own response shape, both are flash-and-
+    redirect exactly like the pre-existing ValueError branch below."""
+    target = f"/league/slate?week={week_number}"
     try:
         report = ingest.build_slate(
             db,
@@ -841,20 +871,44 @@ def slate_build(
             pool.season_year,
             week_number,
         )
+    except ingest.BuildInProgress as exc:
+        db.rollback()
+        flash(request, str(exc), "error")
+        return _redirect_or_hx(request, target)
+    except ingest.BuildTimeout as exc:
+        db.rollback()
+        flash(request, str(exc), "error")
+        return _redirect_or_hx(request, target)
     except ValueError as exc:
         # Most likely more games are pinned than the slate total allows (app.slate raises
         # this rather than silently truncating the pins). Reduce the total, or unpin a game,
         # from the slate editor below.
         db.rollback()
         flash(request, str(exc), "error")
-        return _redirect(f"/league/slate?week={week_number}")
+        return _redirect_or_hx(request, target)
     db.commit()
-    flash(request, report.summary(), "ok" if report.selected else "info")
+
+    if report.selected and not report.locked_out:
+        # A real build, not a no-op (picks already exist so the slate was left alone) or a
+        # dead end (nothing came back to select from). Names what was actually built, not
+        # ingest.IngestReport.summary()'s own longer sentence, which several other callers
+        # (app/cli.py, app/services/demo.py) still rely on verbatim and this phase leaves
+        # untouched. See DECISIONS.md, Phase 6, for why this is a new sentence rather than an
+        # edit to summary() itself.
+        flash(
+            request,
+            f"Week {report.week_number} built. {report.selected} games, "
+            f"{report.per_league.get('nfl', 0)} NFL and {report.per_league.get('ncaaf', 0)} "
+            f"college, {report.missing_spread} missing a line.",
+            "ok",
+        )
+    else:
+        flash(request, report.summary(), "ok" if report.selected else "info")
     for note in report.notes:
         flash(request, note, "info")
     for warning in report.warnings:
         flash(request, warning, "error")
-    return _redirect(f"/league/slate?week={week_number}")
+    return _redirect_or_hx(request, target)
 
 
 @router.post("/slate/publish")

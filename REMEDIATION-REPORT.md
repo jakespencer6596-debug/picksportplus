@@ -130,6 +130,23 @@ September 12, 2026.
   and copy while testing this phase. No defects found in any of it.
 - Test count after Phase 5: 1008 (+10 over Phase 4's 998, +69 over the Phase 0 baseline).
 
+## Phase 6 notes
+
+- Measured, real build duration (reproduce-it-first): `ingest.build_slate` now logs its own
+  elapsed wall clock time on every call (`log.info("slate build finished, pool %s week %s,
+  %.2fs elapsed, %s selected", ...)`). A real, throwaway, local run against the live ESPN API
+  (a fresh scratch sqlite database, `allow_metered=False` so no Odds API or CFBD credit was
+  spent, `is_test_week=True` resolving against 2026-08-14, NFL preseason) measured **6.41
+  seconds** for a 16-candidate, 6-core-odds-lookup build: one ESPN scoreboard call for the
+  calendar, two for the resolved week (NFL regular and preseason season types), and six
+  per-game ESPN core odds lookups. A real season-week build (20 games, up to 60 possible core
+  odds lookups plus up to two metered calls) would run well past this, comfortably into the
+  "up to a minute" the build form's own progress note now warns about, confirming the original
+  bug report ("after more than ten seconds the page still reads Nothing is built") against real
+  timings rather than a guess. Log line and script output not committed (a one-off throwaway
+  script against a scratch database, not part of the app or the test suite).
+- Test count after Phase 6: 1017 (+9 over Phase 5's 1008, +78 over the Phase 0 baseline).
+
 ## Ambiguity decisions
 
 See `DECISIONS.md`, `## Remediation, August 2026`, for every judgment call and its reasoning.
