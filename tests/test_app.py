@@ -1625,6 +1625,33 @@ def test_settings_save_rejects_a_negative_entry_fee(client, world, session_facto
     db.close()
 
 
+def test_settings_save_rejects_a_non_saturday_anchor_date(client, world, session_factory):
+    """Phase 2 remediation (see DECISIONS.md)."""
+    response = client.post(
+        "/admin/settings",
+        data={
+            "name": "Test Pool",
+            "season_year": "2025",
+            "timezone": "America/New_York",
+            "num_games_per_week": "4",
+            "target_nfl": "2",
+            "target_ncaaf": "2",
+            "picks_required": "4",
+            "scoring_mode": "inverse",
+            "scenarios_min_final_games": "5",
+            "scenarios_min_remaining_games": "1",
+            "sports_nfl": "1",
+            "sports_ncaaf": "1",
+            "week1_anchor_date": "2026-09-13",  # a Sunday
+        },
+    )
+    assert response.status_code == 303
+    db = session_factory()
+    pool = db.get(Pool, world["pool_id"])
+    assert pool.week1_anchor_date is None  # rejected, unchanged
+    db.close()
+
+
 # Payout rule CRUD and the pot balance validator moved to app/routers/payouts.py and
 # tests/test_payout_routes.py as part of the payout system rebuild; see DECISIONS.md,
 # "Payout system".
@@ -1922,6 +1949,7 @@ def test_create_league_makes_a_pool_with_seed_admin_defaults(client, session_fac
             "join_code": "CREATED1",
             "season_year": "2026",
             "timezone": "America/Chicago",
+            "week1_anchor_date": "2026-09-12",
         },
     )
     assert response.status_code == 303
@@ -1935,6 +1963,55 @@ def test_create_league_makes_a_pool_with_seed_admin_defaults(client, session_fac
     assert pool.target_ncaaf == 12
     assert pool.season_year == 2026
     assert pool.timezone == "America/Chicago"
+    db.close()
+
+
+def test_create_league_rejects_a_blank_anchor_date(client, session_factory):
+    """Phase 2 remediation (see DECISIONS.md): a blank anchor date is what let a brand new
+    league fall back to sending its own week number straight to ESPN for both leagues."""
+    db = session_factory()
+    _make_user(db, "siteadmin-blank-anchor@example.com", "Site Admin", role="admin")
+    db.commit()
+    db.close()
+
+    _login(client, "siteadmin-blank-anchor@example.com")
+    response = client.post(
+        "/admin/leagues/new",
+        data={
+            "name": "No Anchor League",
+            "join_code": "NOANCHOR",
+            "season_year": "2026",
+            "timezone": "America/New_York",
+        },
+    )
+    assert response.status_code == 303
+
+    db = session_factory()
+    assert db.scalar(select(Pool).where(Pool.name == "No Anchor League")) is None
+    db.close()
+
+
+def test_create_league_rejects_a_non_saturday_anchor_date(client, session_factory):
+    db = session_factory()
+    _make_user(db, "siteadmin-nonsat@example.com", "Site Admin", role="admin")
+    db.commit()
+    db.close()
+
+    _login(client, "siteadmin-nonsat@example.com")
+    response = client.post(
+        "/admin/leagues/new",
+        data={
+            "name": "Wrong Day League",
+            "join_code": "WRONGDAY",
+            "season_year": "2026",
+            "timezone": "America/New_York",
+            "week1_anchor_date": "2026-09-13",  # a Sunday
+        },
+    )
+    assert response.status_code == 303
+
+    db = session_factory()
+    assert db.scalar(select(Pool).where(Pool.name == "Wrong Day League")) is None
     db.close()
 
 
@@ -1953,6 +2030,7 @@ def test_create_league_attaches_an_existing_user_as_commissioner_by_email(client
             "join_code": "ATTACHED",
             "season_year": "2025",
             "timezone": "America/New_York",
+            "week1_anchor_date": "2025-09-13",
             "commissioner_emails": "FUTURE.COMMISH@example.com\n",
         },
     )
@@ -1995,6 +2073,7 @@ def test_create_league_rejects_the_site_admins_own_email_but_still_attaches_othe
             "join_code": "GUARDED1",
             "season_year": "2025",
             "timezone": "America/New_York",
+            "week1_anchor_date": "2025-09-13",
             "commissioner_emails": f"{admin_email}\nREAL.COMMISH@example.com\n",
         },
     )
@@ -2375,6 +2454,7 @@ def test_create_league_gives_the_new_pool_its_own_commissioner_invite_code(clien
             "join_code": "FRESHLG1",
             "season_year": "2025",
             "timezone": "America/New_York",
+            "week1_anchor_date": "2025-09-13",
         },
     )
     assert response.status_code == 303

@@ -345,6 +345,9 @@ def settings_save(
             anchor_date = dt.date.fromisoformat(week1_anchor_date)
         except ValueError:
             errors.append("Week 1 anchor date is not a valid date.")
+        else:
+            if anchor_date.weekday() != 5:
+                errors.append("Week 1 anchor date must be a Saturday.")
     else:
         anchor_date = None
 
@@ -757,6 +760,7 @@ def slate_page(
     reasons: dict[int, str] = {}
     pinned_count = 0
     missing_spread_count = 0
+    slate_span_info: dict | None = None
 
     if row is not None:
         games = list(db.scalars(select(Game).where(Game.week_id == row.id)))
@@ -777,6 +781,16 @@ def slate_page(
         pinned_count = sum(1 for g in games if g.pinned and g.status != "void")
         missing_spread_count = sum(1 for g in games if g.spread_home is None and g.status != "void")
 
+        span = ingest.slate_span(db, row)
+        if span is not None:
+            span_days, earliest, latest = span
+            slate_span_info = {
+                "span_days": span_days,
+                "earliest": earliest,
+                "latest": latest,
+                "wide": (latest - earliest) > dt.timedelta(hours=48),
+            }
+
     return render(
         request,
         "admin/slate.html",
@@ -793,6 +807,7 @@ def slate_page(
             "reasons": reasons,
             "pinned_count": pinned_count,
             "missing_spread_count": missing_spread_count,
+            "slate_span": slate_span_info,
         },
         **_base(db, user, pool),
     )
@@ -852,9 +867,14 @@ def slate_publish(
     if row.status != "draft":
         flash(request, f"Week {row.week_number} is already {row.status}.", "info")
     else:
-        ingest.publish_week(db, row)
-        db.commit()
-        flash(request, f"Week {row.week_number} is open for picks.")
+        try:
+            ingest.publish_week(db, row)
+        except ingest.SlateSpanTooWide as exc:
+            db.rollback()
+            flash(request, str(exc), "error")
+        else:
+            db.commit()
+            flash(request, f"Week {row.week_number} is open for picks.")
     return _redirect(f"/admin/slate?week={row.week_number}")
 
 

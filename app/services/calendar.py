@@ -50,6 +50,16 @@ class LeagueResolution:
         return self.season_type == espn.SEASON_TYPE_POSTSEASON
 
 
+def default_week1_anchor_date(year: int) -> dt.date:
+    """The second Saturday of September, NFL week 1 in a normal season (Phase 2 remediation,
+    see DECISIONS.md). Used to prefill a new league's anchor date and to backfill a pool that
+    predates the anchor date becoming a required field."""
+    first_of_september = dt.date(year, 9, 1)
+    days_to_first_saturday = (5 - first_of_september.weekday()) % 7  # Saturday = 5
+    first_saturday = first_of_september + dt.timedelta(days=days_to_first_saturday)
+    return first_saturday + dt.timedelta(days=7)
+
+
 def anchor_datetime(anchor_date: dt.date) -> dt.datetime:
     """Midday UTC on the anchor date.
 

@@ -2656,3 +2656,77 @@ experience) and deployment-topology question, not something Phase 1 decided.
 `with` block** rather than folded into the existing pool-info block below it, so the row
 counts and ephemeral warning are visible even when no pool exists yet (a fresh deploy), which
 the existing pool-info block returns early out of.
+
+### Phase 2, week resolution and the anchor date
+
+**Required at league creation, not just documented.** The settings page already warned that a
+blank anchor date falls back to guessing NFL's current week, but a brand new commissioner
+never reads that warning before their first build. `POST /admin/leagues/new` now rejects a
+blank or non-Saturday anchor date outright, and the form is pre-filled with the second
+Saturday of September (a real helper, `app.services.calendar.default_week1_anchor_date`, not
+a hard coded string) so the common case needs no typing at all. The pool settings save path
+(`POST /admin/settings`) gained the same Saturday check but is deliberately left able to clear
+the field back to blank: the second defense, `build_slate` refusing outright, is what actually
+protects a live pool, and a commissioner legitimately might want to reset it while
+reconfiguring.
+
+**`build_slate` refuses rather than falls back.** The single line `if pool.week1_anchor_date
+is None: return report-with-a-warning` closes the exact hole that produced the seventeen day
+slate: the old fallback inside `fetch_candidates` sent the pool's own week number straight to
+ESPN for both leagues, which is only correct once, in week 1, before the two seasons drift
+apart. That fallback function itself is untouched (still used, deliberately, by
+`test_the_build_fetch_score_pipeline_is_idempotent_across_three_runs`, which now calls
+`ensure_week`/`fetch_candidates`/`resolve_spreads`/`upsert_games`/`apply_slate` directly to
+keep exercising it), the guard just stops a real build from ever reaching it.
+
+**Found while implementing: `ensure_week` never actually backfilled an existing week's null
+anchor.** The pre-Phase-2 code only computed `anchor_date` from `pool.week1_anchor_date`
+inside the "week is None" branch, so a week created before the pool had an anchor stayed
+anchor-less forever, even after the pool gained one later, because the "week already exists"
+branch's own backfill check only fired when the *caller* passed an explicit override. Moved
+the computation above the branch so both paths see it. Undocumented in the remediation brief;
+fixed because the Phase 2.3 backfill CLI command would otherwise have been a no-op for any
+pool that already had at least one week built, which given the August 14 walkthrough already
+built a broken week 1, would have been the common case, not the exception.
+
+**The multi-week span guard lives in `publish_week`, not `build_slate`.** A build without
+`publish=True` produces a draft the commissioner still has to review; the guard only needs to
+stop the moment a week actually opens for picks, whether that is the commissioner's own
+"Publish" click (`POST /admin/slate/publish`, now catching `SlateSpanTooWide` and flashing it)
+or `auto_publish` inside `build_slate` itself (now catching the same exception and leaving the
+week in draft with a warning rather than crashing the build). `MAX_SLATE_SPAN_DAYS = 8`: a
+real week's games, even NFL alone (Thursday to Monday), never spans more than 5 days; 8 gives
+room for a Thursday-to-Thursday college slate without flagging a legitimate week.
+
+**The demo seed's historical weeks bypass `publish_week` entirely, not the span guard
+itself.** `app/services/demo.py`'s three historical/open weeks call `apply_slate` directly and
+now set `week.status`/`published_at` by hand instead of calling `ingest.publish_week`. Their
+own fixtures (`NFL_SOME_GAMES`/`CFB_SOME_GAMES` in the test suite, real recorded 2025 games
+used purely as "some games" stand-ins, not a matched calendar week) genuinely span 11 days
+once NFL and college week numbers are taken literally, which is realistic demo data, not a bug
+to weaken the guard for. Weakening `publish_week` itself (an optional `skip_span_check` flag,
+say) would have left a hole a real caller could reach; bypassing the shared function entirely
+for a controlled, non-interactive seeding path has no such risk.
+
+**Duplicate team detection is split across two modules on purpose.** `app/slate.py` stays pure
+(no team display names, only canonical keys on `Candidate.home_key`/`away_key`, both `None` by
+default so every prior caller is unaffected) and refuses to let two candidates sharing a team
+both survive selection: the closer one wins, exactly like the existing per-key dedup right
+above it in the same loop. `app/services/ingest.duplicate_team_warnings` re-derives which game
+got dropped and why, in real team names, by comparing the week's Game rows before and after
+selection, and its sentences are appended to `report.warnings` (the flash `error` level in the
+slate editor), not `report.notes` (flash `info`), since the brief called this a "blocking
+warning."
+
+**No template change for the duplicate-team warning beyond the existing flash stack.** The
+warning already renders wherever `report.warnings` already does (the slate build POST
+response), which is the same mechanism every other build warning already uses; a persistent
+banner on every later `GET /admin/slate` view would need storing the warning against the week,
+which is more machinery than a build-time explanation needs.
+
+**Test fixture fallout.** `tests/test_ingest.py`'s `_pool()` helper gained a real default
+`week1_anchor_date` (2026-09-12), since `build_slate` now refuses without one and most tests
+in that file were not testing anchor-date behavior at all. Every test that deliberately wants
+the unanchored fallback already passed `week1_anchor_date=None` explicitly and is unaffected.
+Four `POST /admin/leagues/new` tests in `tests/test_app.py` gained an explicit
+`week1_anchor_date` in their form data for the same reason.

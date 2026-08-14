@@ -226,6 +226,27 @@ def seed_preview_cmd(
         typer.secho(f"  warning: {warning}", fg=typer.colors.YELLOW)
 
 
+@app.command("backfill-anchor-dates")
+def backfill_anchor_dates_cmd() -> None:
+    """One-time fix for a pool created before the week 1 anchor date became required (Phase 2
+    remediation, see DECISIONS.md). Sets week1_anchor_date to the second Saturday of
+    September of that pool's own season_year for any pool where it is still null. Idempotent:
+    a pool that already has one is left untouched, so this is safe to run more than once, for
+    example once per deploy alongside seed-admin and seed-demo.
+    """
+    from app.services.calendar import default_week1_anchor_date
+
+    with session_scope() as db:
+        pools = list(db.scalars(select(Pool).where(Pool.week1_anchor_date.is_(None))))
+        if not pools:
+            _echo("Every pool already has a week 1 anchor date. Nothing to backfill.")
+            return
+        for pool in pools:
+            anchor = default_week1_anchor_date(pool.season_year)
+            pool.week1_anchor_date = anchor
+            _echo(f"Pool {pool.id} ({pool.name}): anchor date set to {anchor.isoformat()}.")
+
+
 # Weekly lifecycle -----------------------------------------------------------
 
 

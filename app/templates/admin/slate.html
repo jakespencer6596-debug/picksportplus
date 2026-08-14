@@ -236,6 +236,18 @@
         <h3>Lock time</h3>
       </div>
       <div class="card-body">
+        {% if slate_span and slate_span.wide %}
+          <div class="flash flash-info">
+            {{ ic.icon("alert", 18) }}
+            <span>
+              This slate's games span {{ slate_span.span_days }} days, from
+              {{ slate_span.earliest | kickoff_long(tz) }} to
+              {{ slate_span.latest | kickoff_long(tz) }}. Picks lock at the first kickoff by
+              default, well before the later games. Set a manual lock time below if you want
+              to give players more time to finish their picks.
+            </span>
+          </div>
+        {% endif %}
         <form method="post" action="/admin/slate/lock" class="stack">
           <input type="hidden" name="week_id" value="{{ week.id }}">
           <div class="field">

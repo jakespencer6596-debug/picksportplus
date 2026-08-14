@@ -43,6 +43,8 @@ def game(
     league: str = "nfl",
     hours: float = 0.0,
     pinned: bool = False,
+    home_key: str | None = None,
+    away_key: str | None = None,
 ) -> Candidate:
     """Build a Candidate with readable defaults."""
     return Candidate(
@@ -51,6 +53,8 @@ def game(
         kickoff=BASE + timedelta(hours=hours),
         spread_home=spread,
         pinned=pinned,
+        home_key=home_key,
+        away_key=away_key,
     )
 
 
@@ -1273,7 +1277,15 @@ def test_the_old_league_mix_surface_is_gone():
 def test_candidate_field_names_and_order():
     fields = [field.name for field in dataclasses.fields(Candidate)]
 
-    assert fields == ["key", "league", "kickoff", "spread_home", "pinned"]
+    assert fields == [
+        "key",
+        "league",
+        "kickoff",
+        "spread_home",
+        "pinned",
+        "home_key",
+        "away_key",
+    ]
     with pytest.raises(dataclasses.FrozenInstanceError):
         game("a").key = "b"
 
@@ -1321,6 +1333,48 @@ def test_select_slate_by_targets_signature_and_defaults():
     assert parameters["total"].default is inspect.Parameter.empty
     assert parameters["now"].default is None
     assert parameters["exclude_started"].default is True
+
+
+# Duplicate teams (Phase 2 remediation, see DECISIONS.md) -------------------------------
+
+
+def test_a_team_never_appears_twice_on_the_selected_slate():
+    """Two different games (different keys, different kickoffs) sharing a team is what a
+    merged-calendar-week bug looks like. The closer game (osu01, spread 0.5) wins; the
+    farther one sharing Ohio State (osu02, spread 1.0) is dropped even though it would
+    otherwise have made an 8 team slate on closeness alone."""
+    candidates = [
+        game(
+            "osu01",
+            spread=0.5,
+            league="ncaaf",
+            home_key="ncaaf:ohio-state",
+            away_key="ncaaf:penn-state",
+        ),
+        game(
+            "osu02",
+            spread=1.0,
+            league="ncaaf",
+            hours=200,
+            home_key="ncaaf:ohio-state",
+            away_key="ncaaf:iowa",
+        ),
+    ] + pool("nc", "ncaaf", steps(6, 2.0))
+
+    result = select_slate_by_targets(candidates, targets={"ncaaf": 8}, total=8, now=NOW)
+
+    selected_keys = {s.key for s in result.selected}
+    assert "osu01" in selected_keys
+    assert "osu02" not in selected_keys
+    assert len(result.selected) == 7  # only 7 eligible candidates once osu02 is dropped
+
+
+def test_candidates_with_no_team_keys_are_unaffected_by_the_duplicate_guard():
+    """home_key/away_key default to None (every pre Phase 2 caller), which must never trigger
+    the duplicate check against itself or against another None-keyed candidate."""
+    candidates = pool("nf", "nfl", steps(3, 1.0))
+    result = select_slate_by_targets(candidates, targets={"nfl": 3}, total=3, now=NOW)
+    assert len(result.selected) == 3
 
 
 def test_module_stays_pure():

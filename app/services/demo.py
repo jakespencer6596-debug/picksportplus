@@ -41,7 +41,7 @@ from app.auth import hash_password
 from app.models import Game, PayoutRule, Pick, Pool, PoolMember, User, Week, WeekEntry, utcnow
 from app.providers import cfbd, espn
 from app.services import payouts as payout_service
-from app.services.ingest import apply_slate, publish_week, set_void
+from app.services.ingest import apply_slate, set_void
 from app.services.results import score_week_for_pool
 
 FIXTURES = Path(__file__).resolve().parent.parent.parent / "tests" / "fixtures"
@@ -525,8 +525,14 @@ def _build_scored_week(
     for note in result.notes:
         out.append(f"  note: {note}")
 
-    publish_week(db, week)
-    # The week is historical, so it is locked and scored the moment it is built.
+    # Not ingest.publish_week: that now refuses a slate spanning more than 8 days (Phase 2
+    # remediation, see DECISIONS.md), a real safety net for a live commissioner's Publish
+    # click. The demo's own real historical fixtures deliberately mix an NFL week and a
+    # college week that are only stand-ins for "some games", not a real matched calendar
+    # week (see NFL_SOME_GAMES/CFB_SOME_GAMES in tests/test_ingest.py), so they can genuinely
+    # span more than 8 days without that being a bug here. The week is historical anyway, so
+    # it is locked and scored the moment it is built.
+    week.published_at = utcnow()
     week.status = "locked"
     db.flush()
 
@@ -585,7 +591,9 @@ def _build_partial_week(
         + "."
     )
 
-    publish_week(db, week)
+    # See the matching comment in _build_scored_week: not ingest.publish_week, since this
+    # demo week's stand-in fixtures can genuinely span more than the real 8 day publish limit.
+    week.published_at = utcnow()
     week.status = "locked"
     db.flush()
 
@@ -638,7 +646,10 @@ def _build_open_week(
 
     _load_real_games(db, week, spec, out, unplayed=True)
     apply_slate(db, pool, week, now=None)
-    publish_week(db, week)
+    # See the matching comment in _build_scored_week: not ingest.publish_week, since this
+    # demo week's stand-in fixtures can genuinely span more than the real 8 day publish limit.
+    week.status = "open"
+    week.published_at = utcnow()
 
     week.lock_at = utcnow() + dt.timedelta(days=OPEN_WEEK_LOCK_DAYS_AHEAD)
     week.lock_at_override = True

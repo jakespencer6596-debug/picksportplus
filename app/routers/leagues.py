@@ -39,6 +39,7 @@ from app.auth import (
 from app.config import settings
 from app.db import get_db
 from app.models import Pool, PoolMember, User
+from app.services.calendar import default_week1_anchor_date
 from app.templating import get_zone, render
 
 router = APIRouter(prefix="/admin/leagues", tags=["admin-leagues"])
@@ -152,12 +153,14 @@ def league_new_page(
     request: Request,
     user: User = Depends(require_admin),
 ):
+    default_season_year = dt.date.today().year
     return render(
         request,
         "admin/league_new.html",
         {
             "join_code_prefill": generate_join_code(),
-            "default_season_year": dt.date.today().year,
+            "default_season_year": default_season_year,
+            "default_anchor_date": default_week1_anchor_date(default_season_year).isoformat(),
             "timezones": TIMEZONES,
             "num_games_per_week": DEFAULT_NUM_GAMES_PER_WEEK,
             "target_nfl": DEFAULT_TARGET_NFL,
@@ -195,13 +198,24 @@ def league_new_save(
     except Exception:
         errors.append("That timezone is not recognised.")
 
+    # Required (Phase 2 remediation, see DECISIONS.md): a blank anchor date is what let a
+    # brand new league fall back to sending its own week number straight to ESPN for both
+    # leagues, which produced a slate spanning two calendar weeks with the same team twice.
     anchor_date: dt.date | None = None
     week1_anchor_date = week1_anchor_date.strip()
-    if week1_anchor_date:
+    if not week1_anchor_date:
+        errors.append(
+            "Set the week 1 anchor date. Without it the tool cannot tell which NFL and "
+            "college weeks belong together."
+        )
+    else:
         try:
             anchor_date = dt.date.fromisoformat(week1_anchor_date)
         except ValueError:
             errors.append("Week 1 anchor date is not a valid date.")
+        else:
+            if anchor_date.weekday() != 5:
+                errors.append("Week 1 anchor date must be a Saturday.")
 
     if errors:
         for message in errors:

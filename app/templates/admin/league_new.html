@@ -51,10 +51,14 @@
 
       <div class="field">
         <label class="field-label" for="week1_anchor_date">Week 1 anchor date</label>
-        <input class="input" type="date" id="week1_anchor_date" name="week1_anchor_date">
+        <input class="input" type="date" id="week1_anchor_date" name="week1_anchor_date"
+               value="{{ default_anchor_date }}" required>
         <p class="form-hint">
-          Optional. The Saturday this league's week 1 belongs to. Leave it blank and the
-          commissioner can set it later from the league's own settings page.
+          The Saturday this league's week 1 belongs to, must be a Saturday. Prefilled with the
+          second Saturday of September, NFL week 1 in a normal season. NFL and college resolve
+          their own ESPN week from this date independently, since the two seasons are not on
+          the same week numbering. This is the single most important setting in the app: leave
+          it wrong and the slate can mix games from two different calendar weeks.
         </p>
       </div>
     </div>

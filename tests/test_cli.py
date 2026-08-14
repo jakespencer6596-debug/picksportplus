@@ -10,6 +10,7 @@ the model layer.
 
 from __future__ import annotations
 
+import datetime as dt
 from decimal import Decimal
 
 import pytest
@@ -91,6 +92,69 @@ def test_doctor_reports_durable_storage_when_not_ephemeral(isolated_db, monkeypa
     out = capsys.readouterr().out.lower()
     assert "storage     : durable" in out
     assert "ephemeral" not in out
+
+
+def test_backfill_anchor_dates_sets_the_second_saturday_of_september(
+    isolated_db, monkeypatch, capsys
+):
+    """Phase 2 remediation (see DECISIONS.md): a pool created before the anchor date became
+    required at league creation."""
+    from app.cli import backfill_anchor_dates_cmd
+
+    session = isolated_db()
+    pool = Pool(
+        name="Legacy Pool",
+        join_code="LEGACY01",
+        season_year=2026,
+        week1_anchor_date=None,
+    )
+    session.add(pool)
+    session.commit()
+    pool_id = pool.id
+    session.close()
+
+    backfill_anchor_dates_cmd()
+
+    out = capsys.readouterr().out
+    assert "Legacy Pool" in out
+    assert "2026-09-12" in out
+
+    session = isolated_db()
+    try:
+        refreshed = session.get(Pool, pool_id)
+        assert refreshed.week1_anchor_date is not None
+        assert refreshed.week1_anchor_date.isoformat() == "2026-09-12"
+        assert refreshed.week1_anchor_date.weekday() == 5
+    finally:
+        session.close()
+
+
+def test_backfill_anchor_dates_is_idempotent_and_leaves_a_real_date_alone(
+    isolated_db, monkeypatch, capsys
+):
+    from app.cli import backfill_anchor_dates_cmd
+
+    session = isolated_db()
+    pool = Pool(
+        name="Already Set",
+        join_code="ALREADY1",
+        season_year=2026,
+        week1_anchor_date=dt.date(2026, 9, 19),
+    )
+    session.add(pool)
+    session.commit()
+    session.close()
+
+    backfill_anchor_dates_cmd()
+    out = capsys.readouterr().out
+    assert "Nothing to backfill" in out
+
+    session = isolated_db()
+    try:
+        pool = session.scalar(select(Pool).where(Pool.name == "Already Set"))
+        assert pool.week1_anchor_date.isoformat() == "2026-09-19"
+    finally:
+        session.close()
 
 
 def test_seed_admin_creates_a_pool_with_auto_publish_off(isolated_db, monkeypatch):

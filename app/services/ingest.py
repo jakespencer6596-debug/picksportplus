@@ -97,6 +97,14 @@ def ensure_week(
     fetch_candidates falls back to sending week_number to ESPN directly (the pre anchor
     behaviour), with a clear warning that the pool needs configuring.
     """
+    # Computed once, before branching, so a week that already exists but was created before
+    # the pool had an anchor date (or before Phase 2's backfill ran) still gets backfilled
+    # below. The earlier version of this function only computed anchor_date inside the "week
+    # is None" branch, so an existing week's null anchor_date was never repaired even after
+    # the pool itself gained one (Phase 2 remediation, see DECISIONS.md).
+    if anchor_date is None and pool.week1_anchor_date is not None:
+        anchor_date = pool.week1_anchor_date + dt.timedelta(weeks=week_number - 1)
+
     week = db.scalar(
         select(Week).where(
             Week.pool_id == pool.id,
@@ -105,8 +113,6 @@ def ensure_week(
         )
     )
     if week is None:
-        if anchor_date is None and pool.week1_anchor_date is not None:
-            anchor_date = pool.week1_anchor_date + dt.timedelta(weeks=week_number - 1)
         week = Week(
             pool_id=pool.id,
             season_year=year,
@@ -553,6 +559,8 @@ def apply_slate(db: Session, pool: Pool, week: Week, *, now: dt.datetime | None 
             kickoff=_aware(row.start_time),
             spread_home=row.spread_home,
             pinned=row.pinned,
+            home_key=row.canonical_home_key,
+            away_key=row.canonical_away_key,
         )
         for row in rows
         if row.status != "void"
@@ -578,6 +586,96 @@ def apply_slate(db: Session, pool: Pool, week: Week, *, now: dt.datetime | None 
     db.flush()
     recompute_lock(db, week)
     return result
+
+
+def duplicate_team_warnings(db: Session, week: Week) -> list[str]:
+    """Explain, in real team names, any game app.slate refused to select because one of its
+    teams already plays in a game that did make the slate (Phase 2 remediation, see
+    DECISIONS.md). apply_slate's own call into select_slate_by_targets already guarantees
+    this never happens in the chosen slate itself; this only explains it after the fact, using
+    data the pure slate module deliberately does not have (real team names), so it can be
+    surfaced to the commissioner as a build warning rather than a silent drop.
+    """
+    rows = list(db.scalars(select(Game).where(Game.week_id == week.id)))
+    on_slate_by_team: dict[str, Game] = {}
+    for row in rows:
+        if not row.in_slate:
+            continue
+        on_slate_by_team[row.canonical_home_key] = row
+        on_slate_by_team[row.canonical_away_key] = row
+
+    warnings: list[str] = []
+    reported_pairs: set[frozenset[str]] = set()
+    for row in rows:
+        if row.in_slate or row.status == "void":
+            continue
+        for key, name in (
+            (row.canonical_home_key, row.home_team),
+            (row.canonical_away_key, row.away_team),
+        ):
+            other = on_slate_by_team.get(key)
+            if other is None:
+                continue
+            pair = frozenset((row.espn_event_id, other.espn_event_id))
+            if pair in reported_pairs:
+                continue
+            reported_pairs.add(pair)
+            warnings.append(
+                f"{row.away_abbr} at {row.home_abbr} was left off the slate: {name} already "
+                f"plays in {other.away_abbr} at {other.home_abbr} this week. This usually "
+                "means two different calendar weeks got merged. Check the week 1 anchor date "
+                "in Settings."
+            )
+            break
+    return warnings
+
+
+# A rebuilt slate spanning more than this many days is a strong signal that two different
+# calendar weeks got merged into one pool week (Phase 2 remediation, see DECISIONS.md): a
+# normal week's games all kick off within one long weekend.
+MAX_SLATE_SPAN_DAYS = 8
+
+
+class SlateSpanTooWide(RuntimeError):
+    """The slate's earliest and latest kickoff are too far apart to be one real pool week."""
+
+
+def slate_span(db: Session, week: Week) -> tuple[int, dt.datetime, dt.datetime] | None:
+    """(span_days, earliest kickoff, latest kickoff) among the week's live slate games, or
+    None when fewer than two games are on the slate to compare."""
+    kickoffs = sorted(
+        _aware(g.start_time)
+        for g in db.scalars(
+            select(Game).where(
+                Game.week_id == week.id, Game.in_slate.is_(True), Game.status != "void"
+            )
+        )
+    )
+    if len(kickoffs) < 2:
+        return None
+    earliest, latest = kickoffs[0], kickoffs[-1]
+    return (latest - earliest).days, earliest, latest
+
+
+def _span_too_wide_message(
+    week: Week, span_days: int, earliest: dt.datetime, latest: dt.datetime
+) -> str:
+    parts = [
+        f"This slate spans {span_days} days, from {earliest.isoformat()} to "
+        f"{latest.isoformat()}, more than the {MAX_SLATE_SPAN_DAYS} day limit for one pool "
+        "week. Publishing was refused."
+    ]
+    for league, resolution in (week.resolved_weeks or {}).items():
+        label = LEAGUE_LABELS.get(league, league)
+        if resolution:
+            parts.append(
+                f"{label} resolved to week {resolution.get('week')} "
+                f"(season type {resolution.get('season_type')})."
+            )
+        else:
+            parts.append(f"{label} did not resolve to a week for this anchor date.")
+    parts.append("Check the week 1 anchor date in Settings, then rebuild the slate.")
+    return " ".join(parts)
 
 
 def recompute_lock(db: Session, week: Week) -> None:
@@ -789,6 +887,21 @@ def build_slate(
 ) -> IngestReport:
     """Build or rebuild one week. Idempotent and safe to re-run."""
     report = IngestReport(week_number=week_number, season_year=year)
+
+    # Refuse rather than fall back (Phase 2 remediation, see DECISIONS.md). The old fallback
+    # sent the pool's own week number straight to ESPN for every league, which is what
+    # produced a slate spanning two calendar weeks with the same team on it twice the moment
+    # NFL and college drifted apart. week1_anchor_date is now required at league creation
+    # (POST /admin/leagues/new) and backfilled for any pool that predates that (the
+    # backfill-anchor-dates CLI command), so hitting this in practice means a commissioner
+    # cleared the field from Settings.
+    if pool.week1_anchor_date is None:
+        report.warnings.append(
+            "Set your week 1 anchor date in Settings before building a slate. Without it "
+            "the tool cannot tell which NFL and college weeks belong together."
+        )
+        return report
+
     week = ensure_week(db, pool, year, week_number)
 
     # Once picks exist the slate is settled. Scores still refresh, the selection does not move.
@@ -839,16 +952,28 @@ def build_slate(
     report.notes = list(result.notes)
     for note in result.notes:
         log.info("slate note, week %s: %s", week_number, note)
+    report.warnings.extend(duplicate_team_warnings(db, week))
 
     should_publish = pool.auto_publish if publish is None else publish
     if should_publish and report.selected > 0 and week.status == "draft":
-        publish_week(db, week)
-        report.published = True
+        try:
+            publish_week(db, week)
+            report.published = True
+        except SlateSpanTooWide as exc:
+            # Auto publish declines rather than opens a slate that spans two calendar
+            # weeks (Phase 2 remediation); the week stays a draft for the commissioner to
+            # review, exactly the safety net a manual "Publish" click also gets below.
+            report.warnings.append(str(exc))
 
     return report
 
 
 def publish_week(db: Session, week: Week) -> None:
+    span = slate_span(db, week)
+    if span is not None:
+        span_days, earliest, latest = span
+        if span_days > MAX_SLATE_SPAN_DAYS:
+            raise SlateSpanTooWide(_span_too_wide_message(week, span_days, earliest, latest))
     week.status = "open"
     week.published_at = utcnow()
     db.flush()

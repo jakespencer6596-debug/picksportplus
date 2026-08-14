@@ -13,6 +13,7 @@ from __future__ import annotations
 import dataclasses
 import datetime as dt
 
+import pytest
 from sqlalchemy import select
 
 from app.models import Game, Pick, Pool, PoolMember, User, Week, WeekEntry
@@ -44,6 +45,11 @@ def _pool(db, **overrides) -> Pool:
         "auto_publish": False,
         "timezone": "America/New_York",
         "current_week": 1,
+        # Real by default (Phase 2 remediation, see DECISIONS.md): build_slate now refuses
+        # outright when this is None, so a test that actually wants that fallback behavior
+        # passes week1_anchor_date=None explicitly, same as it already did before this
+        # default existed.
+        "week1_anchor_date": dt.date(2026, 9, 12),
     }
     defaults.update(overrides)
     pool = Pool(**defaults)
@@ -306,6 +312,107 @@ def test_build_slate_succeeds_normally_when_only_one_league_has_no_games(db, loa
 
     assert report.candidates == 24
     assert not any("ESPN returned no games" in w for w in report.warnings)
+
+
+def test_build_slate_refuses_with_no_anchor_date(db):
+    """Phase 2 remediation (see DECISIONS.md): a blank week1_anchor_date used to fall back to
+    sending the pool's own week number straight to ESPN for both leagues, which is what
+    produced a slate spanning two calendar weeks. build_slate now refuses outright."""
+    pool = _pool(db, week1_anchor_date=None)
+
+    report = ingest.build_slate(db, pool, 2026, 1, allow_metered=False)
+
+    assert report.selected == 0
+    assert len(report.warnings) == 1
+    assert "Set your week 1 anchor date in Settings" in report.warnings[0]
+    assert db.scalar(select(Week).where(Week.pool_id == pool.id)) is None
+
+
+# Slate span guard (Phase 2 remediation) --------------------------------------
+
+
+def _spanning_week(db, pool: Pool, *, span_days: int) -> Week:
+    """A drafted week with two in-slate games span_days apart, real NFL and college weeks
+    resolved so _span_too_wide_message has something to report."""
+    week = _week_row(db, pool)
+    week.resolved_weeks = {
+        "nfl": {"week": 1, "season_type": 2},
+        "ncaaf": {"week": 3, "season_type": 2},
+    }
+    base = dt.datetime(2026, 9, 12, 17, 0, tzinfo=UTC)
+    for index, offset in enumerate((0, span_days)):
+        db.add(
+            Game(
+                week_id=week.id,
+                league="nfl",
+                espn_event_id=f"span-{index}",
+                start_time=base + dt.timedelta(days=offset),
+                home_team=f"Home {index}",
+                away_team=f"Away {index}",
+                home_abbr=f"H{index}",
+                away_abbr=f"A{index}",
+                canonical_home_key=f"nfl:home-{index}",
+                canonical_away_key=f"nfl:away-{index}",
+                in_slate=True,
+                slate_rank=index + 1,
+            )
+        )
+    db.flush()
+    return week
+
+
+def test_publish_week_refuses_a_slate_spanning_more_than_eight_days(db):
+    pool = _pool(db)
+    week = _spanning_week(db, pool, span_days=17)
+
+    with pytest.raises(ingest.SlateSpanTooWide) as excinfo:
+        ingest.publish_week(db, week)
+
+    message = str(excinfo.value)
+    assert "spans 17 days" in message
+    assert "NFL resolved to week 1" in message
+    assert "College resolved to week 3" in message
+    assert week.status == "draft"
+
+
+def test_publish_week_allows_a_normal_slate_within_eight_days(db):
+    pool = _pool(db)
+    week = _spanning_week(db, pool, span_days=3)
+
+    ingest.publish_week(db, week)
+
+    assert week.status == "open"
+
+
+def test_slate_span_is_none_with_fewer_than_two_games(db):
+    pool = _pool(db)
+    week = _week_row(db, pool)
+    assert ingest.slate_span(db, week) is None
+
+
+def test_duplicate_team_warnings_explains_a_dropped_game_with_real_names(db):
+    """Phase 2 remediation (see DECISIONS.md): app.slate refuses to select two games sharing
+    a team; this explains the drop to the commissioner using real team names, which the pure
+    slate module deliberately does not have."""
+    pool = _pool(db, target_ncaaf=1, target_nfl=0, num_games_per_week=1, sports=["ncaaf"])
+    week = _week_row(db, pool)
+    closer = _rivalry_game("evt-close", "Ohio State", "Penn State")
+    farther = dataclasses.replace(
+        _rivalry_game("evt-far", "Ohio State", "Iowa"),
+        kickoff=dt.datetime(2026, 9, 19, 17, 0, tzinfo=UTC),
+    )
+    ingest.upsert_games(db, week, [closer, farther], {}, pool)
+
+    ingest.apply_slate(db, pool, week, now=dt.datetime(2026, 9, 1, tzinfo=UTC))
+    warnings = ingest.duplicate_team_warnings(db, week)
+
+    assert len(warnings) == 1
+    assert "Ohio State" in warnings[0]
+    assert "left off the slate" in warnings[0]
+    on_slate = list(
+        db.scalars(select(Game).where(Game.week_id == week.id, Game.in_slate.is_(True)))
+    )
+    assert [g.espn_event_id for g in on_slate] == ["evt-close"]
 
 
 # Pinned and rivalry games (Phase 5) -------------------------------------------
@@ -661,10 +768,18 @@ def test_the_build_fetch_score_pipeline_is_idempotent_across_three_runs(db, load
     run_cron does, per pool: sync_week (detect_week, then build_slate), then for every week
     still open or locked, fetch_results followed by score_week_for_pool. detect_week itself
     reads the real wall clock and is covered on its own in this file and in
-    tests/test_calendar.py, so this test calls build_slate directly with an explicit week
-    number (week1_anchor_date left unset, the documented pre-anchor fallback that sends the
-    week number straight to both leagues) rather than routing through sync_week, which is
-    what keeps this test's outcome independent of what day pytest happens to run.
+    tests/test_calendar.py, so this test drives build_slate's own constituent steps directly
+    with an explicit week number (week1_anchor_date left unset, the documented pre-anchor
+    fallback that sends the week number straight to both leagues) rather than routing through
+    sync_week, which is what keeps this test's outcome independent of what day pytest happens
+    to run.
+
+    Phase 2 remediation (see DECISIONS.md) made build_slate itself refuse outright when
+    week1_anchor_date is None, exactly to close off this fallback for a real build. This test
+    still wants to exercise the fallback, so run_once below calls ensure_week,
+    fetch_candidates, resolve_spreads, upsert_games and apply_slate directly instead of
+    build_slate, a direct continuation of this test's already-stated reason for bypassing the
+    higher level sync_week to begin with.
 
     Run 1 to run 2 may legitimately change something, this is the first time results are
     fetched and scored. Run 2 to run 3, against the exact same cached ESPN and CFBD
@@ -699,16 +814,20 @@ def test_the_build_fetch_score_pipeline_is_idempotent_across_three_runs(db, load
     )
 
     def run_once() -> Week:
-        ingest.build_slate(db, pool, year, week_number, allow_metered=True, publish=True)
-        week = db.scalar(
-            select(Week).where(
-                Week.pool_id == pool.id,
-                Week.season_year == year,
-                Week.week_number == week_number,
-            )
-        )
+        week = ingest.ensure_week(db, pool, year, week_number)
+        games, _attempts = ingest.fetch_candidates(db, pool, week)
+        spreads, _warnings = ingest.resolve_spreads(db, week, games, allow_metered=True)
+        ingest.upsert_games(db, week, games, spreads, pool)
+        ingest.apply_slate(db, pool, week, now=None)
         if week.status == "draft":
-            ingest.publish_week(db, week)
+            # This fixture's NFL and college week 5 games genuinely span 11 days once both
+            # leagues' week numbers are sent directly (the pre-anchor fallback under test
+            # here), which Phase 2's span guard correctly refuses to publish. That guard is
+            # covered on its own elsewhere; this test only cares that the results/scoring
+            # pipeline is idempotent, so it opens the week directly rather than through
+            # ingest.publish_week.
+            week.status = "open"
+            week.published_at = dt.datetime.now(UTC)
         results.fetch_results(db, pool, week)
         results.score_week_for_pool(db, pool, week)
         db.flush()
