@@ -18,10 +18,10 @@ September 12, 2026.
 
 | Phase | Description | Status | Commit SHA |
 |---|---|---|---|
-| 0 | Baseline, branch, report | Done | (this commit) |
-| 1 | Data persistence (ephemeral SQLite) | Done | (this commit) |
-| 2 | Week resolution / anchor date | Done | (this commit) |
-| 3 | Preseason / test week support | Pending | |
+| 0 | Baseline, branch, report | Done | `3005a33` |
+| 1 | Data persistence (ephemeral SQLite) | Done | `1079c7b` |
+| 2 | Week resolution / anchor date | Done | `f0a0117` |
+| 3 | Preseason / test week support | Done | `1a6c199` |
 | 4 | Split site admin vs commissioner | Pending | |
 | 5 | Move provider controls to site admin | Pending | |
 | 6 | Fix slate build interaction | Pending | |
@@ -70,6 +70,20 @@ September 12, 2026.
   anchor `2026-09-12` resolving NFL to week 1 and college to week 3, and a synthetic 17 day
   span being refused with the span, both kickoffs and both resolved weeks reported.
 - Test count after Phase 2: 961 (+12 over Phase 1's 949, +22 over the Phase 0 baseline).
+
+## Phase 3 notes
+
+- `SEASON_TYPE_PRESEASON = 1` added; `resolve_league_week`/`resolve_pool_weeks` gained
+  `is_test_week` (default False, opt-in only) to try preseason ahead of regular/postseason.
+- `Week.is_test_week` column added (migration `4efccffeb9cc`), reserved `week_number = 0`.
+- Commissioner "Create a test week" / "Delete this test week" actions on the slate editor
+  (`POST /admin/test-week/create`, `POST /admin/test-week/{id}/delete`).
+- Quarantine enforced in code, not just templates: `app/services/standings.py` excludes test
+  weeks from season totals/correct counts/weekly wins; `score_week_for_pool` skips the
+  payout-freeze hook for a test week; the scenarios panel always reports `visible=False` for
+  one; `/results/custom-scenario` refuses a test week with 403.
+- Gold "Test week" badge (`.badge-test-week`) on the slate editor, picks page and results page.
+- Test count after Phase 3: 978 (+17 over Phase 2's 961, +39 over the Phase 0 baseline).
 
 ## Ambiguity decisions
 
