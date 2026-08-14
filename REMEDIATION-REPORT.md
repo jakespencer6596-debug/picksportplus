@@ -22,7 +22,7 @@ September 12, 2026.
 | 1 | Data persistence (ephemeral SQLite) | Done | `1079c7b` |
 | 2 | Week resolution / anchor date | Done | `f0a0117` |
 | 3 | Preseason / test week support | Done | `1a6c199` |
-| 4 | Split site admin vs commissioner | Pending | |
+| 4 | Split site admin vs commissioner | Done | `5cb32c4` |
 | 5 | Move provider controls to site admin | Pending | |
 | 6 | Fix slate build interaction | Pending | |
 | 7 | Transactional email | Pending | |
@@ -84,6 +84,28 @@ September 12, 2026.
   one; `/results/custom-scenario` refuses a test week with 403.
 - Gold "Test week" badge (`.badge-test-week`) on the slate editor, picks page and results page.
 - Test count after Phase 3: 978 (+17 over Phase 2's 961, +39 over the Phase 0 baseline).
+
+## Phase 4 notes
+
+- Route split: `admin.py` prefix `/admin` -> `/league`; `payouts.py` `/admin/payouts` ->
+  `/league/payouts`; `leagues.py` `/admin/leagues` -> `/site/leagues`; `admin_contacts.py`
+  `/admin/contacts` -> `/site/contacts`; new `GET /site` dashboard (`app/routers/site.py`).
+  Every route's own suffix and permission dependency unchanged, prefix only.
+  Independently verified live: `GET /admin` -> 301 `/league`, `GET /admin/leagues` -> 301
+  `/site/leagues`, `GET /site`/`GET /league` -> 303 to `/login?next=...` when signed out.
+- 301 legacy redirects for every old bookmarkable GET path (`app/routers/legacy_redirects.py`,
+  mounted last so it never shadows a live route). POST-only legacy paths intentionally not
+  redirected (a 301 can drop the method/body; nothing in the app itself will ever issue one).
+- "Site admin" role pill on the members roster renamed "Platform owner"; the three genuinely
+  site-admin-only pages (`leagues.html`, `league_new.html`, `contacts.html`) keep "Site admin"
+  wording, per the phase's own exception for pages only a site admin ever reaches.
+  Independently verified: `grep -rn "/admin" app/ tests/` after the commit shows zero live
+  route/href/redirect hits, only historical file-path prose and the redirect test table.
+- No-visible-"admin" rule enforced with a rendered-response integration test (a real
+  commissioner's actual HTML), not a static grep, since the `is_site_admin`-gated Provider
+  budgets block on `/league` legitimately contains the word in source but never renders for a
+  real commissioner.
+- Test count after Phase 4: 998 (+20 over Phase 3's 978, +59 over the Phase 0 baseline).
 
 ## Ambiguity decisions
 
