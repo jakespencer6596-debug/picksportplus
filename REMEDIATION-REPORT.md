@@ -26,7 +26,7 @@ September 12, 2026.
 | 5 | Move provider controls to site admin | Done | `957d718` |
 | 6 | Fix slate build interaction | Done | `e5bc767` (+ `e862eff` fix) |
 | 7 | Transactional email | Done | `c615887` |
-| 8 | First-run experience | Pending | |
+| 8 | First-run experience | Done | `cad907b` |
 | 9 | Verify prior fixes against live data | Pending | |
 | 10 | Full sweep | Pending | |
 | 11 | Documentation | Pending | |
@@ -188,6 +188,30 @@ September 12, 2026.
   wired next to the existing copy-link panel on `/site/leagues`. No defects found beyond the one
   already fixed.
 - Test count after Phase 7: 1041 (+23 over Phase 6's 1018, +102 over the Phase 0 baseline).
+
+## Phase 8 notes
+
+- Full router audit (every route in every `app/routers/*.py` file, by hand): nothing needed
+  fixing. Every authenticated route already resolves through `require_user` or a dependency
+  that wraps it, and the exception handler already turns the resulting 303 into
+  `/login?next=...`. Locked in with a test covering 16 representative routes across every
+  router, plus a negative control confirming the two literal old bug-report paths
+  (`/leagues`, `/leagues/new`) are genuinely gone and 404 honestly.
+- The "dead-end empty state" was confirmed already fixed by an earlier, pre-remediation phase
+  (the `is_preview` pool feature): a poolless signed-in visitor already sees actionable
+  "Enter a join code" / "Start your own league" options, never a bare "check back soon."
+  Independently verified live in the browser during Phase 5/6 testing before this phase even
+  ran. Strengthened with new test coverage rather than rebuilt.
+- `normalize_join_code` (`app/auth.py`) now strips hyphens in addition to spaces/case, so a
+  code typed as "ab-3d efgh" matches the stored value; already called at every real entry
+  point, so this one function fix covers registration, join, and both invite-code routes.
+- `run-cron` now refreshes the preview pool's slate (same metered-budget path a real pool's
+  build already uses) via the read-only `get_preview_pool`, never creating one; `doctor`
+  reports the preview as missing, stale, or healthy. Independently verified: a fresh
+  `doctor --no-probe` run correctly reports "MISSING: no preview pool has been seeded yet."
+- Pricing arithmetic fixed ("Save 49 dollars", was "50"). Independently verified in the
+  template source.
+- Test count after Phase 8: 1073 (+32 over Phase 7's 1041, +134 over the Phase 0 baseline).
 
 ## Ambiguity decisions
 
