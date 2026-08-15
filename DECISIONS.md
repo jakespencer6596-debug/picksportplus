@@ -3699,3 +3699,51 @@ exact fix, rather than treated as this remediation's job to complete.
 
 Test count after Phase 12: 1074 (no application code changed in this phase; only
 `REMEDIATION-REPORT.md` was updated with live verification results).
+
+### Phase 12 follow-up, fixing the ephemeral DATABASE_URL live
+
+The user asked directly, in the same session, to fix `picksportplus-live`'s ephemeral storage
+risk immediately rather than leave it as a report entry. This is infrastructure outside the
+repository, so it needed real judgment calls about how far this session should act on its own.
+
+**Checked for a reusable existing database first, found none.** This workspace already has one
+Postgres instance (`pop-db`), but it belongs to a different app and is on Render's free plan,
+which expires 30 days after creation, already scheduled to expire 2026-09-01, before the real
+season even starts. Not reused.
+
+**Asked the user to choose Render Postgres (paid) or Neon (free), rather than picking one.**
+Both are named in the README's own "Persistent database" section as valid options with a real
+cost/effort tradeoff (a recurring charge on the user's Render account either way for
+`picksportplus-live`'s paid plan tier, versus a free external account the user would have to
+create themselves, since creating accounts on a user's behalf is a prohibited action for this
+session regardless of urgency). The user chose Render Postgres. Provisioned
+`picksportplus-live-db` on `basic_256mb` (the cheapest plan that does not expire), region
+Oregon to match the web service, Postgres 16 to match the only other working instance in this
+workspace rather than risk an untested version.
+
+**Did not read, type, or otherwise handle the generated connection string myself.** Render's
+API does not expose a newly created Postgres instance's password to the MCP tools available in
+this session, so there was no way to retrieve it programmatically even if that were desirable.
+More importantly, entering a password or connection secret into a form is a prohibited action
+for this session regardless of source. Instead: opened two browser tabs positioned exactly at
+the copy source (the Postgres instance's "Connect" dropdown, Internal Database URL) and the
+paste destination (`picksportplus-live`'s Environment Variables editor), and asked the user to
+do the actual copy-paste and save themselves. This matches how the user framed their own
+preference in this session ("pull up exactly where i need to copy and paste and ill put those
+in").
+
+**Verified the fix from the resulting deploy's own boot log, not by re-reading the env var.**
+The redeploy (`trigger: manual`, matching an environment variable save) produced a boot log
+reading `database dialect: postgresql` (Phase 1's own startup log line, previously read
+`sqlite`), a full clean `alembic upgrade head` against a brand-new empty database from
+`initial schema` through every migration to `add mail tables and notify flag`, `seed-admin`
+creating a fresh admin account and default pool (since the database was empty, this is a new
+account, not a carryover from the discarded ephemeral SQLite file, which would have been lost
+on the next sleep/redeploy regardless), and no ephemeral storage warning anywhere in the log.
+Cross-checked live via `curl` against both `picksportplus-live.onrender.com` and the custom
+domain `picksportplus.com` itself (confirmed as the same service from this exact deploy's own
+"Available at your primary URL https://picksportplus.com" log line), matching the user's
+explicit ask to make sure testing covered the real live domain, not only the onrender.com one.
+
+Test count after this follow-up: 1074 (no application code changed; this was live
+infrastructure configuration and verification only).

@@ -398,6 +398,23 @@ on the live service itself, outside this repository, and it had not happened as 
 deploy. Flagged to the user directly in this session and carried as launch risk 1 below. See
 `DECISIONS.md` for the full account.
 
+**Risk 1 resolved, same session.** A new Render Postgres (`picksportplus-live-db`, plan
+`basic_256mb`, region Oregon, Postgres 16, no expiry) was provisioned, and the user pasted its
+Internal Database URL into `picksportplus-live`'s `DATABASE_URL` and saved (Render's own
+connection-string field, never handled or typed by this session, since that would mean
+entering a credential into a form on the user's behalf). The resulting redeploy's boot log
+confirms the fix: `database dialect: postgresql` (was `sqlite`), a full, clean
+`alembic upgrade head` from `initial schema` through `add mail tables and notify flag` against
+the new, empty database, `seed-admin` creating the real admin account and default pool on it,
+and **no ephemeral storage warning anywhere in the boot log**. Verified live on both
+`picksportplus-live.onrender.com` and the custom domain `picksportplus.com` itself (confirmed
+this deploy log's own "Available at your primary URL https://picksportplus.com" line as the
+definitive mapping): `/health` 200 on both, `/admin` still 301s to `/league` on the custom
+domain. Since this was a brand-new, empty database, `seed-admin` created a fresh admin account
+and default pool rather than carrying over whatever had been sitting in the now-discarded
+ephemeral SQLite file (which would have been lost on the next sleep/redeploy regardless). Data
+written from this point forward on `picksportplus-live` is real and persistent.
+
 ## Ambiguity decisions
 
 See `DECISIONS.md`, `## Remediation, August 2026`, for every judgment call and its reasoning.
@@ -409,13 +426,15 @@ See `DECISIONS.md`, `## Remediation, August 2026`, for every judgment call and i
   item 10 above (span guard `MAX_SLATE_SPAN_DAYS = 8`, team dedup, both unit tested).
 - Slate build wall-clock duration: **6.41 seconds** for a 16-candidate build against the live
   ESPN API (see Phase 6 notes).
-- Live deploy status: **live and verified on both deployed services** as of this merge
-  (`b56e68c`). `picksportplus-live.onrender.com` (the real, paid service): `/health` 200,
-  `/league` and `/site` both render/redirect correctly, `/admin` and `/admin/leagues` 301
-  correctly, boot log shows the ephemeral storage warning correctly firing (see Phase 12 notes,
-  and the launch risk below: this service still needs a real `DATABASE_URL` pasted in before
-  real players join). `picksportplus.onrender.com` (the free demo blueprint): same checks, all
-  passed, ephemeral storage is expected and correct here since the demo is designed to reset.
+- Live deploy status: **live and verified on both deployed services**, including a same-session
+  follow-up. `picksportplus-live.onrender.com` and its custom domain `picksportplus.com` (the
+  real, paid service): `/health` 200, `/league` and `/site` both render/redirect correctly,
+  `/admin` and `/admin/leagues` 301 correctly, and **now running on a real, persistent Render
+  Postgres database** (`picksportplus-live-db`), confirmed by the boot log reading
+  `database dialect: postgresql` with no ephemeral storage warning, after the ephemeral-SQLite
+  finding below was raised and fixed live. `picksportplus.onrender.com` (the free demo
+  blueprint): same route/health checks, all passed; ephemeral storage is expected and correct
+  here since the demo is designed to reset.
 
 ## Setup guides
 
@@ -482,18 +501,17 @@ See `DECISIONS.md`, `## Remediation, August 2026`, for every judgment call and i
 
 ### Top three risks to a clean September 12 launch
 
-1. **`picksportplus-live` is still running on ephemeral SQLite.** Confirmed live in this
-   phase's own boot log (see Phase 12 notes above). Every account, league, pick, payout rule and
-   award on that service will be lost the next time it sleeps or redeploys, which will happen
-   before September 12 without action. **Mitigation:** paste a real Postgres `DATABASE_URL`
-   (Neon's free tier is enough) into that service's environment in the Render dashboard now, not
-   later; the app needs no code change, only a real connection string, and `python -m app.cli
-   doctor` confirms it stuck.
+1. ~~`picksportplus-live` is still running on ephemeral SQLite.~~ **Resolved same session.**
+   Was confirmed live in this phase's own boot log; a persistent Render Postgres
+   (`picksportplus-live-db`) was provisioned and wired up as `DATABASE_URL`, and the redeploy's
+   boot log now confirms `database dialect: postgresql` with no ephemeral warning. See the
+   "Risk 1 resolved" note in the Phase 12 section above for the full account. No longer a risk.
 2. **No cron is wired up on either live service.** Without it, slate builds, score updates and
    payout freezes only happen when someone remembers to run them by hand. **Mitigation:** wire a
    paid Render cron service (README, "Deploying the full app to Render") or point any external
    hourly scheduler at `python -m app.cli run-cron` against the real `DATABASE_URL` before the
-   season starts; `run-cron` is idempotent, so an early test run risks nothing.
+   season starts; `run-cron` is idempotent, so an early test run risks nothing. **Now the top
+   remaining risk.**
 3. **Real invite emails have never been proven against a real inbox.** The code path is proven
    correct end to end against a stubbed network call (Phase 10, Phase 7), but nobody has clicked
    a real "Email the invite" button against a live Resend account and watched a real message
