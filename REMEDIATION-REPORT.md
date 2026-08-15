@@ -29,7 +29,7 @@ September 12, 2026.
 | 8 | First-run experience | Done | `cad907b` |
 | 9 | Verify prior fixes against live data | Done | `a8fe738` |
 | 10 | Full sweep | Done | `1e35dc0` |
-| 11 | Documentation | Pending | |
+| 11 | Documentation | Done | pending |
 | 12 | Merge, push, deploy, verify | Pending | |
 
 ## Phase 1 notes
@@ -326,6 +326,33 @@ with the inbox-delivery gap called out honestly rather than papered over; see `D
 
 33/33 pass (2 with an honestly-documented caveat: item 19-20's inbox delivery and item 23's
 literal wording, both explained above and in `DECISIONS.md`; neither reflects a defect).
+
+## Phase 11 notes
+
+- `SPEC.md`: Section 2 updated for the `/site/leagues` and `/league` route split and the site
+  admin/commissioner role distinction; Section 7 rewritten for the now-required anchor date
+  (with the old ESPN-lookup fallback removed), the new multi-week span guard
+  (`MAX_SLATE_SPAN_DAYS = 8`), the team-deduplication guard, and test weeks; Section 4 gained a
+  note on ephemeral storage detection; new Section 10c (site admin tools) and 10d
+  (transactional email); Section 10 updated for the `/league` prefix and the single-field build
+  form; Section 11 gained `backfill-anchor-dates`; Section 17 gained the offline-first mail
+  testing rule.
+- `README.md`: a persistent-database callout added immediately after the intro, ahead of the
+  quick start, so it is impossible to miss before deploying for real players; new
+  "Setting up a league" walkthrough (create the league, check the anchor date, build and
+  publish a week, invite players, configure payouts) and a new "The site admin" section;
+  environment variable table gained the five `MAIL_*`/`RESEND_API_KEY` variables and a note on
+  the anchor date's real home (`Pool.week1_anchor_date`, not just the env seed); CLI list gained
+  `backfill-anchor-dates`; every remaining `/admin` and "Admin, ___" reference (pre-dating the
+  Phase 4 route split) updated to `/league`/`/site`; project layout gained `services/mail.py`
+  and the `site`/`leagues`/`legacy_redirects` routers.
+- `DECISIONS.md`: every ambiguity from Phases 1-10 was already recorded with reasoning as each
+  phase happened; this phase added nothing new to it beyond its own Phase 10 entry (already
+  committed in the prior commit), since Phase 11 itself involved no ambiguous judgment calls,
+  only applying already-decided facts to the docs.
+- Full gate re-run clean after all doc edits: `ruff check .`, `black --check .`, `pytest -q`
+  (1074 passed, unchanged, since no application code changed), em dash grep and emoji scan both
+  clean across `SPEC.md` and `README.md`.
 
 ## Ambiguity decisions
 

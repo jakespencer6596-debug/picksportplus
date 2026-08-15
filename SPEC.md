@@ -23,8 +23,8 @@ Launch is a private pool for the owner and friends, but the data model must make
 - Model a Pool (league) with a unique join code. Users join a pool with its code or an admin adds them.
 - Global env flag `OPEN_REGISTRATION` (default false). When false, a new user can register only with a valid pool join code (private mode). When true, anyone can self register and join pools (public mode). Build both paths now and default to private.
 - v1 ships with one seeded default pool, but the schema supports many pools and many members per pool.
-- Roles: a global `admin` role (the commissioner) and normal `player` roles. A pool also has a commissioner, tracked per member (`PoolMember.role_in_pool`), so a pool can have more than one commissioner or co-commissioner. For v1 the seeded admin is the commissioner of the default pool.
-- Post-launch: a global admin manages every league from `/admin/leagues`, the only place a `Pool` is created. There they create a league, attach one or more existing users as its initial commissioner(s) by email, and can "view as commissioner" to enter any league's own commissioner tools (`/admin` and everything under it) exactly as that league's commissioner would see them, with a visible way back out. A global admin is always treated as a commissioner of every pool; a pool's own commissioner is never a global admin unless their account actually has the global `admin` role.
+- Roles: a global `admin` role (the site admin, sometimes called the platform owner in the UI) and normal `player` roles. A pool also has a commissioner, tracked per member (`PoolMember.role_in_pool`), so a pool can have more than one commissioner or co-commissioner. For v1 the seeded admin is also the commissioner of the default pool.
+- Post-launch: a global admin manages every league from `/site/leagues`, the only place a `Pool` is created. There they create a league, attach one or more existing users as its initial commissioner(s) by email (or hand out a commissioner invite link, no email address needed in advance), and can "view as commissioner" to enter any league's own commissioner tools (`/league` and everything under it) exactly as that league's commissioner would see them, with a visible "Viewing X as commissioner" banner on every page and a way back out. A global admin is always treated as a commissioner of every pool; a pool's own commissioner is never a global admin unless their account actually has the global `admin` role. The site admin's own tools (`/site/*`: leagues, provider budgets, mail, contact submissions) are a separate URL namespace from a commissioner's league tools (`/league/*`), and the word "admin" itself never renders on a page a real commissioner reaches, since a pool's own commissioner is not necessarily a site admin. See Section 10 and 10c.
 
 ## 3. Design system (this is not optional, match it precisely)
 
@@ -131,7 +131,7 @@ Semantic HTML, labeled form controls, visible gold focus rings, AA contrast, ful
 - HTMX for partial updates and SortableJS for the drag to rank UI. Vanilla JS only, no bundler.
 - Styling is hand authored CSS in `static/app.css` using the design tokens and semantic component classes above. Do not use Tailwind or any CSS framework, so the look stays custom and there is no build step. Fonts load from Google Fonts.
 - SQLAlchemy 2.x plus Alembic migrations.
-- SQLite for local dev (default `DATABASE_URL=sqlite:///./picksportplus.db`, zero setup on Windows) and PostgreSQL in production on Render via `DATABASE_URL`. Keep all models and queries database agnostic.
+- SQLite for local dev (default `DATABASE_URL=sqlite:///./picksportplus.db`, zero setup on Windows) and PostgreSQL in production on Render via `DATABASE_URL`. Keep all models and queries database agnostic. `app.config.is_ephemeral_sqlite_path()`/`Settings.is_ephemeral_storage` detect a SQLite file living on Render's ephemeral local disk (as opposed to a real persistent Postgres `DATABASE_URL`); when true, a loud warning logs on startup, `python -m app.cli doctor` reports it in red, and a brick `.lockbar-strong` banner shows on every page to a site admin. Real player and payment data must never live somewhere a redeploy silently erases it, so the free Render blueprint (`render.yaml`) intentionally has no default `DATABASE_URL`, forcing a real connection string to be set at deploy time.
 - Auth: email and password, hashed with `passlib[bcrypt]`, sessions via Starlette `SessionMiddleware` (signed cookie using `SECRET_KEY`). No third party auth service.
 - `httpx` for calling ESPN, The Odds API, and CFBD, with timeouts and light retry.
 - `pydantic-settings` for config from `.env`.
@@ -231,8 +231,10 @@ The tool always proposes a slate. The commissioner can override it, and the comm
 
 The build side of the pool runs itself; publishing the result to players is a deliberate commissioner action. `pool.auto_publish` defaults to false: a scheduled build always produces a draft, and the commissioner reviews and publishes it by hand from the slate editor. A commissioner who wants the old fully automatic behavior can still switch `auto_publish` on from pool settings, per pool, and everything below runs exactly the same way from that point on except that the last step (opening the week) happens by itself too.
 
-- Detect the pool's current or upcoming week automatically. When `pool.week1_anchor_date` is set this is date arithmetic against that anchor, not an ESPN lookup. A pool with no anchor configured falls back to asking ESPN what NFL's current week number is, which the commissioner should replace with a real anchor date before the season NFL and college drift out of step (see Section 5a). Do not require anyone to set the week by hand once an anchor is configured.
+- Detect the pool's current or upcoming week automatically. `pool.week1_anchor_date` (a Saturday) is required, set at league creation and validated as a Saturday on every save; the create-league form and pool settings both prefill and default it to the second Saturday of September. Week detection is date arithmetic against that anchor, never an ESPN lookup. **A build refuses outright, with a clear error and no `Week` row created, when the anchor is missing**, closing off the older, looser fallback that used to ask ESPN what NFL's current week number is (that fallback let NFL and college drift out of step against each other and could quietly produce a slate spanning more than a week). Do not require anyone to set the week by hand once an anchor is configured. `python -m app.cli backfill-anchor-dates` backfills any pool still missing one (an idempotent, one-time migration aid for a pool created before this rule existed) to the second Saturday of September of its own season year.
+- **Multi-week span guard.** A build or publish refuses (`SlateSpanTooWide`) when the selected slate's games span more than `MAX_SLATE_SPAN_DAYS` (8) days between the earliest and latest kickoff, since NFL and college resolve to their own ESPN week independently (Section 5a) and can otherwise select a slate that actually spans parts of two different real weeks. The refusal names the span, both kickoffs, and each league's resolved ESPN week, so a commissioner has enough to fix the anchor rather than guess. `select_slate_by_targets` (`app/slate.py`) also refuses to let two candidates sharing a real team both survive selection into the same slate; a dropped duplicate is reported as a build warning in real team names.
 - A scheduled job builds the slate for the upcoming week. When `auto_publish` is true it also opens the slate automatically (status open) and sets `lock_at`, no human action required. When `auto_publish` is false (the default) the job stops at a draft, and the week opens only once the commissioner publishes it.
+- **Test weeks.** A commissioner can build a low-stakes "test week" (`Week.is_test_week`, reserved `week_number = 0`) from whatever is live right now, NFL preseason and college week 0 included, so a group can try picks and scoring before the real season starts, without needing a real anchor date to resolve one (preseason resolution is tried ahead of regular/postseason specifically for this path). It scores normally on its own, badged `TEST WEEK` everywhere it appears (slate editor, picks page, results page), but is quarantined from everything that counts toward the real season: excluded from season totals, correct counts and weekly-win counts (`app/services/standings.py`), skipped by the payout-freeze hook, invisible to the scenarios panel, and `/results/custom-scenario` refuses one outright. Building it again refreshes it the same way building a real week does. Deleting it (commissioner only) removes it entirely.
 - The commissioner may still adjust a published slate before `lock_at`, but only non destructive changes once picks exist. Before any picks exist, free edits are allowed. After picks exist, allow voiding a game but not reshuffling the whole slate.
 - `pool.current_week` advances automatically as the calendar moves.
 - A results job runs frequently on game days, pulls finals, and scores idempotently. When every slate game is final, mark the week scored.
@@ -294,19 +296,83 @@ The feature the group asked for by name: "Once 5 games were completed, you could
 
 ## 10. Admin and commissioner tools
 
-Every pool has a commissioner, the league admin, who sets it up and controls its settings.
-Regular players cannot change any of them. The commissioner controls:
+Every pool has a commissioner, who sets it up and controls its settings, at `/league` and
+everything under it. Regular players cannot change any of them, and a plain commissioner
+cannot reach `/site` (Section 10c) at all: hitting it 403s. The commissioner controls:
 
-- League name, join code (view and rotate), season year, timezone.
+- League name, join code (view and rotate), season year, timezone, week 1 anchor date (a
+  required Saturday, Section 7).
 - Auto publish on or off, open registration on or off, lock time.
 - The total number of games per week, and the number taken from each league (NFL and college).
 
 Other tools:
 
-- Slate management: view the current and upcoming week, rebuild a slate, review the full candidate pool with resolved spread and source, add, remove or swap games before picks exist, set or override `lock_at`, and publish. See Section 6a.
+- Slate management (`/league/slate`): view the current and upcoming week, rebuild a slate,
+  review the full candidate pool with resolved spread and source, add, remove or swap games
+  before picks exist, set or override `lock_at`, publish, and build or delete a test week
+  (Section 7). The build form is a single field (the week number); it carries no publish
+  checkbox and no ESPN-only checkbox, both moved to Section 10c since neither is a
+  per-build decision a commissioner should be making. A build in progress is guarded against a
+  second concurrent build for the same week and against running past
+  `settings.slate_build_timeout_seconds` (default 90s).
 - Manually trigger fetch results and score now, in addition to the cron.
-- Member management: view members, remove, promote to commissioner, and view or rotate the pool join code.
+- Member management (`/league/members`): view members, remove, promote to commissioner, view
+  or rotate the pool join code, mint a commissioner invite link, and (Section 10d) send a
+  player invite email to one or more addresses at once.
 - Void or un-void a game.
+
+### 10c. Site admin (platform owner) tools
+
+The site admin's own tools live under `/site`, gated on the global `admin` role
+(`require_admin`), never under `/league`. A visible "Site admin" wording, and the word "admin"
+in general, is reserved for the handful of pages only a site admin ever reaches
+(`/site/leagues`, `/site/leagues/new`, `/site/contacts`); it never renders on a page a real
+commissioner sees, enforced by a rendered-response test against a real commissioner's own HTML,
+not a static grep, since a legitimately admin-gated block can contain the word in source
+without ever rendering for a commissioner.
+
+- `/site`: dashboard, an overview across every league.
+- `/site/leagues`: the only place a `Pool` is created (Section 2), with "view as commissioner"
+  and a plain "league dashboard" link per row, a commissioner invite link generator, and
+  (Section 10d) a commissioner invite email form.
+- `/site/providers`: API key presence, spend, and last call per provider (ESPN, The Odds API,
+  CFBD), and the global ESPN-only switch (`PlatformSetting.espn_only`, Section 5e) that ANDs
+  into every build's `allow_metered` right before spread resolution; a trusted CLI caller's own
+  `--no-metered` flag remains a stricter per-run override but can never bypass the switch when
+  it is on. When the switch is on, a commissioner's slate page shows a neutral note ("Some
+  games may not have a line yet. You can set one by hand.") with no billing language, since a
+  commissioner never sees spend or budget details.
+- `/site/mail` (Section 10d): mail configuration status, recent sends, and a real test-send.
+- `/site/contacts`: contact form submissions.
+- Every old bookmarkable `GET /admin/...` path 301s to its `/league` or `/site` equivalent
+  (`app/routers/legacy_redirects.py`), so an old bookmark or link never dead-ends; POST-only
+  legacy paths are not redirected, since a 301 can silently drop the method or body and nothing
+  in this app itself issues one.
+
+### 10d. Transactional email
+
+`app/services/mail.py` sends through Resend's REST API over `httpx` (no SDK, no new
+dependency), gated on `Settings.mail_enabled`, `resend_api_key`, and `mail_from_address` all
+being set; missing any one of them raises `MailDisabled` rather than attempting a call with a
+blank credential. `send()` returns a real `MailLog` row only on real success
+(`result="sent"`); every other outcome (`MailDisabled`, `MailRateLimited`, `MailSendFailed`)
+raises instead of returning something a caller could mistake for success, and every attempt,
+success or failure, is logged to `MailLog` (a durable table, not memory, so rate limiting
+survives a restart) with its recipient, kind, and actor. Rate limited per actor per hour
+(`Settings.mail_rate_limit_per_hour`), scoped so one sender's volume never blocks another's.
+
+Four emails, each living next to its existing copy-and-paste path, never replacing it: a
+commissioner invite (`/site/leagues`, site admin only), a player invite
+(`/league/members/invite`, commissioner only, one or many addresses), a password reset
+(single-use, one-hour expiry, the raw token never stored, only its SHA-256 hash), and an
+opt-in week-published notification (`Pool.notify_week_published`, off by default). A UI action
+that sends mail must never claim success when the send actually failed: `/site/mail`'s
+test-send and every real send path surface `MailSendFailed` as a visible, specific error,
+never a generic flash. The one exception is `forgot-password`'s own response, which shows the
+identical message and redirect whether or not the address is real and whether or not the send
+itself succeeded, deliberately, to avoid confirming or denying an account's existence
+(anti-enumeration); the underlying failure is still logged to `MailLog`, just not surfaced to
+the visitor who triggered it.
 
 ### 10a. The Venmo entry gate
 
@@ -386,7 +452,8 @@ All idempotent, all take `--year` and `--week` where relevant, defaulting to the
 
 - `init-db` create schema or run migrations.
 - `seed-admin` create the initial admin user, the default pool, and the join code from env.
-- `seed-demo` create a demo pool, eight players, two fully scored historical weeks (real past season and weeks) with picks, payouts and season standings, and one open current week (a reused real historical slate, no picks, an artificially future `lock_at`), so the full UI, scoring, payouts and scenarios can all be exercised immediately. `--reset` rebuilds it; `--scenario-week` leaves the second historical week partially played instead of fully scored, so the Scenarios panel has a real week to open against.
+- `seed-demo` create a demo pool, eight players, two fully scored historical weeks (real past season and weeks) with picks, payouts and season standings, and one open current week (a reused real historical slate, no picks, an artificially future `lock_at`), so the full UI, scoring, payouts and scenarios can all be exercised immediately. `--reset` rebuilds it; `--scenario-week` leaves the second historical week partially played instead of fully scored, so the Scenarios panel has a real week to open against. The seeded demo pool always carries a real `week1_anchor_date` (Section 7), since a real "Build the slate" click against it would otherwise hit the same required-anchor refusal a real pool does.
+- `backfill-anchor-dates` set `week1_anchor_date` to the second Saturday of September of its own season year on any pool still missing one (Section 7). Idempotent, safe to re-run; a pool that already has an anchor is left untouched.
 - `sync-week` detect the current or upcoming week, build the slate, and auto publish it when `auto_publish` is true.
 - `build-slate --week` build a draft slate for a specific week.
 - `publish-week --week` open a drafted week.
@@ -409,6 +476,11 @@ See `app/models.py`. Season standings are aggregated from `week_entries` on read
 - Mandatory pure unit tests for `scenarios.py` (Section 9a) covering: a hand computed small case, clinched, eliminated, ties sharing a place with the summed percentages worked out by hand, inverse vs standard picking different winners from identical inputs, moneyline weighting shifting probability toward the favorite, a hand computed leverage table, zero remaining games, Monte Carlo convergence and reproducibility under a fixed seed, and a real timing assertion at 15 remaining games and 16 players well under the 2 second cap.
 - A smoke test that boots the app and loads the main pages.
 - All ingest and scoring commands are idempotent and re runnable.
+- **Offline first.** `tests/conftest.py`'s session-wide `force_offline_mode` fixture ensures
+  nothing in the suite ever opens a real socket. This extends to mail (Section 10d): every mail
+  test monkeypatches `app.services.mail._call_resend_api`, the one real HTTP call site, rather
+  than hitting Resend, the same pattern provider tests already use against ESPN, The Odds API,
+  and CFBD.
 
 ## 18. Definition of done
 
