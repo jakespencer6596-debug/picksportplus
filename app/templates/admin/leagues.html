@@ -9,10 +9,10 @@
     <h1 class="page-title">Leagues</h1>
   </div>
   <div class="row">
-    <a class="btn btn-secondary" href="/admin/contacts">
+    <a class="btn btn-secondary" href="/site/contacts">
       {{ ic.icon("mail", 18) }}<span>Contact submissions</span>
     </a>
-    <a class="btn btn-primary" href="/admin/leagues/new">
+    <a class="btn btn-primary" href="/site/leagues/new">
       {{ ic.icon("flag", 18) }}<span>Create league</span>
     </a>
   </div>
@@ -65,7 +65,7 @@
                       <div class="row">
                         <button type="button" class="btn btn-secondary btn-sm"
                                 data-copy="#commish-link-{{ pool.id }}">Copy link</button>
-                        <form method="post" action="/admin/leagues/{{ pool.id }}/commissioner-code" class="inline-form">
+                        <form method="post" action="/site/leagues/{{ pool.id }}/commissioner-code" class="inline-form">
                           <button class="btn btn-ghost btn-sm" type="submit">
                             Generate a new link<span class="visually-hidden">, {{ pool.name }}</span>
                           </button>
@@ -77,8 +77,17 @@
                         you generate a new one, which retires this link straight away. Separate
                         from the join code above, that one only ever adds a regular player.
                       </p>
+                      <form method="post" action="/site/leagues/{{ pool.id }}/commissioner-code/email"
+                            class="inline-form">
+                        <label class="field-label visually-hidden" for="commish-email-{{ pool.id }}">
+                          Email this link to<span class="visually-hidden">, {{ pool.name }}</span>
+                        </label>
+                        <input class="input" type="email" id="commish-email-{{ pool.id }}" name="email"
+                               placeholder="name@example.com" required>
+                        <button class="btn btn-gold btn-sm" type="submit">Email this link</button>
+                      </form>
                     {% else %}
-                      <form method="post" action="/admin/leagues/{{ pool.id }}/commissioner-code" class="inline-form">
+                      <form method="post" action="/site/leagues/{{ pool.id }}/commissioner-code" class="inline-form">
                         <button class="btn btn-secondary btn-sm" type="submit">
                           Create a commissioner invite link<span class="visually-hidden">, {{ pool.name }}</span>
                         </button>
@@ -88,13 +97,13 @@
                 </details>
               </td>
               <td data-label="Actions" class="cell-actions">
-                <form method="post" action="/admin/leagues/{{ pool.id }}/view-as" class="inline-form">
+                <form method="post" action="/site/leagues/{{ pool.id }}/view-as" class="inline-form">
                   <button class="btn btn-secondary btn-sm" type="submit">
                     View as commissioner<span class="visually-hidden">, {{ pool.name }}</span>
                   </button>
                 </form>
-                <a class="btn btn-ghost btn-sm" href="/admin">
-                  Admin dashboard<span class="visually-hidden">, {{ pool.name }}</span>
+                <a class="btn btn-ghost btn-sm" href="/league">
+                  League dashboard<span class="visually-hidden">, {{ pool.name }}</span>
                 </a>
               </td>
             </tr>
@@ -103,7 +112,7 @@
       </table>
     </div>
     <p class="form-hint">
-      "View as commissioner" and "Admin dashboard" land on the same page: the button switches
+      "View as commissioner" and "League dashboard" land on the same page: the button switches
       which league you're viewing first, the plain link goes straight there once you already
       are. Talk to a prospective commissioner yourself, then hand them the invite link from
       their league's row above: opening it lets them create their own commissioner account,
@@ -114,7 +123,7 @@
       {{ ic.icon("flag", 28) }}
       <h3 class="empty-state-title">No leagues yet</h3>
       <p>Create the first one and set up its commissioner.</p>
-      <a class="btn btn-primary" href="/admin/leagues/new">Create league</a>
+      <a class="btn btn-primary" href="/site/leagues/new">Create league</a>
     </div>
   {% endif %}
 </section>

@@ -618,10 +618,14 @@ a.visually-hidden:focus-visible {
   text-overflow: ellipsis;
 }
 
-/* A form that only exists to POST a single button, for example sign out. */
+/* A form that only exists to POST a single button, for example sign out. Also used, unchanged,
+   for a short one-field-plus-button form (Phase 7 remediation: email an invite link); the gap
+   only ever shows once a second child is present, so every existing single-button usage looks
+   exactly as it did before. */
 .inline-form {
   display: flex;
   align-items: center;
+  gap: var(--space-2);
   margin: 0;
 }
 
@@ -3098,6 +3102,16 @@ a.toggle-btn { text-decoration: none; }
   color: var(--ink);            /* 11.46:1 */
 }
 
+/* A commissioner's low-stakes test week (Phase 3, preseason and test week support). Same
+   gold recipe as badge-live/badge-pinned above, this app's one "pay attention" voice,
+   deliberately unmistakable everywhere it appears: the slate editor, the picks page, and
+   weekly results. */
+.badge-test-week {
+  background: var(--decor-soft);
+  border-color: var(--decor);
+  color: var(--ink);            /* 11.46:1 */
+}
+
 /* -- Week status. badge-{{ week.status }} resolves to one of these four ---
    The palette tells the story of a week: neutral while it is a draft, green
    once picks are open, brick once it locks (the same brick .lockbar-strong
@@ -4713,7 +4727,7 @@ a.toggle-btn { text-decoration: none; }
 
 /* ==========================================================================
    16  PAYOUTS: POT FIGURES, DOLLAR/PERCENT MODE TOGGLE
-   The Set Payouts editor (Payout system rebuild, Phase 4, /admin/payouts). No existing
+   The Set Payouts editor (Payout system rebuild, Phase 4, /league/payouts). No existing
    component covered a two-way segmented toggle, so .mode-toggle is new here; everything
    else reuses .card / .table / .field / .btn-secondary etc, unchanged.
    ========================================================================== */

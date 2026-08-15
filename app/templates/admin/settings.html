@@ -16,14 +16,14 @@
 </div>
 
 <nav class="subnav" aria-label="Commissioner tools">
-  <a class="subnav-link" href="/admin">Overview</a>
-  <a class="subnav-link" href="/admin/slate">Slate</a>
-  <a class="subnav-link" href="/admin/members">Members</a>
-  <a class="subnav-link is-active" href="/admin/settings" aria-current="page">Settings</a>
-  <a class="subnav-link" href="/admin/payouts">Payouts</a>
+  <a class="subnav-link" href="/league">Overview</a>
+  <a class="subnav-link" href="/league/slate">Slate</a>
+  <a class="subnav-link" href="/league/members">Members</a>
+  <a class="subnav-link is-active" href="/league/settings" aria-current="page">Settings</a>
+  <a class="subnav-link" href="/league/payouts">Payouts</a>
 </nav>
 
-<form method="post" action="/admin/settings" class="stack settings-form">
+<form method="post" action="/league/settings" class="stack settings-form">
 
   <section class="card" aria-labelledby="league-title">
     <div class="card-head">
@@ -50,11 +50,12 @@
           <input class="input" type="date" id="week1_anchor_date" name="week1_anchor_date"
                  value="{{ pool.week1_anchor_date.isoformat() if pool.week1_anchor_date else '' }}">
           <p class="form-hint">
-            The Saturday your pool's week 1 belongs to. Each later pool week anchors seven days
-            after the last. NFL and college resolve their own ESPN week from this date
-            independently, since the two seasons are not on the same week numbering. Leave this
-            blank and the tool falls back to asking ESPN what NFL's current week is, which is
-            wrong once the two seasons drift apart.
+            The Saturday your pool's week 1 belongs to, must be a Saturday. Each later pool week
+            anchors seven days after the last. NFL and college resolve their own ESPN week from
+            this date independently, since the two seasons are not on the same week numbering.
+            This is the single most important setting in the app: building a slate is refused
+            outright while this is blank, since without it the tool cannot tell which NFL and
+            college weeks belong together.
           </p>
         </div>
 
@@ -289,6 +290,19 @@
           pool.
         </p>
       </div>
+
+      <div class="field">
+        <label class="checkbox" for="notify_week_published">
+          <input type="checkbox" id="notify_week_published" name="notify_week_published" value="1"
+                 {% if pool.notify_week_published %}checked{% endif %}>
+          <span>Email members when a week opens</span>
+        </label>
+        <p class="form-hint">
+          On sends every member with an account a short email the moment a week opens for
+          picks, naming when it locks. Off by default. This only takes effect once email
+          sending is turned on for the whole site.
+        </p>
+      </div>
     </div>
   </section>
 
@@ -361,6 +375,6 @@
 
 <p class="muted">
   Payout rules, the pot, and rounding live on their own screen now.
-  <a href="/admin/payouts">Go to Set Payouts</a>.
+  <a href="/league/payouts">Go to Set Payouts</a>.
 </p>
 {% endblock %}

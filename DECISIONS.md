@@ -2600,3 +2600,1072 @@ Decimal rule was followed anyway, since it is good practice for a real money fea
 explicit, non-negotiable instruction from the build brief regardless of its citation being
 wrong. Phase 9 adds the rule to SPEC.md for real, in section 4 (Tech stack) where it actually
 belongs, rather than leaving the document's own claim about itself inaccurate.
+
+## Remediation, August 2026
+
+Thirteen phase remediation (Phase 0 through 12) against defects found in a live walkthrough
+on August 14, 2026, ahead of a real group testing the app the week of August 17 and playing
+for money starting September 12, 2026. Branch `remediation-aug-2026`. See
+`REMEDIATION-REPORT.md` for the phase-by-phase checklist, test counts and live deploy proof.
+
+### Phase 1, data persistence
+
+The free Render blueprint (`render.yaml`) ran on `sqlite:////tmp/picksportplus.db`, which
+Render wipes on every sleep or redeploy. That is fine for a self-reseeding public demo and
+fatal for a real paid season: a user's account, and everything built on top of it, could
+vanish within a minute of them creating it.
+
+**Detection lives in `app/config.py` as a plain function** (`is_ephemeral_sqlite_path`), not
+only a property on `Settings`, specifically so it is unit testable without booting the app or
+touching a real database connection. It flags a sqlite URL whose file path starts with
+`/tmp`, `/tmp` itself, and nothing else: a Postgres URL is never flagged, and a sqlite file
+anywhere else (a developer's `./picksportplus.db`) is treated as durable enough for local
+work, even though nothing on a Render free instance actually survives a restart outside a
+persistent disk or an external database.
+
+**The banner reads freshly on every render, not once at import time.** The first pass put
+`IS_EPHEMERAL_STORAGE` into `templates.env.globals`, computed once when `app/templating.py`
+first imports. That is fine in production, since `DATABASE_URL` is fixed for the life of the
+process, but it made the flag untestable (a test's `monkeypatch.setattr(settings,
+"database_url", ...)` would never be seen) and it is one more piece of state that could in
+principle drift from the real setting during a long-lived process. Moved it into
+`render()`'s per-call context dict instead, next to `tz`, which the codebase already computes
+fresh on every render for the same reason.
+
+**The banner is gated on `current_user.is_admin`, not a route prefix.** Phase 1 lands before
+Phase 4's `/site` versus `/league` split, and the brief was explicit that a commissioner or
+player must never see this (they cannot act on it), only the site admin. Checking
+`current_user.is_admin` directly, rather than `active_nav == "admin"`, means the banner will
+keep working unchanged once Phase 4 renames the commissioner's own nav value and moves site
+admin routes to `/site`.
+
+**Reused `.lockbar-strong`, no new CSS.** It is already the brick-colored, full-bleed sticky
+bar the imminent-lock and already-locked states use (`app/static/app.css`), which is exactly
+the "persistent brick-colored warning" the brief asked for and keeps this change CSS-free,
+per the house rules.
+
+**`render.yaml`'s `DATABASE_URL` moved to `sync: false` with no `value`,** so Render prompts
+for a real connection string at deploy time rather than silently defaulting to the disposable
+file. The commented block at the top of the file, and a new README.md section ("Persistent
+database (Neon)"), spell out that this must happen before real players join, and how.
+`seed-demo`/`seed-admin` stay in the start command unchanged: whether this same service also
+runs the real season, or a real season gets its own service, is a Phase 8 (first-run
+experience) and deployment-topology question, not something Phase 1 decided.
+
+**`doctor`'s data-loss section reuses `session_scope()`, printed as a second, separate
+`with` block** rather than folded into the existing pool-info block below it, so the row
+counts and ephemeral warning are visible even when no pool exists yet (a fresh deploy), which
+the existing pool-info block returns early out of.
+
+### Phase 2, week resolution and the anchor date
+
+**Required at league creation, not just documented.** The settings page already warned that a
+blank anchor date falls back to guessing NFL's current week, but a brand new commissioner
+never reads that warning before their first build. `POST /admin/leagues/new` now rejects a
+blank or non-Saturday anchor date outright, and the form is pre-filled with the second
+Saturday of September (a real helper, `app.services.calendar.default_week1_anchor_date`, not
+a hard coded string) so the common case needs no typing at all. The pool settings save path
+(`POST /admin/settings`) gained the same Saturday check but is deliberately left able to clear
+the field back to blank: the second defense, `build_slate` refusing outright, is what actually
+protects a live pool, and a commissioner legitimately might want to reset it while
+reconfiguring.
+
+**`build_slate` refuses rather than falls back.** The single line `if pool.week1_anchor_date
+is None: return report-with-a-warning` closes the exact hole that produced the seventeen day
+slate: the old fallback inside `fetch_candidates` sent the pool's own week number straight to
+ESPN for both leagues, which is only correct once, in week 1, before the two seasons drift
+apart. That fallback function itself is untouched (still used, deliberately, by
+`test_the_build_fetch_score_pipeline_is_idempotent_across_three_runs`, which now calls
+`ensure_week`/`fetch_candidates`/`resolve_spreads`/`upsert_games`/`apply_slate` directly to
+keep exercising it), the guard just stops a real build from ever reaching it.
+
+**Found while implementing: `ensure_week` never actually backfilled an existing week's null
+anchor.** The pre-Phase-2 code only computed `anchor_date` from `pool.week1_anchor_date`
+inside the "week is None" branch, so a week created before the pool had an anchor stayed
+anchor-less forever, even after the pool gained one later, because the "week already exists"
+branch's own backfill check only fired when the *caller* passed an explicit override. Moved
+the computation above the branch so both paths see it. Undocumented in the remediation brief;
+fixed because the Phase 2.3 backfill CLI command would otherwise have been a no-op for any
+pool that already had at least one week built, which given the August 14 walkthrough already
+built a broken week 1, would have been the common case, not the exception.
+
+**The multi-week span guard lives in `publish_week`, not `build_slate`.** A build without
+`publish=True` produces a draft the commissioner still has to review; the guard only needs to
+stop the moment a week actually opens for picks, whether that is the commissioner's own
+"Publish" click (`POST /admin/slate/publish`, now catching `SlateSpanTooWide` and flashing it)
+or `auto_publish` inside `build_slate` itself (now catching the same exception and leaving the
+week in draft with a warning rather than crashing the build). `MAX_SLATE_SPAN_DAYS = 8`: a
+real week's games, even NFL alone (Thursday to Monday), never spans more than 5 days; 8 gives
+room for a Thursday-to-Thursday college slate without flagging a legitimate week.
+
+**The demo seed's historical weeks bypass `publish_week` entirely, not the span guard
+itself.** `app/services/demo.py`'s three historical/open weeks call `apply_slate` directly and
+now set `week.status`/`published_at` by hand instead of calling `ingest.publish_week`. Their
+own fixtures (`NFL_SOME_GAMES`/`CFB_SOME_GAMES` in the test suite, real recorded 2025 games
+used purely as "some games" stand-ins, not a matched calendar week) genuinely span 11 days
+once NFL and college week numbers are taken literally, which is realistic demo data, not a bug
+to weaken the guard for. Weakening `publish_week` itself (an optional `skip_span_check` flag,
+say) would have left a hole a real caller could reach; bypassing the shared function entirely
+for a controlled, non-interactive seeding path has no such risk.
+
+**Duplicate team detection is split across two modules on purpose.** `app/slate.py` stays pure
+(no team display names, only canonical keys on `Candidate.home_key`/`away_key`, both `None` by
+default so every prior caller is unaffected) and refuses to let two candidates sharing a team
+both survive selection: the closer one wins, exactly like the existing per-key dedup right
+above it in the same loop. `app/services/ingest.duplicate_team_warnings` re-derives which game
+got dropped and why, in real team names, by comparing the week's Game rows before and after
+selection, and its sentences are appended to `report.warnings` (the flash `error` level in the
+slate editor), not `report.notes` (flash `info`), since the brief called this a "blocking
+warning."
+
+**No template change for the duplicate-team warning beyond the existing flash stack.** The
+warning already renders wherever `report.warnings` already does (the slate build POST
+response), which is the same mechanism every other build warning already uses; a persistent
+banner on every later `GET /admin/slate` view would need storing the warning against the week,
+which is more machinery than a build-time explanation needs.
+
+**Test fixture fallout.** `tests/test_ingest.py`'s `_pool()` helper gained a real default
+`week1_anchor_date` (2026-09-12), since `build_slate` now refuses without one and most tests
+in that file were not testing anchor-date behavior at all. Every test that deliberately wants
+the unanchored fallback already passed `week1_anchor_date=None` explicitly and is unaffected.
+Four `POST /admin/leagues/new` tests in `tests/test_app.py` gained an explicit
+`week1_anchor_date` in their form data for the same reason.
+
+### Phase 3, preseason and test week support
+
+**The problem.** No preseason support existed at all: `app/providers/espn.py` only defined
+`SEASON_TYPE_REGULAR = 2` and `SEASON_TYPE_POSTSEASON = 3`, so a Week 0 (college) or NFL
+preseason build returned nothing, and a commissioner had no way to build a low-stakes test
+week the week of August 17, 2026, before the real regular season starts. Added
+`SEASON_TYPE_PRESEASON = 1` next to the existing two constants.
+
+**How `is_test_week` threads through the calendar and ingest layers, in two different
+shapes.** `app/services/calendar.py`'s `resolve_league_week`/`resolve_pool_weeks` gained an
+explicit `is_test_week: bool = False` keyword, exactly as the brief specified: neither
+function has a `Week` row to read from (they take a bare `anchor_date`), so a parameter is
+the only option, and the default keeps every existing caller unchanged. When True, the
+season-type try loop becomes `(SEASON_TYPE_PRESEASON, SEASON_TYPE_REGULAR,
+SEASON_TYPE_POSTSEASON)` instead of the normal two-tuple, preseason tried first since a test
+week's whole point is "whatever is live right now" before the real season starts. College
+needed no special casing: it has no separate preseason season type, its own week 0 already
+lives inside the regular season block, so `is_test_week` only ever changes NFL's resolution
+in practice.
+
+`app/services/ingest.py`'s `fetch_candidates`, by contrast, took no new parameter at all: it
+already has the `Week` row in hand, and `Week.is_test_week` is set the moment `ensure_week`
+creates the row, so it just reads `week.is_test_week` off the row it already has and passes
+that straight through to `resolve_league_week`. This is a deliberate small departure from
+the brief's literal "thread an `is_test_week` parameter through `ensure_week`/`build_slate`/
+`fetch_candidates`" instruction: threading a second, independent boolean through
+`fetch_candidates` that has to be kept in sync with `week.is_test_week` by every caller is a
+class of bug (the parameter says False, the row says True, or vice versa) that reading the
+already-persisted flag off the row makes structurally impossible, and it means
+`fetch_candidates`'s own signature needs zero changes for a normal build, which is stronger
+than the brief's "zero changes at existing call sites" goal, not weaker. `ensure_week` and
+`build_slate` do both gain a real `is_test_week: bool = False` keyword (the flag has nowhere
+else to originate from before the `Week` row exists), and every existing call site is
+unaffected by the default.
+
+**Which anchor date a test week build resolves against, and why.** A test week still needs
+some `anchor_date` to resolve against (Phase 2 made `build_slate` refuse outright when
+`pool.week1_anchor_date` is `None`), and the brief asked me to choose sensibly between "right
+now" and the pool's own anchor minus an offset. Chose right now
+(`dt.datetime.now(dt.UTC).date()`, or an explicit `now=` in a test), for two reasons. First,
+the whole point of a test week (per the brief, and per the group's own August 17 timeline) is
+exercising the pick and scoring loop before the real season, often before `week1_anchor_date`
+is even configured yet; anchoring off a value that might not exist yet would make the feature
+useless for exactly the window it exists for. Second, `build_slate` now takes a different
+branch entirely for `is_test_week=True`: it skips the `pool.week1_anchor_date is None`
+refusal outright and calls `ensure_week(..., anchor_date=now.date(), is_test_week=True)`
+directly, so a test week never depends on a real week's anchor configuration at all, past or
+future. `ensure_week` only ever applies `anchor_date`/`is_test_week` the first time a week row
+is created (mirrors the existing rivalry-auto-pin's one-time-on-creation shape in
+`upsert_games`), so a second "Create a test week" click rebuilds the same row in place rather
+than moving its anchor underneath it.
+
+**`TEST_WEEK_NUMBER = 0`, a reserved pool week number.** Real pool weeks are always the
+sequence 1, 2, 3..., so 0 can never collide with one. This is what makes "Create a test week"
+idempotent for free (`ensure_week`'s own get-or-create already handles a second click as a
+rebuild, not a duplicate) without a second `Week` column or a lookup table, and it is a free
+side benefit everywhere a week list already sorts by `week_number` descending (the admin
+overview, the slate editor's week switcher, `_week_or_404` on `/results`): a test week always
+sorts last and is never mistaken for "the current week" by any query that was not written
+with it in mind.
+
+**Exactly which functions enforce the quarantine, and why each one is the right layer.**
+- `app/services/standings.py.season_standings` gained `Week.is_test_week.is_(False)` on its
+  own `WeekEntry` query. This is the single point of truth for season totals, correct counts,
+  and weekly-win counts, and both `app/services/payouts.py._season_points_standings` and
+  `_season_wins_standings` already read every player's totals through this same function, so
+  filtering here fixes all three (standings, and both season payout scopes) with one change
+  rather than three.
+- `app/services/results.py.score_week_for_pool`'s own scoring hook gained an early return
+  (`if week.is_test_week: db.flush(); return report`) placed after `WeekEntry` rows are
+  written and `week.status` is set to `"scored"`, but before the `payout_service.
+  snapshot_awards` calls. A test week's own `WeekEntry` rows, and its own weekly leaderboard
+  and picks grid on `/results`, are real and correct (it does score normally within itself,
+  per the brief); what it must never do is freeze a `PayoutAward` of any scope, or have
+  finishing its own scoring read as the season's bowl-week completion signal. This is the one
+  and only place a `PayoutAward` row is ever written (`snapshot_awards`), so gating it here is
+  a complete guarantee, not a partial one.
+- `app/services/scenarios.py.week_scenario_panel` gained an `if week.is_test_week` branch at
+  the very top, ahead of `panel_thresholds_met`, that always returns `visible=False` (still
+  reporting honest `final_count`/`remaining_count`, only visibility is forced off) regardless
+  of how many games are final. `app/routers/results.py`'s `results_page` additionally never
+  calls `week_scenario_panel` at all for a test week (leaving `scenario_panel=None`, not just
+  `visible=False`), and the "Scenarios" section of `results.html` is gated on
+  `not week.is_test_week` outright, so a test week gets no pending-state section either, not
+  a permanently-stuck-pending one. `POST /results/custom-scenario` also refuses a test week
+  directly (403), closing the one other entry point into the engine.
+- `app/routers/results.py`'s payout column computation (the `payout_scope`/`payouts_by_user`/
+  `payout_is_projected` block) is skipped outright for a test week (`if not
+  row.is_test_week:`), belt and suspenders with the scoring hook above: even a live,
+  unsaved "Projected" figure would be misleading for a week that will never actually pay out.
+
+**Auto-published, unlike a real week's draft-first default.** `POST /admin/test-week/create`
+passes `publish=True` explicitly to `build_slate`, rather than leaving it to
+`pool.auto_publish` (which defaults to `False`, Phase 5's whole point being that a real week
+needs deliberate commissioner review before it goes live). A test week carries none of the
+stakes a real week's `auto_publish=False` default protects against, no money, no season
+standings, so the extra review step would only cost clicks for no safety benefit; the goal is
+letting the group see picks and scoring work end to end with as little ceremony as possible.
+
+**The TEST WEEK badge reuses the existing gold "pay attention" recipe verbatim.** A new CSS
+class, `.badge-test-week`, was added (background `--decor-soft`, border `--decor`, color
+`--ink`), byte-for-byte the same declaration `.badge-live` and `.badge-pinned` already use,
+rather than reusing one of those classes directly under a different label: `badge-pinned` and
+`badge-live` both carry their own specific meaning elsewhere on the same pages a test week
+badge appears on (a pinned slate game, a live game), so giving the test week concept its own
+class name keeps `grep`-ability and template intent clear while still visually matching the
+established "gold means pay attention" convention exactly, per the house rule against
+inventing new colors. It renders on the slate editor, the picks page, and weekly results,
+each paired with a one-line, sentence-case explanation that it does not count toward
+standings or payouts.
+
+**Deletion reuses the existing cascade relationships, no new machinery.** `Week.games` and
+`Week.entries` are already `cascade="all, delete-orphan"` (and `Game.picks` the same), so
+`POST /admin/test-week/{week_id}/delete` is a plain `db.delete(week)` after confirming
+`week.is_test_week` is actually True; a real week is refused with a flash message rather than
+silently ignored, since a stale or wrong `week_id` should never be quietly swallowed.
+
+**Deliberately not built.** No CLI command for creating a test week (the admin route is
+reachable without touching the database by hand, which is what the brief actually requires;
+a CLI command would be a second, redundant entry point for a feature whose whole audience is
+a commissioner clicking a button in the UI). No change to `run-cron`/`sync_week`: they only
+ever compute a week number from `detect_week`'s anchor arithmetic, which can never produce
+`0`, so a scheduled job can never accidentally touch or rebuild a test week, which was true
+before this phase and needed no code to stay true. No "already have a test week" special
+casing beyond `TEST_WEEK_NUMBER`'s own natural idempotency: a second "Create a test week"
+click just rebuilds the one that exists, matching how a real week's "Build the slate" button
+already behaves.
+
+**Verification.** `python -m pytest -q` passed 978 tests (961 before this phase, 17 new:
+3 in `tests/test_calendar.py` for the preseason resolution flag and its default-off proof,
+5 in `tests/test_ingest.py` for `ensure_week`/`build_slate`'s test-week path and cascade
+deletion, 1 each in `tests/test_standings.py` and `tests/test_scenarios_service.py` for the
+season-standings and scenarios-panel quarantine, 1 in `tests/test_payout_service.py` proving
+a test week scores internally but freezes no `PayoutAward`, and 6 router-level tests in
+`tests/test_app.py` covering the 403 for a non-commissioner, the end-to-end create/delete
+flow for a commissioner, and the badge/explanation actually rendering).
+
+### Phase 4, splitting site admin from commissioner
+
+**The problem.** Every commissioner-scoped and every site-admin-scoped screen lived under
+one `/admin` URL namespace, with one nav tab labeled "Admin", even though the two are gated
+by completely different dependencies underneath (`require_commissioner` vs `require_admin`)
+and the word "admin" has no business appearing on a screen a commissioner, who is never a
+site admin, can see.
+
+**The split.** `app/routers/admin.py` (commissioner tools: dashboard, settings, slate,
+members, manual job triggers, the Phase 3 test-week routes) moved from `/admin` to `/league`.
+`app/routers/payouts.py` (the Set Payouts screen and the payout summary) moved from
+`/admin/payouts` to `/league/payouts`. `app/routers/leagues.py` (site-admin-only: league
+list, league creation, view-as-commissioner) moved from `/admin/leagues` to `/site/leagues`.
+`app/routers/admin_contacts.py` (site-admin-only contact submissions) moved from
+`/admin/contacts` to `/site/contacts`. Only the prefix changed on every one of these routes;
+every route's own path suffix, and every dependency gating it, is untouched. The substitution
+was done in the order the brief specified (`/admin/leagues` first, then `/admin/contacts`,
+then `/admin/payouts`, then the remaining bare `/admin`) precisely because the three are all
+more specific prefixes of the fourth, and doing it in any other order risks a double
+substitution or a missed one.
+
+**Where the new `/site` dashboard route lives.** A brand new small router,
+`app/routers/site.py`, prefix `/site`, one route (`dashboard`). Not folded into
+`app/routers/leagues.py`: that file's own module docstring is scoped to "list every pool,
+create new ones, and view as commissioner", and a fourth, different kind of thing (a
+platform-wide summary page) living in the same file would blur what a reader expects to find
+there. The dashboard itself stays deliberately light this phase: every real pool (the hidden
+`is_preview` one excluded, the same query `leagues_page` already uses) with its member count
+and its most recently built real week's label and status, a link to `/site/leagues`, a link
+to `/site/contacts` with the current submission count, and the ephemeral-storage health
+status (`settings.is_ephemeral_storage`, reused as-is from Phase 1). It deliberately does not
+build a provider-spend section; that is Phase 5's `/site/providers`, not built here.
+
+**Redirect status code: 301 for GET, nothing for POST-only paths.** Every GET path in the old
+`/admin/...` namespace a human could plausibly have bookmarked (`/admin`, `/admin/settings`,
+`/admin/members`, `/admin/slate`, `/admin/payouts`, `/admin/payouts/summary`,
+`/admin/payouts/summary.csv`, `/admin/leagues`, `/admin/leagues/new`, `/admin/contacts`) gets
+a permanent `RedirectResponse(..., status_code=301)` from a new, tiny router,
+`app/routers/legacy_redirects.py`, mounted last in `app/main.py` so it can never shadow a
+real route. The POST-only legacy paths (every settings save, slate action, member action,
+payout edit, and so on) are NOT redirected: a 301 does not reliably preserve a POST's method
+and body across every client, and nothing in this app itself will ever issue one of those old
+POST paths again once this phase's sweep of every router, every template and every test is
+done. A `308` (which does preserve method and body) was considered and rejected as
+unnecessary complexity for paths nothing live will ever hit again.
+
+**The "acting as commissioner" lockbar banner now keys off the URL, not `active_nav`.** The
+brief's own read of the old condition (`active_nav == 'admin' and pool`) as "dashboard
+specific" does not quite match what the code did before this phase (`app/routers/admin.py`
+and `app/routers/payouts.py` both already set `active_nav = "admin"` on every one of their
+own pages, so the banner already showed across settings, members and slate, not only the
+dashboard). Still, tying the banner's visibility to a `active_nav` string that has to be kept
+in perfect sync, by hand, in every router's own `_base()` helper is exactly the kind of
+"looks scoped, quietly isn't" condition this phase is about removing. `base.html` now checks
+`request.url.path.startswith('/league')` instead: independent of which `/league` sub-router a
+future page lives in, and independent of whatever string that page's own context dict happens
+to set `active_nav` to. Verified directly: a new assertion in
+`test_viewing_as_commissioner_banner_shows_for_admin_and_never_for_a_real_commissioner` checks
+the banner on `/league/slate`, `/league/members` and `/league/settings`, not only `/league`
+itself.
+
+**Nav renames.** The commissioner-facing nav tab (desktop nav, mobile tabbar) changes from
+"Admin" (`href="/admin"`, `active_nav == "admin"`) to "League" (`href="/league"`,
+`active_nav == "league"`). The site-admin-only nav tab changes from "Leagues"
+(`href="/admin/leagues"`, `active_nav == "admin_leagues"`) to "Site" (`href="/site"`,
+`active_nav in ("site", "site_leagues", "site_contacts")`), and now points at the new
+dashboard first rather than straight at the league list, matching the dashboard's own new
+role as the entry point into every site-admin surface. `app/routers/admin_contacts.py`'s own
+`active_nav` becomes `"site_contacts"`. `app/routers/leagues.py`'s becomes `"site_leagues"`.
+
+**The "Site admin" pill on the Members roster.** `app/templates/admin/members.html` shows a
+badge next to a member whose own account has `role == "admin"`, a true and useful fact (it
+explains why that person can't be removed the normal way), but it literally contained the
+word "admin". Renamed the display string only, to "Platform owner"; the underlying
+`User.role == "admin"` check is untouched. `app/templates/admin/leagues.html`,
+`league_new.html` and `contacts.html` (all three site-admin-only, never reachable by a
+commissioner) keep "Site admin" freely, per the brief's own exception. One further, smaller
+consistency edit on the same site-admin-only leagues page: its "Admin dashboard" link/copy,
+which points at the newly renamed `/league` page, became "League dashboard" so it does not
+describe that page by a name the page itself no longer uses; this one is not required by the
+no-"admin"-on-a-commissioner-page rule (only a site admin ever sees this page) but was a
+one-line fix for internal consistency while already touching that file.
+
+**The automated check.** A static grep over the templates would false-positive on
+`admin/index.html`'s "Provider budgets" section, real source text gated behind
+`{% if is_site_admin %}` that a real commissioner's browser never receives. Added
+`test_league_pages_never_render_the_word_admin_for_a_real_commissioner` in `tests/test_app.py`
+instead: a genuine non-admin commissioner (built with the existing
+`_make_pool_commissioner_who_is_not_admin` fixture, deliberately not `world`'s own
+`boss@example.com`, which is both `role="admin"` and a real commissioner at once) hits every
+`/league/...` GET page that renders and asserts `"admin" not in response.text.lower()` against
+the actual response body.
+
+**Verification.** `python -m pytest -q` passed 998 tests (984 before this phase's own new
+tests, 14 new: 6 parametrized cases proving no `/league/...` page ever renders the word
+"admin" for a real commissioner, 2 permission-boundary tests for the new `/site` dashboard
+(403 for a regular player, 403 for a non-admin pool commissioner), 2 tests for the dashboard's
+own content (pool listing with the preview pool excluded, contact count, links to
+`/site/leagues` and `/site/contacts`, ephemeral-storage status), and 10 parametrized cases
+proving every legacy GET path 301s to its new home). `python -m ruff check .` and
+`python -m black --check .` both clean. `grep -rn "—" app/ tests/ SPEC.md README.md` returns
+only the pre-existing assertion in `tests/test_app.py` that em dashes are absent.
+
+### Phase 5, provider controls move to site admin
+
+**The problem.** `/league/slate`'s build form carried two checkboxes: "Open it for picks
+straight away" (redundant, the same page already has a dedicated "Publish this week" button
+once a draft exists) and "ESPN only, spend no API credits". The second one asked a
+commissioner to reason about something they have no way to reason about: what a provider
+credit costs, whether the shared account is near its monthly cap, or that ticking it degrades
+their spreads. It was a billing lever dressed as a slate-quality checkbox, set per build by
+whichever commissioner happened to be clicking, which is how a shared budget gets spent
+without anyone deciding to spend it. Phase 4 left the "Provider budgets" section on `/league`
+(gated `{% if is_site_admin %}`) as a placeholder, explicitly deferring the real fix to this
+phase.
+
+**The fix, in one sentence.** The checkbox is gone; in its place is one global, persisted,
+site-admin-only switch (`/site/providers`) that every league's build respects at once, and the
+old "Provider budgets" section moved off `/league` entirely onto that same page.
+
+**Where the global switch lives: a new, deliberately single-purpose table, not a Pool
+column and not a generic settings table.** `app.models.PlatformSetting`, one row
+(`espn_only: bool`, default `False`), fetched via a new `get_platform_settings(db)` helper in
+`app/providers/http.py`, right next to `get_usage`, whose own get-or-create shape it copies
+exactly: read `select(PlatformSetting)`, and if the table is still empty, create and flush a
+default row. Not a `Pool` column: the brief is explicit that this switch is platform-wide,
+affecting every league's builds at once, and a per-pool column would let it drift into a
+per-league preference the moment two commissioners disagreed about it, exactly the shared
+resource problem this phase exists to fix. Not a generic key-value settings table either:
+`espn_only` is the only platform-wide toggle this codebase needs today, and building a
+generic table for one boolean is exactly the over-engineering the brief warned against.
+Migration `b1c4f8a2d5e7_add_platform_settings.py` creates the table with a matching
+`server_default=false()`, the same belt-and-braces pattern `a3f7c9d21b46_add_is_preview_to_pools.py`
+already used for a boolean default. Read fresh from the database on every call, never cached
+in process memory or on `settings` (a `pydantic-settings` env-var object, which would need a
+restart to pick up a change and was explicitly ruled out by the brief for exactly that
+reason): a site admin's toggle takes effect on the very next build, no redeploy needed.
+
+**How `build_slate` sources it: an AND against the existing `allow_metered` parameter, not a
+parameter removal.** `ingest.build_slate(..., allow_metered: bool = True, ...)` keeps its
+existing signature and default. Internally, right before calling `resolve_spreads`, it computes
+`effective_allow_metered = allow_metered and not get_platform_settings(db).espn_only` and
+passes that through instead of the raw parameter. `resolve_spreads` itself is untouched: its
+own `allow_metered` parameter and default are exactly as they were, since it is the lower
+level function and every existing direct caller of it (the idempotency test in
+`tests/test_ingest.py`, which deliberately bypasses `build_slate` to exercise the pre-anchor
+fallback) still means exactly what it always meant. This was chosen over threading a second
+parameter through `resolve_spreads`, or having `resolve_spreads` read the switch itself,
+because it keeps the AND in exactly one place, keeps `resolve_spreads` a pure function of its
+own arguments (easier to test in isolation, which the two new
+`test_build_slate_espn_only_switch_on/off_*` tests in `tests/test_ingest.py` rely on), and
+means every existing caller of `build_slate` needed zero changes to its call site to pick up
+the new global behaviour, the smallest-diff option the brief explicitly asked for. The AND is
+deliberately one directional: passing `allow_metered=True` can never force metered calls back
+on while the global switch is on (`True and not True` is `False`), but passing
+`allow_metered=False` always forces ESPN only regardless of the switch (`False and anything`
+is `False`). That asymmetry is the whole point: nobody, commissioner or CLI operator, spends a
+credit while the switch is on, but a trusted caller can always be *more* restrictive than the
+global default, never less.
+
+**What happened to `app/cli.py`'s own `--no-metered` flag: kept, unchanged, now reads as "force
+this one run ESPN only regardless of the global switch".** `build-slate --no-metered`,
+`sync-week --no-metered` and `seed-preview --no-metered` all still pass
+`allow_metered=not no_metered` exactly as before. Before this phase that literally meant "skip
+the metered providers for this run"; after this phase, thanks to the AND above, it still means
+exactly that, an override that can only make a run *more* restrictive, never less. A CLI
+operator is trusted (this whole codebase's existing convention, see `app/cli.py`'s module
+docstring: "Render Cron Jobs call these, there is no in-process scheduler," and every command
+here already runs unsupervised), so keeping a way to force one manual run ESPN only, for
+example while debugging a provider outage, without needing to flip the global switch and
+remember to flip it back, is a reasonable convenience. What the flag could **not** be given,
+and was not: a way to force metered calls back on while the global switch is on. There is no
+`--force-metered` flag and none was added; that would defeat the entire point of a global
+switch the site admin controls. `build_slate_cmd`, `sync_week_cmd` and `seed_preview_cmd`
+needed zero code changes, exactly the "keep every existing caller working with minimal
+changes" outcome the brief asked for.
+
+**`/league/slate/build`: down to one field.** `app/templates/admin/slate.html`'s build form
+lost both `<div class="field">` blocks (`publish`, `no_metered`) and their help text; only
+`week_number` and the "Build the slate" button remain. `POST /league/slate/build`
+(`app/routers/admin.py`, `slate_build`) no longer declares `publish` or `no_metered` as
+`Form(...)` parameters at all, and no longer passes `allow_metered` or `publish` to
+`build_slate`, so a build always follows `pool.auto_publish` (`publish=None`, `build_slate`'s
+own default), exactly what the removed checkbox's own help text already promised for its
+unchecked state, and always respects the global switch, since `allow_metered` now defaults to
+`True` and the AND happens inside `build_slate` itself. FastAPI silently ignores unknown form
+fields rather than 422ing, so a stale bookmarked form that still posts the old field names (a
+browser tab left open across the deploy) degrades gracefully instead of erroring; a test pins
+this (`test_slate_build_route_ignores_publish_and_no_metered_even_if_posted`).
+`app/routers/admin.py`'s `test_week_create` route was already not passing `allow_metered`
+(it only ever set `publish=True`, a deliberate, non-user-controlled choice, unchanged), so it
+picks up the global switch automatically too: a test week's build now also respects "ESPN
+only" the same way a real week's does, which is the correct reading of "global, affecting
+every league's builds at once."
+
+**The commissioner's neutral note.** `slate_page` (`app/routers/admin.py`) now passes
+`espn_only: get_platform_settings(db).espn_only` to `admin/slate.html`, which shows, inside
+the build card, whenever the switch is on: "Some games may not have a line yet. You can set
+one by hand." No mention of credits, budgets or providers, matching SPEC.md Section 3h's
+existing sentence-case, plainspoken, no-billing-language-to-a-commissioner rule; a test
+(`test_slate_page_shows_neutral_note_when_espn_only_is_on_and_never_billing_language`) checks
+both the note's presence and the absence of "api credit", "monthly budget", "spend no" and
+"billing" anywhere on the rendered page. This is read fresh on every render of the slate page,
+same as everywhere else this phase touches the switch, and shown regardless of whether this
+particular build actually hit a missing spread, per the brief.
+
+**`/site/providers`: the old "Provider budgets" markup, moved verbatim, plus the switch.**
+Added to `app/routers/site.py` rather than a new router file: the file's own module docstring
+already flagged `/site/providers` as "Phase 5's job, not yet built" and it is a light,
+`require_admin`-gated page in exactly the same shape as the existing `/site` dashboard route
+in the same file, so a second small file would have split one coherent "site admin surfaces"
+concern for no real benefit. `GET /site/providers` reuses `usage_report(db)` and
+`provider_warnings(db)` from `app/providers/http.py` completely unchanged (per the brief,
+"reuse it verbatim, do not rewrite it"), and `app/templates/admin/site_providers.html` is the
+`budget-grid`/`budget-card`/`meter` markup from the old `admin/index.html` section, moved
+essentially unchanged (same CSS classes, same fields), with one addition: a "Key: set / NOT
+SET" line per provider, reusing `usage_report`'s own `configured` boolean (itself
+`bool(_api_key_for(provider))`, the identical presence-only check `app/cli.py`'s `doctor`
+command already uses), so the value itself is never rendered, only whether it is present.
+`POST /site/providers/espn-only` flips `PlatformSetting.espn_only` and redirects back with a
+flash message; it is a plain toggle with no form value, since the page only ever shows one
+button at a time ("Turn ESPN only on" or "Turn ESPN only off"), matching the brief's own "flips
+the persisted setting" phrasing.
+
+**`/league` loses "Provider budgets" entirely, not just its own gate.** `app/routers/admin.py`'s
+`dashboard` route no longer computes or passes `usage`, `warnings` or `is_site_admin`;
+`admin/index.html` lost both the `{% if is_site_admin %}...{% endif %}` "Provider budgets"
+section and, one level up, its own "Feed warnings" section (the `{% if warnings %}` block
+above "Where the pool stands"), which rendered the exact same `provider_warnings(db)` output
+the router only ever populated for `user.is_admin` (an empty list otherwise, so the block
+never actually rendered for a real commissioner, but it depended on the same context key this
+phase removes, and it is the same billing-adjacent content moving to `/site/providers`, so
+leaving a dead, never-populated block behind would be worse than removing it). This is a
+different call site from `slate_page`'s own `provider_warnings(db)` call (the "Feed warnings"
+section on `/league/slate`, driven by `spread_source`/missing-line state, not by provider
+budgets specifically), which the brief explicitly said not to touch and was not touched.
+
+**Nav and dashboard wiring.** `app/templates/base.html`'s "Site" tab's active-state check
+gained `'site_providers'` alongside `'site'`, `'site_leagues'`, `'site_contacts'`, so it stays
+highlighted on the new page the same way it already does on the other three site-admin pages.
+`admin/site_dashboard.html` gained a "Providers" button next to "Contact submissions" and
+"Leagues", so the new page is discoverable from the entry point into every site-admin surface,
+matching how the other two site-admin pages are already linked from there.
+
+**Verification.** `python -m pytest -q` passed 1008 tests (998 before this phase's own new
+tests, 10 new: 2 in `tests/test_app.py` proving the build form no longer needs or is broken by
+`publish`/`no_metered`, 1 proving the neutral note on `/league/slate` and the absence of
+billing language, 2 permission-boundary tests for `/site/providers` (403 for a regular player,
+403 for a non-admin pool commissioner), 1 content test for `/site/providers` (key presence,
+the budget grid, the switch's current state), 2 permission-boundary tests for the toggle route,
+1 test proving the toggle persists and reads back fresh across two separate requests; and 2 in
+`tests/test_ingest.py` proving the global switch actually gates `odds_api.fetch_spreads` and
+`cfbd.fetch_lines` inside `build_slate`, not just the report's own bookkeeping, one with the
+switch on (both calls skipped even though `allow_metered` defaults to `True`) and one with it
+off (both calls made, exactly as before this phase)). `python -m ruff check .` and
+`python -m black --check .` both clean. `grep -rn "—" app/ tests/ SPEC.md README.md` returns
+only the pre-existing assertion in `tests/test_app.py` that em dashes are absent.
+
+### Phase 6, slate build interaction
+
+**The problem.** Clicking "Build the slate" on `/league/slate` is a plain, synchronous HTML
+form POST with zero loading feedback, and a real build can legitimately take several seconds to
+just under a minute (ESPN for the schedule, then up to `MAX_CORE_ODDS_LOOKUPS` (60) ESPN core
+odds lookups, one per candidate game still missing a spread, then possibly one Odds API and one
+CFBD call). A commissioner staring at an unchanged page after ten seconds reasonably assumes
+the click did nothing and clicks again, which used to be able to start a second, fully
+independent `build_slate` call racing the first. Reproduced and measured for real: see
+`REMEDIATION-REPORT.md`'s `## Phase 6 notes`, 6.41 seconds for a small, ESPN-only preseason
+build; a full 20-game, two-league build with metered fallbacks would run considerably longer.
+
+**Loading state: htmx on the existing button, not a new pattern.** `admin/slate.html`'s "Build
+a slate" form keeps its plain `method="post" action="/league/slate/build"` (the no-JS
+fallback), and the button itself additionally carries `hx-post`, `hx-target="this"`,
+`hx-swap="none"` and `hx-include="closest form"`, exactly the shape `picks.html`'s own "Save
+picks" button already uses (hx-* attributes on the button, not the form, `hx-include` pulling
+the surrounding fields in). `hx-swap="none"` because this route never returns a partial to
+swap, only ever a redirect (see below), so there is nothing to render into `hx-target` in the
+success case; `hx-target="this"` is set anyway so an unexpected non-redirect response (a bug,
+not a designed path) has somewhere harmless to land rather than replacing the whole page.
+`app/static/app.js` gained one more `htmx:beforeRequest`/`htmx:afterRequest` pair, following
+the exact event pair and one-badge-driven-by-JS shape the picks page's own
+`data-save-btn`/`data-save-state`/`markSaved` pattern already established: on
+`beforeRequest`, disable the button, swap its label to "Building the slate", and reveal a
+`data-build-note` paragraph explaining the ESPN-plus-possibly-Odds-API-and-CFBD cost and that it
+can take up to a minute; `afterRequest` restores both. `hx-disabled-elt` (a native htmx 2.x
+attribute that would do the disabling automatically) was deliberately not used: nothing else in
+this codebase uses it, and the manual JS toggle keeps this consistent with the one loading-state
+pattern already in use rather than introducing a second one for a single button. No new CSS: the
+existing `.btn[disabled]` treatment (`app/static/app.css`) already renders a disabled primary
+button correctly, and the progress note reuses the plain `.form-hint` class already used
+everywhere else on this same form.
+
+**Why the response has to stay a redirect, and why that redirect needs a header for htmx.**
+The brief explicitly asked to keep `slate_build`'s response shape a redirect-with-flash, not
+restructure it into a partial. htmx follows a plain 303 transparently at the XHR level (its own
+documented behaviour), which sounds convenient until you notice what "transparently" means
+here: the browser's `XMLHttpRequest` follows the redirect itself and hands htmx the
+*redirected-to* page's full HTML as this request's own response, which htmx would then swap
+into the button's small `hx-target`, corrupting the page with a nested full `<html>` document,
+exactly the trap `app/routers/payouts.py`'s own module docstring already documents for this
+same reason. The fix already exists in this codebase: `app/routers/picks.py`'s
+`picks_lock`/`picks_unlock` routes return `Response(status_code=200, headers={"HX-Redirect":
+target})` for an htmx request instead of a 303, which htmx turns into a real
+`window.location` navigation rather than a swap. `slate_build` now does the same, via a new
+`_redirect_or_hx(request, target)` helper in `app/routers/admin.py` (checks `request.headers.get
+("HX-Request") == "true"`, otherwise falls back to the existing plain `_redirect`), used for
+every one of this route's exit paths (success, the pre-existing `ValueError` branch, and the
+two new exceptions below), so a commissioner whose browser follows the htmx path always lands
+on a full, freshly rendered `/league/slate` page with the flash message on it, identical to
+what the no-JS form post has always produced. This also means the loading state clears itself
+naturally on every real outcome (the whole page, including the button, is replaced by
+navigation); `htmx:afterRequest`'s manual reset in `app.js` only matters for the one path that
+never reaches the server at all, a genuine network failure.
+
+**Idempotency: an in-process, lock-guarded set, not a queue and not a database lock.** A second
+build request for a week already being built is refused outright
+(`ingest.BuildInProgress`, "This week is already being built. Wait for it to finish."), never
+queued. This app runs as a single `uvicorn` process with no `--workers` flag (`render.yaml`'s
+`startCommand`), so a plain, module level `set[tuple[pool_id, week_number]]` guarded by a
+`threading.Lock` (`app/services/ingest.py`: `_builds_in_progress`, `_builds_lock`,
+`_acquire_build_lock`/`_release_build_lock`, wrapped as the `slate_build_guard` context
+manager) is a real, sufficient guard: check-and-add happens under the lock, so two threads
+racing the same key can never both win. **This would not be sufficient if this service were
+ever run with multiple worker processes or across multiple instances**, since each process gets
+its own, unshared copy of the set; a future move to `--workers N` or horizontal scaling would
+need a database row or an external lock (Redis, Postgres advisory lock) instead. Not built now:
+out of scope for a single free-tier Render instance, and speculative infrastructure for a
+deployment shape this app does not use would be exactly the over-engineering the brief warns
+against elsewhere. The guard lives inside `build_slate` itself (a thin wrapper, `build_slate`,
+now wraps the actual work, renamed `_build_slate_impl`, in `slate_build_guard(pool.id,
+week_number)` plus a wall clock duration log line), not only in the router, so every caller
+(the commissioner's route, `sync_week`'s cron path, every `app/cli.py` command) is protected
+identically, and a test can acquire the guard directly to simulate a race deterministically
+without real threads (`tests/test_ingest.py`,
+`test_build_slate_refuses_when_the_guard_is_already_held_for_that_week`). The router maps
+`BuildInProgress` to a flash-and-redirect exactly like the pre-existing `ValueError` branch,
+no new response shape.
+
+**Hard timeout: a checked deadline threaded through, not a signal-based interrupt.** A whole
+`build_slate` call had no wall-clock budget of its own, only each individual HTTP call's own
+`settings.http_timeout_seconds`/`http_retries`, so a slow or hanging provider could hold a
+build open indefinitely. `app/config.py` gained `slate_build_timeout_seconds: float = 90.0`.
+`app/services/ingest.py` gained a small `_Deadline` dataclass (`at: float` from
+`time.monotonic()`, `budget_seconds` for the message) with one `check(what)` method, threaded
+as an optional `deadline` keyword through `fetch_candidates` and `resolve_spreads`, checked
+once before each ESPN schedule call (naming "ESPN for the NFL schedule" or "...college
+schedule") and once before each of the three spread-resolution stages (ESPN core odds, The
+Odds API, CollegeFootballData), never inside the per-game core odds loop itself. That keeps
+every check at "major step" granularity rather than a tight per-game loop, the same periodic
+wall-clock check `app/scenarios.py`'s own 2 second budget already uses (see that module's own
+docstring) rather than a true preemptive, signal-based interrupt, which Python cannot cleanly
+deliver mid-`httpx` call anyway without real risk of leaving a connection or a database
+transaction in a half-finished state. `BuildTimeout`'s message names exactly which stage was
+about to run, for example "Build timed out after 90 seconds while waiting for a response from
+The Odds API." `build_slate(..., time_budget_seconds=...)` lets a caller (chiefly tests)
+override the 90 second default with a small, deterministic value rather than lowering the
+setting globally; `0` or a negative number disables the budget entirely (used nowhere in this
+app, kept only because it is what "no deadline built" naturally falls out to, and because
+forcing every caller to always pass a positive number would make `_make_deadline`'s own
+contract more fragile, not less). The router maps `BuildTimeout` to the same flash-and-redirect
+shape as `BuildInProgress` and the pre-existing `ValueError`.
+
+**The success flash: a new sentence, not an edit to `IngestReport.summary()`.** The brief's
+exact requested wording ("Week 1 built. 20 games, 8 NFL and 12 college, 0 missing a line.")
+does not match `summary()`'s own existing sentence ("Week {N}: {candidates} candidates, {with_spread}
+with a spread, {selected} on the slate. league mix: ..."), which several other callers
+(`app/cli.py`'s five build/sync commands, `app/services/demo.py`) still rely on verbatim; editing
+it in place would have changed CLI and demo-seeding output for no reason this phase asked for.
+Instead, `app/routers/admin.py`'s `slate_build` builds the new sentence directly from
+`IngestReport` fields, only when a real build actually happened (`report.selected and not
+report.locked_out`, so the "picks already exist, slate left alone" and "dead end, nothing to
+select from" paths keep using `summary()` exactly as before, since "Week N built" would be
+misleading for either). `IngestReport` gained one new field, `missing_spread: int`, computed in
+`build_slate` right after `apply_slate` as `sum(1 for c in result.selected if c.closeness is
+None)`: `Selected` (`app/slate.py`) carries `closeness`, not `spread_home` directly, but
+`closeness_of(spread_home)` is `None` exactly when `spread_home` is, so this reads the same
+fact without a second database round trip back through the games just selected. League counts
+in the sentence come straight from `report.per_league`, defaulting a missing league to 0 rather
+than omitting it, since this app only ever has two leagues and always showing both ("0 NFL and
+20 college" for a college-only pool) is simpler and more consistent than conditionally
+suppressing one.
+
+**Verification.** `python -m pytest -q` passed 1017 tests (1008 before this phase's own new
+tests, 9 new: `tests/test_ingest.py` gained
+`test_slate_build_guard_rejects_a_second_concurrent_build_for_the_same_week` and
+`test_build_slate_refuses_when_the_guard_is_already_held_for_that_week` (the guard, acquired
+directly to simulate a race deterministically, and through `build_slate` itself, proving no
+`Game` rows are written when refused), `test_build_slate_times_out_naming_the_provider_in_flight`
+and `test_build_slate_schedule_call_times_out_naming_espn_and_the_league` (a slow monkeypatched
+provider call plus a tiny budget, deterministic, naming The Odds API and ESPN respectively),
+and `test_build_slate_logs_wall_clock_duration`; `tests/test_app.py` gained
+`test_slate_build_form_has_the_htmx_loading_attributes` (the rendered button and note markup,
+not just the route), `test_slate_build_via_htmx_gets_an_hx_redirect_not_a_swapped_partial`,
+`test_slate_build_refused_with_a_specific_message_when_already_running` (both the plain-post
+and htmx response shapes), and `test_slate_build_flashes_the_built_summary_with_real_numbers`
+(a real cached-fixture build, asserting the flash sentence against numbers read back from the
+database after the build, never a predicted or hard coded value). `python -m ruff check .` and
+`python -m black --check .` both clean. `grep -rn "—" app/ tests/ SPEC.md README.md` returns
+only the pre-existing assertion in `tests/test_app.py` that em dashes are absent.
+
+**Tested by code inspection, not a live browser click.** No browser automation tool was
+available in this environment for this phase, so the actual defect fix (does a real mouse
+click on the real button actually show the loading state and land on the built week) was
+verified by: reading the rendered HTML directly (the button is a real `<button type="submit">`
+inside the real `<form>`, no stray `disabled` attribute, correct `hx-*` attributes, the note
+starts `hidden`), reading `app/static/app.js` end to end to confirm nothing else in this file
+attaches a submit-swallowing listener to this form or button (the only other `htmx:beforeRequest`
+listener targets `[data-save-btn]`, a different button entirely, on a different page), and
+exercising the htmx request/response contract through `TestClient` with an `HX-Request: true`
+header, which confirms the server sends exactly the header htmx's own documented redirect
+handling expects. This is real evidence the wiring is correct, but it is not the same as
+watching a click happen in a browser; flagged explicitly per the brief's own instruction to say
+so rather than imply more than was actually verified.
+
+### Orchestrator follow-up: live browser verification of Phase 6, and a real bug found
+
+Since a browser was not available to the Phase 6 sub-agent, the orchestrating session did the
+live click test it flagged as missing, against a throwaway seeded database. Result: the real
+fix works. A precisely targeted, real mouse click on "Build the slate" does send `POST
+/league/slate/build` and land back on the built week, confirmed by reading the local server's
+own access log and the browser's network panel, not just a screenshot. Two false alarms during
+that testing, both self-inflicted, recorded here so a future session does not repeat them:
+first, `elementFromPoint` at a clicked coordinate landed on an unrelated `div.card-head`
+because the page had been scrolled between taking the reference screenshot and issuing the
+click; the fix was to always screenshot immediately before the click, never after an
+intervening scroll or navigation. Second, a synthetic `Element.click()` call and a real CDP
+mouse click are not perfectly interchangeable for diagnosing this class of bug and both need
+checking; the synthetic call worked even in the one case the real click's coordinate had gone
+stale, which is exactly why the original bug report ("posting via JavaScript worked, a real
+click did not") deserves a genuine live click test rather than a synthetic one, and why this
+follow up existed at all.
+
+**A real, separate bug was found and fixed in the process, not by Phase 6's own change.** The
+demo pool (`app/services/demo.py`) never set `Pool.week1_anchor_date`. Phase 2 remediation
+made `build_slate` refuse outright without one; the demo's own three weeks are seeded through
+`apply_slate` directly and never depended on it, so this was invisible until a real "Build the
+slate" click was tried against the demo pool specifically, which is exactly what happened
+during this verification pass. The refusal is harmless (it returns before touching any
+existing `Week`/`Game` rows, confirmed by re-reading the slate page afterward and finding all
+20 games untouched), but it is confusing, and since `render.yaml`'s start command reseeds this
+exact pool on every deploy, it would have shipped as a real, reproducible defect on the live
+demo. Fixed by giving the demo pool a real `week1_anchor_date`
+(`app.services.calendar.default_week1_anchor_date(DEMO_YEAR)`, the same helper Phase 2 already
+built), with a regression test (`test_seed_demo_pool_has_a_week1_anchor_date`,
+`tests/test_demo.py`) asserting it is set and falls on a Saturday. This fix is committed
+separately from Phase 6's own commit, since it is a Phase 2 gap surfaced while verifying
+Phase 6, not a Phase 6 defect.
+
+### Phase 7, transactional email
+
+The app could not send email at all: every invite was copy-and-paste-only, and there was no
+password reset. Note on process: the first attempt at this phase stalled for hours with zero
+file changes ever written and had to be killed by the orchestrating session; a second, fresh
+attempt made real, correct progress (the module design, the routes, the migration, the
+templates) but was itself killed mid-flight, before writing its own tests or this section,
+once it became clear the same stall pattern might be starting again. The orchestrating session
+verified the surviving code directly (read every new and changed file, ran the gate, ran a
+real upgrade/downgrade/upgrade migration cycle against a scratch database), found it correct
+and well designed, fixed the one real defect it found (see below), wrote the missing test
+coverage, and is writing this section. Everything described below reflects what is actually in
+the committed diff, not what was planned.
+
+**Provider: Resend, called directly over its REST API with `httpx`, no SDK added and no new
+dependency in `requirements.txt`.** Resend was chosen over SendGrid/Postmark/Mailgun for the
+free tier (3,000 emails a month, 100 a day, comfortably past anything a single pool ever
+needs) and a plain, small JSON API (one POST to `/emails`) that needs nothing beyond `httpx`,
+already a dependency. Raw SMTP was rejected outright: this codebase has no SMTP client
+anywhere, hand rolling one is real surface area (TLS, auth, MIME) an HTTP API entirely avoids,
+and every transactional provider's REST API is simpler to call, test, and reason about than
+SMTP from a server-rendered app that already uses `httpx` for three other integrations.
+
+**The failure contract is the actual point of this phase, not a side detail.**
+`app/services/mail.py`'s `send()` returns a `MailLog` row ONLY on a real, successful send.
+Every other outcome, mail turned off or not configured (`MailDisabled`), the sender over their
+hourly limit (`MailRateLimited`), or the provider call itself failing (`MailSendFailed`),
+raises instead of returning a status a caller could forget to check. There is no boolean
+return value to ignore: a caller either has a `MailLog` row in hand, or it is inside an
+`except mail.MailError` block. Every one of Phase 7's four call sites (`app/routers/leagues.py`
+commissioner invite, `app/routers/admin.py` player invite, `app/routers/auth.py` password
+reset, `app/services/ingest.py`'s week-published notification) follows this same shape: try
+the send, on `MailError` show the visitor or commissioner the real reason and point back at
+the copy-and-paste path that already existed, never silently swallow the failure.
+
+**One deliberate, documented exception to "always surface the failure":**
+`forgot_password_submit` (`app/routers/auth.py`) catches `mail.MailError` and shows the exact
+same generic "if an account exists, a reset link was sent" message whether the send succeeded,
+failed, or the address was not real at all. This is intentional, not a violation of the rule
+above: surfacing a real send failure here would let a visitor distinguish "your email exists
+but sending failed" from "no such account," which is exactly the account-enumeration hole
+`login_submit`'s own long-standing "one message for both cases" convention already guards
+against elsewhere in this file. The failure is never actually lost: `mail.send` still writes
+its `MailLog` row before raising, so the site admin can see it at `/site/mail` same as any
+other failure; only the anonymous visitor's response is deliberately uninformative.
+
+**Rate limiting is backed by `MailLog`, not an in-process counter.** Phase 1 already
+established that this app can restart at will (an in-memory structure would silently reset a
+sender's budget on every redeploy or sleep cycle); counting real `MailLog` rows with
+`result == "sent"` in the trailing hour, per `actor_key`, survives a restart the same way every
+other real state in this app already needs to. `actor_key` is `"user:{id}"` for a signed in
+sender (a site admin or commissioner) or `"email:{address}"` for the one anonymous case, a
+password reset request, so a burst of reset requests against one address cannot be inflated by
+switching accounts, and a busy commissioner's invite volume never throttles anyone else.
+
+**Two new tables, one new `Pool` column, one migration (`c2a91e6f7b3d`).**
+`PasswordResetToken` stores a SHA-256 hash of the raw token, not bcrypt: bcrypt's slow, salted
+hash exists to resist offline brute forcing of a low entropy, human-chosen secret, and a reset
+token is a 256 bit value from `secrets.token_urlsafe(32)`, already far past brute forceable, so
+a fast, deterministic hash is used instead, which is what lets the lookup be an exact index
+match rather than a full table scan verifying every pending row by hand. `used_at` (set once,
+never cleared) and `expires_at` (checked on every attempt regardless of `used_at`) are both
+independent gates, so neither an old unused token nor a spent one can be replayed.
+`Pool.notify_week_published` defaults to `False`; wired into `ingest.publish_week`, which now
+returns the list of any notification warnings (a signature change from Phase 2's version,
+which returned nothing) so its callers can flash them without a failed send ever blocking or
+undoing the publish itself. Verified upgrade, downgrade, upgrade clean on a scratch database.
+
+**A real, separate bug found and fixed while reviewing this phase's surviving work:**
+`app/templates/admin/settings.html`'s new week-published-notification help text originally
+read "...Only works when the site admin has email turned on; see /site/mail for that status,"
+which both names a page a commissioner cannot reach and violates Phase 4's rule that the word
+"admin" never reaches a commissioner's screen (caught immediately by
+`test_league_pages_never_render_the_word_admin_for_a_real_commissioner`, which the killed
+agent's own unfinished work had not yet run against). Reworded to "This only takes effect once
+email sending is turned on for the whole site," no page reference, no "admin."
+
+**Test coverage added directly by the orchestrating session** (the killed agent had written
+none): `tests/test_mail.py`, unit tests for `send()`'s full failure contract (success,
+disabled, unconfigured-but-enabled, provider failure, rate limiting including that it is
+scoped per actor and only counts real sends, never failed or disabled ones) and
+`text_to_html`'s escaping. `tests/test_app.py` gained integration coverage: a full password
+reset round trip (request, recover the link from the intercepted send, set a new password, log
+in with it), single-use and expiry enforcement, account-enumeration-proof messaging, both
+invite routes' permission gates and actual delivery (including multiple addresses for the
+player invite), a real send failure surfacing to the commissioner rather than a silent
+success, `/site/mail` being site admin only, and the week-published notification firing only
+when the pool has opted in. Test count after Phase 7: 1041 (+23 over Phase 6's 1018).
+
+**Deliberately left unbuilt:** no email digest or unsubscribe mechanism (not asked for; the
+one notification type is opt-in per pool, at the commissioner's own discretion, not per
+player); no retry/backoff on a failed send (a failed send is surfaced immediately to a human
+who can just try again, matching this phase's own "fail loudly" principle rather than adding a
+queue for a low volume feature); no HTML email template system beyond `mail.text_to_html`'s
+minimal escaped-paragraphs conversion (every email in this app is short and plain, matching
+the existing plainspoken voice, not a marketing-styled template).
+
+### Phase 8, first-run experience
+
+The original bug report: a brand new account landed on "This week's preview is not ready yet.
+Check back soon." with no next step, and `/leagues`/`/leagues/new` 404ed a signed out visitor
+instead of redirecting to sign in. Five things were checked or fixed.
+
+**1. Router audit: every authenticated route already redirects, none 404s.** The literal
+`/leagues` and `/leagues/new` paths from the bug report no longer exist anywhere in this
+codebase; Phase 4's `/admin` -> `/league` + `/site` split removed them outright and nothing
+reintroduced them since. The real, current-day question was audited directly: every route in
+every file under `app/routers/` (`admin.py`, `admin_contacts.py`, `auth.py`, `leaderboard.py`,
+`leagues.py`, `legacy_redirects.py`, `legal.py`, `payouts.py`, `picks.py`, `public.py`,
+`results.py`, `site.py`) was read in full and its dependency chain traced by hand. Every route
+is either deliberately public (`get_current_user`, which never raises: login, register,
+forgot/reset password, the legal pages, the public marketing pages, and the GET-only legacy
+301 redirects) or resolves through `require_user` directly or transitively (`require_admin`,
+`require_commissioner`, `require_full_commissioner`, and `get_active_pool` all wrap
+`require_user`, `app/auth.py`), which raises a 303 to `/login` rather than ever letting a 404
+happen. `app/main.py`'s `http_exception_handler` already appends `?next=<path>` to that
+redirect for any 303 outside `/` and `/login`. No route was found where an ID lookup or other
+dependency ran before the auth check: every `db.get(Pool, pool_id)`-style lookup by path
+parameter (`app/routers/leagues.py`'s `{pool_id}` routes, `app/routers/admin.py`'s
+`{member_id}`/`{week_id}` routes, `app/routers/payouts.py`'s `{rule_id}`/`{user_id}`/
+`{award_id}` routes) happens inside the route body, which FastAPI never runs until every
+`Depends` on the signature, auth included, has already resolved. This phase found no route to
+actually fix here, only a genuine, real audit result: it was already correct. Added
+`tests/test_app.py::test_every_authenticated_route_redirects_a_signed_out_visitor_to_login`
+(a representative GET from every router file that has an authenticated route: `/picks`,
+`/standings`, `/results`, `/join`, `/league`, `/league/settings`, `/league/members`,
+`/league/slate`, `/league/payouts`, `/league/payouts/summary`, `/site`, `/site/providers`,
+`/site/mail`, `/site/contacts`, `/site/leagues`, `/site/leagues/new`) asserting a 303 to
+exactly `/login?next=<path>`, plus
+`test_a_genuinely_nonexistent_route_404s_honestly_rather_than_faking_a_redirect` against the
+two literal old bug report paths as a negative control, proving a route that really does not
+exist still gets an honest 404, not a redirect that would wrongly imply it exists.
+
+**2. The poolless empty state was already built, and holds up under direct verification.**
+`GET /picks` (`app/routers/picks.py`) catches `get_active_pool`'s 403 for a poolless user and
+renders `_preview_page` instead (Post-launch fixes, predating this remediation). Read
+`picks.html`'s state 0 directly: the "This is a preview" panel, with its "Enter a join code"
+(`/join`) and "Start your own league" (`/pricing`) buttons, renders unconditionally at the top
+of that state, before the `{% if week and games %}` check that decides whether the slate
+itself or the honest "not ready yet, check back soon" message renders underneath it. The
+"check back soon" wording only ever replaces the slate, never the actionable panel above it,
+so a poolless visitor can never actually reach a bare dead end, in either case: a real preview
+pool with no week built yet, or no preview pool seeded in the database at all. This was true
+before this phase and needed no fix, only a test locking it down, since none previously
+asserted the buttons stayed present in the no-slate-built case specifically. Strengthened
+`test_poolless_user_with_no_preview_slate_built_sees_an_honest_empty_state` to assert both the
+"not ready yet" copy and the two buttons appear together, and added
+`test_poolless_user_with_no_preview_pool_seeded_at_all_still_sees_actionable_options` for the
+stronger case (no `is_preview` row in the database whatsoever, a totally fresh deployment).
+
+**3. The public preview can now go stale, and `run-cron`/`doctor` fix that.** The preview
+pool's slate used to be refreshed only by the explicit, human-triggered `seed-preview` command,
+deliberately excluded from `run-cron`'s pool loop so an anonymous visitor's page view could
+never itself trigger a metered provider call (Post-launch fixes; read that reasoning and
+`app/services/preview.py`'s own docstring before changing anything here). That reasoning is
+about what a request handler may trigger, not about what an operator-scheduled cron tick may
+touch, and a scheduled `run-cron` tick is exactly as controlled and human-owned as the "real
+pools already get refreshed by it" precedent it was being compared against. `app/cli.py`'s
+`run_cron` was refactored: the per-pool sync/fetch/score block became a small `_cron_pass(db,
+pool)` helper, called once per real pool exactly as before, and then, only when `--pool` did
+not restrict this run to a specific other pool, once more against
+`app/services/preview.get_preview_pool(db)`'s result if one exists. This goes through the
+exact same `sync_week` (and therefore the exact same `allow_metered` / site admin "ESPN only"
+switch / per-week refresh cap) every real pool's cron refresh already goes through, no separate
+or looser path. `run-cron` still never calls `ensure_preview_pool`: a deployment that has never
+run `seed-preview` once by hand still never gets a preview pool conjured into existence by an
+unattended cron tick, only a truly existing preview pool gets kept fresh going forward.
+`app/services/preview.py`'s docstring was updated to record this reconciled reasoning rather
+than silently contradicting itself. `doctor` gained a "Public preview" section
+(`_report_preview_health`, `app/cli.py`), run unconditionally (it needs no `--probe` network
+call: `detect_week` resolves from the pool's own `week1_anchor_date` by pure date arithmetic
+whenever one is configured, which `ensure_preview_pool` always sets from `settings`).
+Reports MISSING when no preview pool has been seeded yet, or one exists with no `Week` row;
+STALE when the most recent week was built more than `PREVIEW_STALE_AFTER_DAYS` (3, chosen
+because a quiet bye week can legitimately go a few days between real rebuilds per `sync_week`'s
+own docstring, while 3 days is comfortably past that and still catches "cron actually stopped
+running") days ago, or when it was built for a different week number than `detect_week` now
+resolves to; otherwise healthy. New tests in `tests/test_cli.py`:
+`test_run_cron_refreshes_the_preview_pool_when_it_exists` (monkeypatches
+`app.services.ingest.sync_week` to record which pool ids it was called with, proving both the
+real pool and the preview pool get a pass) and
+`test_run_cron_never_creates_the_preview_pool` (no preview pool before, none after), plus five
+`doctor` tests covering missing-pool, missing-week, healthy, stale-by-age and
+stale-by-wrong-week.
+
+**4. `normalize_join_code` now strips hyphens too.** `app/auth.py`: was
+`.strip().upper().replace(" ", "")`, now also `.replace("-", "")`, so a code remembered or
+copied with a dash for readability (`"AB3D-EFGH"`) still matches the stored, dash-free value.
+Every real entry point already called this one function (registration's `join_code` and
+`commissioner_code`, `/join`, the commissioner join-code-by-hand route in `app/routers/
+admin.py`, league creation and the commissioner-invite-code routes in
+`app/routers/leagues.py`), so fixing the function once fixes every call site. New unit tests
+(`tests/test_app.py`, no `tests/test_auth.py` existed yet to add to, so these sit alongside the
+router tests that already exercise the same function end to end) cover lowercase, spaced,
+hyphenated and blank input all normalizing consistently, plus
+`test_register_with_a_hyphenated_or_spaced_join_code_still_joins_the_pool` (parametrized over
+`"test-code"`, `"TEST CODE"`, `"te-st co-de"`) and `test_join_route_accepts_a_hyphenated_join_code`
+proving the fix end to end through both real routes, not just the unit function.
+
+**5. Pricing arithmetic fixed by correcting the copy, not the price.** `app/templates/public/
+pricing.html` showed "was 398, now 349" with "Save 50 dollars", but 398 minus 349 is 49. The
+398 anchor is not an arbitrary round number: it equals exactly 2 x 199, the real one-league
+price shown in the card right next to it ("versus two one league plans"), so changing 398 would
+break that comparison, and 349 reads as a deliberately chosen price point ending in 9, not a
+number to adjust to make different arithmetic round. Fixed the copy instead: "Save 50 dollars"
+-> "Save 49 dollars". The pre-existing `test_pricing_page_renders_signed_out` assertion of
+`"50" in response.text` still passes unchanged, since the unrelated "Refer a friend, earn 50
+dollars" copy elsewhere on the same page still contains "50"; no test needed updating for this
+fix.
+
+**Verification.** `ruff check .`, `black .`, and `pytest -q` all clean, 1073 passed, 0 failed
+(1041 at the Phase 7 baseline, 32 net new tests, all in `tests/test_app.py` and
+`tests/test_cli.py`). `grep -rn "—"` across `app/`, `tests/`, `SPEC.md` and `README.md` finds
+only the pre-existing `tests/test_app.py` assertion of its own absence. No emoji anywhere
+touched. No new dependency, no schema change, no CSS framework or bundler, no SPA; the only
+template change was the one-word pricing copy fix above.
+
+**Deliberately left unbuilt:** no change to `PREVIEW_STALE_AFTER_DAYS`'s value beyond the
+reasoning above; no attempt to make `doctor`'s preview check exit non-zero or fail a build,
+since every other `doctor` check is informational only and this phase kept that same contract;
+no UI-facing "preview is stale" banner anywhere a visitor could see, since staleness is an
+operator concern surfaced by `doctor`, not something to expose to an anonymous visitor.
+
+### Phase 9, verifying prior fixes against live data
+
+Done directly by the orchestrating session, not delegated: this phase is fundamentally about
+hands-on verification with evidence, which is exactly what a real browser session against a
+seeded database is for, rather than something to hand to a fresh agent with no eyes on the
+running app. Set up a throwaway seeded database (`seed-admin` plus `seed-demo`, the real 2025
+weeks 5/6/7 fixtures), ran the live dev server, and drove it in an actual Chrome tab.
+
+**Inverse scoring:** confirmed directly on `/results?week=5` (fully scored). The leaderboard's
+own copy states "Low score wins," Dana Whitfield sits in first with the lowest points-against
+total (22) and is marked "WINNER," and the full ranking (22, 26, 35, 37, 40, 59, 63) is
+strictly ascending. A non-submitter (Casey Nolan) shows "No picks submitted" rather than a
+bare number, matching SPEC's own explicit UI rule; the underlying maximum-penalty arithmetic
+itself is unit tested exhaustively in `tests/test_scoring.py`, already passing, not re-derived
+here.
+
+**15 of 20:** confirmed a real, valid 15-pick submission renders correctly (Dana Whitfield's
+picks list has exactly 15 rows). Rejection of a 14 or 16 pick submission is not something a
+one-off browser click usefully re-proves beyond what `tests/test_app.py`/`tests/test_scoring.py`
+already assert with the exact boundary cases; relied on that existing, passing coverage rather
+than reproducing it by hand.
+
+**Two-step pick entry:** confirmed live at desktop width. Tapping a team fills it green with a
+check; typing a confidence number updates the chip and the "N of 15 winners chosen" progress
+bar live; a picked row moves out of the "NOT PICKED" group automatically. Exercised the
+up/down accessible fallback buttons directly (not a drag simulation, which is not practical to
+drive reliably through this session's automation tooling): clicking a row's up arrow moved it
+above its neighbor and both rows' confidence chips recalculated correctly, matching
+`app/static/app.js`'s `renumber()` (`pickedCount - index`, scoped to picked rows only, exactly
+as documented). One self-caught false alarm during this check is recorded here so a future
+session does not repeat the confusion: the first read of the resulting screenshot looked like
+a swap had not happened, until re-checking which row's button coordinate had actually been
+clicked confirmed the reorder and renumbering were both correct all along. Did not get a real
+360 pixel viewport confirmed: this session's `resize_window` call reported success and shrank
+the OS window, but `window.innerWidth` inside the page never actually changed from the desktop
+size, so a genuine mobile-width check could not be completed this way. Not treated as a defect
+in the app: this interaction predates this remediation entirely (part of the original,
+SPEC-driven build, already carrying its own 360/768/1280 responsive design requirement), and
+nothing in phases 0 through 8 touched `picks.html`'s markup or CSS in a way that would put its
+existing responsiveness at risk. Flagged here as a testing-tool limitation, not a product gap,
+for Phase 10's own manual sweep to pick up with better tooling if available.
+
+**Player-major results grid:** confirmed directly. The picks table's own header reads exactly
+"PLAYER 15 14 13 12 11 10 9 8 7 6 5 4 3 2 1," one row per player, columns descending from
+`picks_required` to 1, matching SPEC Section 9 precisely.
+
+**Payouts:** confirmed the known ladder via `python -m app.cli payouts-show --pool 2` directly
+against the seeded demo pool: weekly 2,775.00 (56.06% of pot), bowl 400.00 (8.08%), season
+points 1,155.00 (23.33%), season wins 620.00 (12.53%), grand total and pot both exactly
+4,950.00, unallocated 0.00, matching the phase's required figures exactly. Also confirmed live
+on `/standings`: the season wins award correctly splits a tie (Dana Whitfield and Marcus Reyes
+tied for first both show 255 dollars, half of the combined 325 plus 185 first-and-second pool),
+direct visual proof the tie-split rule from SPEC 10b is really running, not just unit tested.
+Did not re-derive "a snapshot does not move when the pot changes" live (a temporal check that
+does not fit a single browser pass); relied on `tests/test_payout_service.py`'s existing,
+passing frozen-snapshot coverage for that specific claim.
+
+**Scenarios: a real, live defect found and fixed.** Week 5 (fully scored, 20 of 20 games
+final, 0 remaining) rendered "Scenarios open once 5 games are final. 20 of 5 final so far." on
+`/results`, which is actively misleading: it names a threshold (final games) that is already
+exceeded, `20 >= 5`, giving no hint that the actual, opposite reason the panel is hidden is
+that there are zero games left to build a scenario around (`app/services/scenarios.py`'s
+`panel_thresholds_met` gates on `remaining_count >= scenarios_min_remaining_games` too, and a
+fully scored week always fails that half of the check). `app/templates/results.html`'s pending
+state now branches: once the final-games threshold is already met, it names the real blocker
+("Scenarios need at least N games still to be played" / "0 games still to play... every
+placement is already decided") instead of repeating the final-games message past the point it
+stopped being the true reason. New test:
+`test_scenarios_panel_pending_message_distinguishes_not_enough_remaining_games`
+(`tests/test_app.py`). This fix is folded into this phase's own verification work rather than a
+separate commit, since it was found and fixed in the same pass, unlike Phase 6's demo-pool
+anchor date fix which came from a genuinely separate, later session.
+
+**Season and weekly tabs:** confirmed directly. `/standings` shows only season-scoped content
+(season standings plus the two season award panels); `/results` shows only week-scoped content
+(that week's scoreboard, leaderboard, and picks grid); neither page repeats the other's data.
+Every table's column headers are real `<th>` elements with the "click a column heading to
+sort" convention already stated in each table's own caption text, matching SPEC's requirement;
+did not click through every single column of every table by hand, since the sort behavior
+itself is a generic, shared piece of JS (`app/static/app.js`'s `sortTableRows`) already
+exercised by this codebase's existing test suite rather than a per-page concern worth
+re-deriving column by column.
+
+Test count after Phase 9: 1074 (+1 over Phase 8's 1073, +135 over the Phase 0 baseline).
+
+### Phase 10, full sweep
+
+**Item 23's literal wording versus the already-correct, already-tested behavior.** The
+checklist item reads: "Sign out and hit `/league`, `/site`, and `/leagues`. All redirect to
+sign-in. No 404s." `/league` and `/site` are real routes and do redirect. `/leagues` (plural)
+is not, and never was, a real route in this codebase; it is the exact path named in the
+original bug report, and Phase 8 already decided, deliberately, that a route which genuinely
+does not exist must 404 honestly rather than fake a redirect that would wrongly imply it
+exists (`test_a_genuinely_nonexistent_route_404s_honestly_rather_than_faking_a_redirect`).
+Faking a redirect for `/leagues` to satisfy this item's literal text would directly contradict
+Phase 8's own, already-correct decision and would mislead a user into thinking a route exists
+that does not. Kept the honest 404. Recorded as a PASS against the checklist's actual intent
+(no dead end, no 500, no confusing wall) in `REMEDIATION-REPORT.md`, with the literal-wording
+gap called out rather than silently reinterpreted.
+
+**Items 19 and 20, "it arrives," against an environment with no real mail credentials.** This
+session has no production Resend account or API key, and SPEC.md Section 17's offline-first
+testing rule means nothing in this codebase's own test suite is allowed to open a real socket
+even if one were configured. There is no way to prove literal inbox delivery from inside this
+environment. The best-serving choice: prove everything short of the actual network hop,
+against the exact same code path production traffic would run, stubbed only at
+`_call_resend_api` (the single real HTTP call site in `app/services/mail.py`, already how
+`tests/test_mail.py` and every Phase 7 mail integration test verify this code without a real
+network). `test_commissioner_invite_email_sends_for_the_site_admin` and
+`test_player_invite_email_sends_to_multiple_addresses` both assert the real recipient list and
+real message body reach that call site; `test_forgot_password_full_round_trip` goes one step
+further and recovers the actual link from the captured send, then completes a real login with
+the new password, proving the link itself is correct and functional end to end, not just
+well-formed. Recorded as PASS with the inbox-delivery gap stated plainly in
+`REMEDIATION-REPORT.md` rather than either skipping the item or claiming a false full pass.
+
+**Scope of manual re-verification.** Items 8-17 and 19-25 were provable from Phases 1-9's own
+extensive live testing (each already cited in this file and in `REMEDIATION-REPORT.md`) without
+re-clicking through the same flows a second time for no new information. Items 18, 27 and 28
+got fresh, real live-browser verification this phase (the acting-as-site-admin banner across
+five distinct `/league/*` pages, not just the dashboard; the results page's responsive reflow
+at ~500px, including confirming Phase 9's scenarios-copy fix renders correctly at that width
+too; a real Tab-key focus ring on `/site/leagues`). Items 5, 6, 16, 17, 23, 31 and 32 got a
+fresh `TestClient` sweep (`phase10_sweep.py`, a throwaway script, not committed, matching the
+pattern of `tests/test_app.py`'s own `client`/`world` fixtures) rather than relying on Phase
+0-9's cumulative evidence alone, since these are cheap to re-run in full and catch any
+regression the later phases might have introduced without live-browser flakiness.
+
+Test count after Phase 10: 1074 (no new tests written; every item is provable from the existing
+suite plus fresh live/scripted verification, not new test coverage).

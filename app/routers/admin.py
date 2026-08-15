@@ -1,13 +1,13 @@
 """Commissioner tools: pool settings, the slate editor, members, and manual job triggers.
 
 Everything here sits behind require_commissioner, with three exceptions. switch_league (POST
-/admin/switch-league) deliberately is not: require_commissioner resolves the pool from
+/league/switch-league) deliberately is not: require_commissioner resolves the pool from
 whatever is already active in session, and the whole point of that route is picking a
 different one. It is gated by require_user plus its own direct check, against the requested
 pool_id, for a real PoolMember row with role_in_pool in ("commissioner", "co_commissioner"). A
 regular player still cannot reach it for any pool they do not commission.
 
-co_commissioner_accept and co_commissioner_decline (POST /admin/co-commissioner/accept and
+co_commissioner_accept and co_commissioner_decline (POST /league/co-commissioner/accept and
 /decline, Post-launch fixes: co-commissioner self-service invites with confirmation) are the
 other two: the whole point is that the invited person is still a plain "member" at the moment
 they act, not yet any kind of commissioner, so require_commissioner would refuse them. Both are
@@ -27,7 +27,7 @@ import re
 from decimal import Decimal, InvalidOperation
 
 from fastapi import APIRouter, Depends, Form, HTTPException, Request, status
-from fastapi.responses import RedirectResponse
+from fastapi.responses import RedirectResponse, Response
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
@@ -55,19 +55,37 @@ from app.models import (
     Week,
     utcnow,
 )
-from app.providers.http import provider_warnings, usage_report
+from app.providers.http import get_platform_settings, provider_warnings
 from app.providers.teams import canonical_key, display_name
-from app.routers.leagues import _fresh_commissioner_invite_code
-from app.services import ingest
+from app.routers.leagues import _fresh_commissioner_invite_code, _parse_commissioner_emails
+from app.services import ingest, mail
 from app.templating import get_zone, render
 
-router = APIRouter(prefix="/admin", tags=["admin"])
+router = APIRouter(prefix="/league", tags=["admin"])
 
 LEAGUE_LABELS = {"nfl": "NFL", "ncaaf": "College"}
 
 
-def _redirect(target: str = "/admin") -> RedirectResponse:
+def _redirect(target: str = "/league") -> RedirectResponse:
     return RedirectResponse(target, status_code=303)
+
+
+def _redirect_or_hx(request: Request, target: str) -> RedirectResponse | Response:
+    """A plain 303 for a normal form post; a real, full page navigation for an htmx one.
+
+    htmx follows a plain 303 transparently at the XHR level (per its own docs), which means
+    the *redirected-to* page's full HTML, not just its status, comes back as this request's
+    response, and htmx would then swap that whole page into whatever small hx-target issued
+    the request, exactly the trap app/routers/payouts.py's own module docstring documents. The
+    HX-Redirect response header sidesteps it entirely: htmx sees the header and does a real
+    `window.location` navigation instead of a swap, the same pattern
+    app/routers/picks.py's picks_lock/picks_unlock already use. Used by slate_build (Phase 6
+    remediation, see DECISIONS.md) so the build form's loading state, wired up as a normal
+    htmx request, still lands on a full, freshly rendered /league/slate page with the flash
+    message on it, exactly like the non-JS form post always has."""
+    if request.headers.get("HX-Request") == "true":
+        return Response(status_code=200, headers={"HX-Redirect": target})
+    return _redirect(target)
 
 
 def _week_or_none(db: Session, pool: Pool, week_number: int | None) -> Week | None:
@@ -84,7 +102,7 @@ def _commissioner_pools(db: Session, user: User) -> list[Pool]:
     "commissioner" or "co_commissioner"), not the global admin's "view as commissioner" case,
     which never leaves a row behind. Used only to decide whether the league switcher has
     anything to switch between; a site admin always gets an empty list here, since
-    /admin/leagues, not this switcher, is how an admin moves between pools. A co-commissioner
+    /site/leagues, not this switcher, is how an admin moves between pools. A co-commissioner
     running more than one pool sees the same switcher a full commissioner would (Post-launch
     fixes), since is_commissioner already treats both roles as equally able to operate a
     pool."""
@@ -108,7 +126,7 @@ def _base(db: Session, user: User, pool: Pool) -> dict:
         "current_user": user,
         "pool": pool,
         "is_commissioner": True,
-        "active_nav": "admin",
+        "active_nav": "league",
         # Absolute origin for the player invite link and its mailto template, built the same
         # way app/routers/public.py already builds base_url for pricing.html's mailto link.
         "base_url": settings.base_url,
@@ -209,12 +227,6 @@ def dashboard(
             "slate_counts": counts,
             "pick_counts": pick_counts,
             "member_count": member_count,
-            "is_site_admin": user.is_admin,
-            # Provider call budgets are cost/vendor detail, site admin only. A real
-            # commissioner never sees them, and the values are not even computed for
-            # anyone else, matching the template's own {% if is_site_admin %} gate below.
-            "usage": usage_report(db) if user.is_admin else [],
-            "warnings": provider_warnings(db) if user.is_admin else [],
         },
         **_base(db, user, pool),
     )
@@ -232,7 +244,7 @@ def switch_league(
     active pool: the whole point here is choosing a different one. Instead this checks the
     requested pool_id directly against a real PoolMember row, so a commissioner of pool A
     cannot switch into pool B just by knowing its id. Separate concept from the site admin's
-    "view as commissioner" (POST /admin/leagues/{pool_id}/view-as, app/routers/leagues.py):
+    "view as commissioner" (POST /site/leagues/{pool_id}/view-as, app/routers/leagues.py):
     that lets an admin borrow commissioner powers for a league they don't run; this lets an
     actual commissioner move between leagues they do. A co-commissioner counts here too
     (Post-launch fixes), same as a full commissioner, since operating a pool day to day is the
@@ -246,9 +258,9 @@ def switch_league(
     )
     if member is None:
         flash(request, "You don't commission that league.", "error")
-        return _redirect("/admin")
+        return _redirect("/league")
     request.session[SESSION_POOL_KEY] = pool_id
-    return _redirect("/admin")
+    return _redirect("/league")
 
 
 # Pool settings --------------------------------------------------------------
@@ -298,6 +310,7 @@ def settings_save(
     scenarios_min_remaining_games: int = Form(...),
     auto_publish: str = Form(""),
     open_registration: str = Form(""),
+    notify_week_published: str = Form(""),
     sports_nfl: str = Form(""),
     sports_ncaaf: str = Form(""),
     week1_anchor_date: str = Form(""),
@@ -345,6 +358,9 @@ def settings_save(
             anchor_date = dt.date.fromisoformat(week1_anchor_date)
         except ValueError:
             errors.append("Week 1 anchor date is not a valid date.")
+        else:
+            if anchor_date.weekday() != 5:
+                errors.append("Week 1 anchor date must be a Saturday.")
     else:
         anchor_date = None
 
@@ -367,7 +383,7 @@ def settings_save(
     if errors:
         for message in errors:
             flash(request, message, "error")
-        return _redirect("/admin/settings")
+        return _redirect("/league/settings")
 
     pool.name = name
     pool.season_year = season_year
@@ -382,6 +398,7 @@ def settings_save(
     pool.sports = sports
     pool.auto_publish = bool(auto_publish)
     pool.open_registration = bool(open_registration)
+    pool.notify_week_published = bool(notify_week_published)
     pool.week1_anchor_date = anchor_date
     pool.rivalries = _parse_rivalries(rivalries)
     pool.entry_fee = fee_value
@@ -400,10 +417,10 @@ def settings_save(
         )
     else:
         flash(request, "Pool settings saved.")
-    return _redirect("/admin/settings")
+    return _redirect("/league/settings")
 
 
-# Payout rules live in app/routers/payouts.py now (the Set Payouts screen at /admin/payouts:
+# Payout rules live in app/routers/payouts.py now (the Set Payouts screen at /league/payouts:
 # four scopes, dollar-or-percent modes, a pot with an override, and frozen award snapshots).
 # The old add/remove-only, float, three-scope routes that used to live here are gone; see
 # DECISIONS.md, "Payout system".
@@ -422,7 +439,7 @@ def rotate_join_code(
             pool.join_code = code
             db.commit()
             flash(request, f"New join code: {code}. The old code no longer works.")
-            return _redirect("/admin/members")
+            return _redirect("/league/members")
     raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR, "Could not generate a join code.")
 
 
@@ -437,15 +454,15 @@ def set_join_code(
     code = normalize_join_code(join_code)
     if len(code) < 4:
         flash(request, "A join code needs at least 4 characters.", "error")
-        return _redirect("/admin/members")
+        return _redirect("/league/members")
     clash = db.scalar(select(Pool).where(func.upper(Pool.join_code) == code, Pool.id != pool.id))
     if clash is not None:
         flash(request, "Another pool already uses that code.", "error")
-        return _redirect("/admin/members")
+        return _redirect("/league/members")
     pool.join_code = code
     db.commit()
     flash(request, f"Join code set to {code}.")
-    return _redirect("/admin/members")
+    return _redirect("/league/members")
 
 
 # Members --------------------------------------------------------------------
@@ -496,6 +513,63 @@ def members_page(
     )
 
 
+@router.post("/members/invite")
+def members_invite_email(
+    request: Request,
+    emails: str = Form(""),
+    db: Session = Depends(get_db),
+    user: User = Depends(require_user),
+    pool: Pool = Depends(require_commissioner),
+):
+    """Commissioner only (Phase 7 remediation, see DECISIONS.md), sends the join link and code
+    to one or more addresses, one per line, reusing
+    app.routers.leagues._parse_commissioner_emails verbatim rather than a second textarea
+    parser. Sits next to the existing "Invite players" copy-and-paste panel on this same page,
+    never replaces it: whatever addresses fail (mail off, not configured, rate limited, or the
+    provider call itself failing) are named in a flash, and the message above still works to
+    copy and send by hand."""
+    addresses = _parse_commissioner_emails(emails)
+    if not addresses:
+        flash(request, "Enter at least one email address, one per line.", "error")
+        return _redirect("/league/members")
+
+    link = f"{settings.base_url}/register?code={pool.join_code}"
+    subject = f"Join {pool.name} on PickSportPlus"
+    body = (
+        "Hey,\n\n"
+        f"You are invited to join {pool.name} on PickSportPlus, a confidence pick'em pool. "
+        f"Join with this link:\n\n{link}\n\n"
+        f"Or use join code {pool.join_code} on the register page.\n\n"
+        "See you on the leaderboard."
+    )
+    sent: list[str] = []
+    failed: list[str] = []
+    for address in addresses:
+        try:
+            mail.send(
+                db,
+                to=address,
+                subject=subject,
+                html=mail.text_to_html(body),
+                text=body,
+                kind="player_invite",
+                actor_key=f"user:{user.id}",
+            )
+        except mail.MailError as exc:
+            failed.append(f"{address} ({exc})")
+        else:
+            sent.append(address)
+    db.commit()
+
+    if sent:
+        noun = "address" if len(sent) == 1 else "addresses"
+        flash(request, f"Invite emailed to {len(sent)} {noun}.")
+    if failed:
+        flash(request, "Could not email: " + "; ".join(failed), "error")
+        flash(request, "The message above still works. Copy it and send it yourself.", "info")
+    return _redirect("/league/members")
+
+
 @router.post("/members/{member_id}/paid")
 def member_paid_toggle(
     request: Request,
@@ -516,7 +590,7 @@ def member_paid_toggle(
         member.paid_marked_by_user_id = None
         flash(request, "Marked unpaid.")
     db.commit()
-    return _redirect("/admin/members")
+    return _redirect("/league/members")
 
 
 @router.post("/members/{member_id}/venmo-handle")
@@ -538,7 +612,7 @@ def member_venmo_handle_save(
     member.member_venmo_handle = member_venmo_handle.strip() or None
     db.commit()
     flash(request, "Venmo handle noted.")
-    return _redirect("/admin/members")
+    return _redirect("/league/members")
 
 
 @router.post("/members/paid/bulk")
@@ -564,7 +638,7 @@ def members_paid_bulk(
         flash(request, f"Marked {count} {noun} paid.")
     else:
         flash(request, "Nobody selected was still unpaid.", "info")
-    return _redirect("/admin/members")
+    return _redirect("/league/members")
 
 
 @router.post("/members/{member_id}/role")
@@ -601,7 +675,7 @@ def member_role(
     member.co_commissioner_invited_at = None
     db.commit()
     flash(request, "Member role updated.")
-    return _redirect("/admin/members")
+    return _redirect("/league/members")
 
 
 @router.post("/members/{member_id}/co-commissioner/invite")
@@ -615,21 +689,21 @@ def co_commissioner_invite(
     """A full commissioner inviting a plain member to become a co-commissioner. Unlike
     member_role above, this never changes role_in_pool on its own: it only sets
     co_commissioner_invited_at, and the invited member's own accept (POST
-    /admin/co-commissioner/accept) is what actually promotes them. See DECISIONS.md,
+    /league/co-commissioner/accept) is what actually promotes them. See DECISIONS.md,
     Post-launch fixes."""
     member = db.get(PoolMember, member_id)
     if member is None or member.pool_id != pool.id:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "That member is not in this pool.")
     if member.role_in_pool != "member":
         flash(request, "That person is already a commissioner or co-commissioner.", "info")
-        return _redirect("/admin/members")
+        return _redirect("/league/members")
     if member.co_commissioner_invited_at is not None:
         flash(request, "There is already a co-commissioner invite pending for them.", "info")
-        return _redirect("/admin/members")
+        return _redirect("/league/members")
     member.co_commissioner_invited_at = utcnow()
     db.commit()
     flash(request, "Co-commissioner invite sent. It takes effect once they accept it.")
-    return _redirect("/admin/members")
+    return _redirect("/league/members")
 
 
 @router.post("/members/{member_id}/co-commissioner/cancel")
@@ -646,7 +720,7 @@ def co_commissioner_cancel(
     member.co_commissioner_invited_at = None
     db.commit()
     flash(request, "Co-commissioner invite canceled.")
-    return _redirect("/admin/members")
+    return _redirect("/league/members")
 
 
 @router.post("/co-commissioner/accept")
@@ -669,7 +743,7 @@ def co_commissioner_accept(
     member.co_commissioner_invited_at = None
     db.commit()
     flash(request, f"You are now a co-commissioner of {pool.name}.")
-    return _redirect("/admin")
+    return _redirect("/league")
 
 
 @router.post("/co-commissioner/decline")
@@ -698,7 +772,7 @@ def rotate_commissioner_invite_code_self(
     pool: Pool = Depends(require_full_commissioner),
 ):
     """A full commissioner's self-service view of Pool.commissioner_invite_code (Post-launch
-    fixes), the same link and rotation the site admin already manages from /admin/leagues
+    fixes), the same link and rotation the site admin already manages from /site/leagues
     (app/routers/leagues.py). Gated require_full_commissioner, not require_commissioner: a
     co-commissioner never sees or rotates this link, since sharing it is functionally
     identical to creating a new full commissioner outright, no confirmation step involved.
@@ -707,7 +781,7 @@ def rotate_commissioner_invite_code_self(
     pool.commissioner_invite_code = _fresh_commissioner_invite_code(db, exclude_pool_id=pool.id)
     db.commit()
     flash(request, "New commissioner invite link generated. The old link no longer works.")
-    return _redirect("/admin/members")
+    return _redirect("/league/members")
 
 
 @router.post("/members/{member_id}/remove")
@@ -723,12 +797,12 @@ def member_remove(
         raise HTTPException(status.HTTP_404_NOT_FOUND, "That member is not in this pool.")
     if member.user_id == user.id:
         flash(request, "You cannot remove yourself from the pool.", "error")
-        return _redirect("/admin/members")
+        return _redirect("/league/members")
     # Their picks and week entries go with them, which keeps the leaderboard honest.
     db.delete(member)
     db.commit()
     flash(request, "Member removed.")
-    return _redirect("/admin/members")
+    return _redirect("/league/members")
 
 
 # Slate editor ---------------------------------------------------------------
@@ -757,6 +831,7 @@ def slate_page(
     reasons: dict[int, str] = {}
     pinned_count = 0
     missing_spread_count = 0
+    slate_span_info: dict | None = None
 
     if row is not None:
         games = list(db.scalars(select(Game).where(Game.week_id == row.id)))
@@ -777,6 +852,16 @@ def slate_page(
         pinned_count = sum(1 for g in games if g.pinned and g.status != "void")
         missing_spread_count = sum(1 for g in games if g.spread_home is None and g.status != "void")
 
+        span = ingest.slate_span(db, row)
+        if span is not None:
+            span_days, earliest, latest = span
+            slate_span_info = {
+                "span_days": span_days,
+                "earliest": earliest,
+                "latest": latest,
+                "wide": (latest - earliest) > dt.timedelta(hours=48),
+            }
+
     return render(
         request,
         "admin/slate.html",
@@ -793,6 +878,11 @@ def slate_page(
             "reasons": reasons,
             "pinned_count": pinned_count,
             "missing_spread_count": missing_spread_count,
+            "slate_span": slate_span_info,
+            # The global switch (Phase 5 remediation), read fresh so the neutral note below
+            # always reflects whatever the site admin has it set to right now, never a stale
+            # value. No billing/credit language reaches the commissioner: see slate.html.
+            "espn_only": get_platform_settings(db).espn_only,
         },
         **_base(db, user, pool),
     )
@@ -809,35 +899,75 @@ def _week_for_action(db: Session, pool: Pool, week_id: int) -> Week:
 def slate_build(
     request: Request,
     week_number: int = Form(...),
-    publish: str = Form(""),
-    no_metered: str = Form(""),
     db: Session = Depends(get_db),
     user: User = Depends(require_user),
     pool: Pool = Depends(require_commissioner),
 ):
+    """No publish or no_metered fields anymore (Phase 5 remediation, see DECISIONS.md).
+    Publishing is a separate, deliberate action (POST /league/slate/publish, the "Publish
+    this week" button lower on this same page); this route always follows pool.auto_publish
+    (publish=None, build_slate's own default) exactly as the removed checkbox's own help text
+    already promised for its unchecked state. Whether metered providers get called at all is
+    no longer a per-build choice either: it is the site admin's global "ESPN only" switch
+    (POST /site/providers/espn-only), which ingest.build_slate reads fresh on every call, so
+    this route no longer passes allow_metered here at all.
+
+    Phase 6 remediation (see DECISIONS.md): this can legitimately take several seconds to just
+    under a minute (ESPN for the schedule, then possibly The Odds API/CFBD for every candidate
+    game), and used to give no feedback at all while it ran. Three things changed, all here:
+    the response shape now uses _redirect_or_hx so the build form's htmx request (see
+    admin/slate.html) gets a real full page navigation instead of a swapped partial;
+    ingest.build_slate now refuses a second concurrent build for the same pool week
+    (BuildInProgress) instead of letting two runs race; and it now carries a 90 second wall
+    clock budget (BuildTimeout) that names whichever provider call was in flight when it ran
+    out. Neither new exception changes this route's own response shape, both are flash-and-
+    redirect exactly like the pre-existing ValueError branch below."""
+    target = f"/league/slate?week={week_number}"
     try:
         report = ingest.build_slate(
             db,
             pool,
             pool.season_year,
             week_number,
-            allow_metered=not bool(no_metered),
-            publish=True if publish else None,
         )
+    except ingest.BuildInProgress as exc:
+        db.rollback()
+        flash(request, str(exc), "error")
+        return _redirect_or_hx(request, target)
+    except ingest.BuildTimeout as exc:
+        db.rollback()
+        flash(request, str(exc), "error")
+        return _redirect_or_hx(request, target)
     except ValueError as exc:
         # Most likely more games are pinned than the slate total allows (app.slate raises
         # this rather than silently truncating the pins). Reduce the total, or unpin a game,
         # from the slate editor below.
         db.rollback()
         flash(request, str(exc), "error")
-        return _redirect(f"/admin/slate?week={week_number}")
+        return _redirect_or_hx(request, target)
     db.commit()
-    flash(request, report.summary(), "ok" if report.selected else "info")
+
+    if report.selected and not report.locked_out:
+        # A real build, not a no-op (picks already exist so the slate was left alone) or a
+        # dead end (nothing came back to select from). Names what was actually built, not
+        # ingest.IngestReport.summary()'s own longer sentence, which several other callers
+        # (app/cli.py, app/services/demo.py) still rely on verbatim and this phase leaves
+        # untouched. See DECISIONS.md, Phase 6, for why this is a new sentence rather than an
+        # edit to summary() itself.
+        flash(
+            request,
+            f"Week {report.week_number} built. {report.selected} games, "
+            f"{report.per_league.get('nfl', 0)} NFL and {report.per_league.get('ncaaf', 0)} "
+            f"college, {report.missing_spread} missing a line.",
+            "ok",
+        )
+    else:
+        flash(request, report.summary(), "ok" if report.selected else "info")
     for note in report.notes:
         flash(request, note, "info")
     for warning in report.warnings:
         flash(request, warning, "error")
-    return _redirect(f"/admin/slate?week={week_number}")
+    return _redirect_or_hx(request, target)
 
 
 @router.post("/slate/publish")
@@ -852,10 +982,17 @@ def slate_publish(
     if row.status != "draft":
         flash(request, f"Week {row.week_number} is already {row.status}.", "info")
     else:
-        ingest.publish_week(db, row)
-        db.commit()
-        flash(request, f"Week {row.week_number} is open for picks.")
-    return _redirect(f"/admin/slate?week={row.week_number}")
+        try:
+            notify_warnings = ingest.publish_week(db, row)
+        except ingest.SlateSpanTooWide as exc:
+            db.rollback()
+            flash(request, str(exc), "error")
+        else:
+            db.commit()
+            flash(request, f"Week {row.week_number} is open for picks.")
+            for warning in notify_warnings:
+                flash(request, warning, "error")
+    return _redirect(f"/league/slate?week={row.week_number}")
 
 
 @router.post("/slate/game")
@@ -908,7 +1045,7 @@ def slate_game_action(
     except ValueError as exc:
         db.rollback()
         flash(request, str(exc), "error")
-    return _redirect(f"/admin/slate?week={row.week_number}")
+    return _redirect(f"/league/slate?week={row.week_number}")
 
 
 @router.post("/slate/lock")
@@ -927,23 +1064,86 @@ def slate_lock(
         ingest.recompute_lock(db, row)
         db.commit()
         flash(request, "Lock time is back to the first kickoff.")
-        return _redirect(f"/admin/slate?week={row.week_number}")
+        return _redirect(f"/league/slate?week={row.week_number}")
 
     if not lock_at_local:
         flash(request, "Enter a lock time.", "error")
-        return _redirect(f"/admin/slate?week={row.week_number}")
+        return _redirect(f"/league/slate?week={row.week_number}")
     try:
         naive = dt.datetime.fromisoformat(lock_at_local)
     except ValueError:
         flash(request, "That is not a valid date and time.", "error")
-        return _redirect(f"/admin/slate?week={row.week_number}")
+        return _redirect(f"/league/slate?week={row.week_number}")
 
     local = naive.replace(tzinfo=get_zone(pool.timezone))
     row.lock_at = local.astimezone(dt.UTC)
     row.lock_at_override = True
     db.commit()
     flash(request, "Lock time set.")
-    return _redirect(f"/admin/slate?week={row.week_number}")
+    return _redirect(f"/league/slate?week={row.week_number}")
+
+
+# Test week -------------------------------------------------------------------
+
+
+@router.post("/test-week/create")
+def test_week_create(
+    request: Request,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_user),
+    pool: Pool = Depends(require_commissioner),
+):
+    """Build (or rebuild) the pool's one test week from whatever is live right now, NFL
+    preseason and college week 0 included (Phase 3, preseason and test week support). Reuses
+    the ordinary slate-build machinery end to end, ingest.build_slate(is_test_week=True) is
+    the only thing that differs from a real week's build. Auto-published (publish=True)
+    rather than left as a draft: the whole point of a test week is letting the group see picks
+    and scoring work end to end with as few extra clicks as possible, and it is explicitly
+    quarantined from every season-wide and money-related computation, so there is no real-week
+    caution to preserve by holding it back for a manual publish."""
+    try:
+        report = ingest.build_slate(
+            db,
+            pool,
+            pool.season_year,
+            ingest.TEST_WEEK_NUMBER,
+            publish=True,
+            is_test_week=True,
+        )
+    except ValueError as exc:
+        db.rollback()
+        flash(request, str(exc), "error")
+        return _redirect("/league/slate")
+    db.commit()
+    flash(request, report.summary(), "ok" if report.selected else "info")
+    for note in report.notes:
+        flash(request, note, "info")
+    for warning in report.warnings:
+        flash(request, warning, "error")
+    return _redirect(f"/league/slate?week={ingest.TEST_WEEK_NUMBER}")
+
+
+@router.post("/test-week/{week_id}/delete")
+def test_week_delete(
+    request: Request,
+    week_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_user),
+    pool: Pool = Depends(require_commissioner),
+):
+    """Delete a test week outright: its Game, Pick and WeekEntry rows all go with it through
+    the existing cascade="all, delete-orphan" relationships on Week (app/models.py). A real
+    week never allows this, so the check below is the only thing standing between this route
+    and deleting a real week's history; it refuses rather than silently no-opping so a stale
+    week_id (a real week, or one from another pool) is never quietly ignored."""
+    row = _week_for_action(db, pool, week_id)
+    if not row.is_test_week:
+        flash(request, "Only a test week can be deleted this way.", "error")
+        return _redirect("/league/slate")
+    db.delete(row)
+    db.commit()
+    flash(request, "Test week deleted.")
+    return _redirect("/league/slate")
 
 
 # Manual job triggers --------------------------------------------------------
@@ -967,7 +1167,7 @@ def run_results(
     flash(request, score.summary())
     for warning in results.warnings:
         flash(request, warning, "error")
-    return _redirect(f"/admin/slate?week={row.week_number}")
+    return _redirect(f"/league/slate?week={row.week_number}")
 
 
 __all__ = ["router"]

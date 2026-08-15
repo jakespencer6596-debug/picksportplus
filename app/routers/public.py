@@ -81,7 +81,7 @@ def contact_submit(
     user: User | None = Depends(get_current_user),
 ):
     """Store a lead. Nothing here sends an email or a text message to anyone: the 24 hour
-    reply promise is fulfilled by a human reading GET /admin/contacts and writing back over
+    reply promise is fulfilled by a human reading GET /site/contacts and writing back over
     their own email client, not by this route."""
     form = {"name": name.strip(), "email": email, "message": message.strip()}
     address = normalize_email(email)

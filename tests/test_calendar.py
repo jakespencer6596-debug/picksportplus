@@ -152,6 +152,46 @@ def test_december_anchor_leaves_nfl_in_its_regular_season(db, load_fixture):
     assert resolution.is_postseason is False
 
 
+# Preseason, test week only (Phase 3, preseason and test week support) ---------
+
+
+def test_is_test_week_resolves_nfl_to_the_preseason(db, load_fixture):
+    """August 10, 2026 sits inside NFL's real 2026 Hall of Fame Weekend window
+    (2026-08-06 to 2026-08-13, season type 1) per the recorded calendar. Only reachable when
+    is_test_week=True: a normal build must never pull preseason games."""
+    _cache_calendar(db, load_fixture, "nfl", 2026, NFL_2026)
+
+    resolution = calendar.resolve_league_week(
+        db, "nfl", 2026, dt.date(2026, 8, 10), is_test_week=True
+    )
+
+    assert resolution is not None
+    assert resolution.season_type == espn.SEASON_TYPE_PRESEASON
+    assert resolution.week == 1
+    assert resolution.label == "Hall of Fame Weekend"
+
+
+def test_a_normal_build_never_resolves_to_the_preseason_on_the_same_date(db, load_fixture):
+    """The exact same anchor date and the exact same cached calendar as the test above, but
+    is_test_week left at its default False: this must resolve to None, not preseason, proving
+    a normal build's behavior is genuinely unchanged rather than merely untested."""
+    _cache_calendar(db, load_fixture, "nfl", 2026, NFL_2026)
+
+    resolution = calendar.resolve_league_week(db, "nfl", 2026, dt.date(2026, 8, 10))
+
+    assert resolution is None
+
+
+def test_resolve_pool_weeks_threads_is_test_week_through_to_every_league(db, load_fixture):
+    _cache_calendar(db, load_fixture, "nfl", 2026, NFL_2026)
+    pool = _pool(sports=["nfl"])
+
+    resolved = calendar.resolve_pool_weeks(db, pool, dt.date(2026, 8, 10), is_test_week=True)
+
+    assert resolved["nfl"] is not None
+    assert resolved["nfl"].season_type == espn.SEASON_TYPE_PRESEASON
+
+
 # Genuinely outside both windows for every league -------------------------------
 
 

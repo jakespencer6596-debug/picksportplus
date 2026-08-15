@@ -14,6 +14,8 @@ import datetime as dt
 import itertools
 from decimal import Decimal
 
+from sqlalchemy import select
+
 from app.models import (
     Game,
     PayoutAward,
@@ -85,7 +87,13 @@ def _member(db, pool: Pool, user: User, *, paid: bool = False, role: str = "memb
 
 
 def _week(
-    db, pool: Pool, *, week_number: int = 1, is_bowl_week: bool = False, status: str = "open"
+    db,
+    pool: Pool,
+    *,
+    week_number: int = 1,
+    is_bowl_week: bool = False,
+    is_test_week: bool = False,
+    status: str = "open",
 ) -> Week:
     week = Week(
         pool_id=pool.id,
@@ -94,6 +102,7 @@ def _week(
         label=f"Week {week_number}",
         status=status,
         is_bowl_week=is_bowl_week,
+        is_test_week=is_test_week,
     )
     db.add(week)
     db.flush()
@@ -185,7 +194,12 @@ def _pick(
 
 
 def _build_and_score_week(
-    db, *, scoring_mode: str = "standard", is_bowl_week: bool = False, with_rule: bool = True
+    db,
+    *,
+    scoring_mode: str = "standard",
+    is_bowl_week: bool = False,
+    is_test_week: bool = False,
+    with_rule: bool = True,
 ):
     """A minimal but real pool: two members, two slate games, full picks for both, games
     finalised so the winner is unambiguous, then scored through the real score_week_for_pool
@@ -198,7 +212,7 @@ def _build_and_score_week(
     bob = _user(db, "Bob")
     _member(db, pool, alice)
     _member(db, pool, bob)
-    week = _week(db, pool, is_bowl_week=is_bowl_week)
+    week = _week(db, pool, is_bowl_week=is_bowl_week, is_test_week=is_test_week)
     game0, game1 = _games(db, week, count=2)
 
     _pick(db, pool, week, alice, game0, "home", 2)
@@ -348,6 +362,26 @@ def test_pool_with_zero_payout_rules_scores_without_raising(db):
 
     awards = list(db.query(PayoutAward).filter(PayoutAward.pool_id == pool.id))
     assert awards == []
+
+
+def test_a_test_week_scores_normally_but_never_generates_a_payout_award(db):
+    """Phase 3, preseason and test week support. with_rule=True on purpose: a weekly rule
+    exists for this pool, exactly the case that would create a PayoutAward for a real week
+    (test_scoring_a_week_auto_creates_weekly_payout_awards, above). A test week must still
+    score correctly within itself, points/correct/is_winner all land on Alice's WeekEntry
+    exactly as they would for a real week, it just must never freeze a PayoutAward for it."""
+    pool, week, alice, bob = _build_and_score_week(db, is_test_week=True, with_rule=True)
+
+    awards = list(db.query(PayoutAward).filter(PayoutAward.pool_id == pool.id))
+    assert awards == []
+
+    alice_entry = db.scalar(
+        select(WeekEntry).where(WeekEntry.week_id == week.id, WeekEntry.user_id == alice.id)
+    )
+    assert alice_entry.points == 3  # both picks correct under "standard", 2 + 1
+    assert alice_entry.correct == 2
+    assert alice_entry.is_winner is True
+    assert week.status == "scored"
 
 
 # The headline test: frozen amounts survive the pot growing later ------------------

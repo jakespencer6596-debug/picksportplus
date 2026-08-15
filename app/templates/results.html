@@ -16,7 +16,9 @@
   </div>
   {% if week %}
     <div class="row">
-      {% if week.status == "scored" %}
+      {% if week.is_test_week %}
+        <span class="badge badge-test-week">Test week</span>
+      {% elif week.status == "scored" %}
         <span class="badge badge-final">Scored</span>
       {% else %}
         <span class="badge">{{ status_words.get(week.status, "In progress") }}</span>
@@ -25,6 +27,12 @@
     </div>
   {% endif %}
 </div>
+{% if week and week.is_test_week %}
+  <p class="form-hint">
+    This is a test week, built to try out the pick and scoring flow. It does not count toward
+    season standings or payouts.
+  </p>
+{% endif %}
 
 {% if weeks %}
   <nav class="week-switch" aria-label="Choose a week">
@@ -448,7 +456,7 @@
     {% endif %}
   </section>
 
-  {% if revealed %}
+  {% if revealed and not week.is_test_week %}
   <section class="section" aria-labelledby="scenarios-heading">
     <h2 class="section-title" id="scenarios-heading">Scenarios</h2>
 
@@ -545,12 +553,19 @@
     {% else %}
       <div class="empty-state">
         {{ ic.icon("list", 28) }}
-        <p class="empty-state-title">Scenarios open once {{ pool.scenarios_min_final_games }} {{ pool.scenarios_min_final_games | pluralize("game") }} {{ "are" if pool.scenarios_min_final_games != 1 else "is" }} final.</p>
-        <p class="muted">
-          {% if scenario_panel %}
-            {{ scenario_panel.final_count }} of {{ pool.scenarios_min_final_games }} final so far.
-          {% endif %}
-        </p>
+        {% if scenario_panel and scenario_panel.final_count >= pool.scenarios_min_final_games %}
+          <p class="empty-state-title">Scenarios need at least {{ pool.scenarios_min_remaining_games }} {{ pool.scenarios_min_remaining_games | pluralize("game") }} still to be played.</p>
+          <p class="muted">
+            {{ scenario_panel.remaining_count }} {{ scenario_panel.remaining_count | pluralize("game") }} still to play. Once this week is this complete, every placement is already decided, so there is nothing left to build a scenario around.
+          </p>
+        {% else %}
+          <p class="empty-state-title">Scenarios open once {{ pool.scenarios_min_final_games }} {{ pool.scenarios_min_final_games | pluralize("game") }} {{ "are" if pool.scenarios_min_final_games != 1 else "is" }} final.</p>
+          <p class="muted">
+            {% if scenario_panel %}
+              {{ scenario_panel.final_count }} of {{ pool.scenarios_min_final_games }} final so far.
+            {% endif %}
+          </p>
+        {% endif %}
       </div>
     {% endif %}
   </section>

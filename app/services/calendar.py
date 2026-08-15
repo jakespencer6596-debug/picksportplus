@@ -50,6 +50,16 @@ class LeagueResolution:
         return self.season_type == espn.SEASON_TYPE_POSTSEASON
 
 
+def default_week1_anchor_date(year: int) -> dt.date:
+    """The second Saturday of September, NFL week 1 in a normal season (Phase 2 remediation,
+    see DECISIONS.md). Used to prefill a new league's anchor date and to backfill a pool that
+    predates the anchor date becoming a required field."""
+    first_of_september = dt.date(year, 9, 1)
+    days_to_first_saturday = (5 - first_of_september.weekday()) % 7  # Saturday = 5
+    first_saturday = first_of_september + dt.timedelta(days=days_to_first_saturday)
+    return first_saturday + dt.timedelta(days=7)
+
+
 def anchor_datetime(anchor_date: dt.date) -> dt.datetime:
     """Midday UTC on the anchor date.
 
@@ -61,7 +71,7 @@ def anchor_datetime(anchor_date: dt.date) -> dt.datetime:
 
 
 def resolve_league_week(
-    db: Session, league: str, year: int, anchor_date: dt.date
+    db: Session, league: str, year: int, anchor_date: dt.date, *, is_test_week: bool = False
 ) -> LeagueResolution | None:
     """One league's ESPN week and season type for a pool week anchored on anchor_date.
 
@@ -70,6 +80,13 @@ def resolve_league_week(
     NFL during the first weeks of the college season, or college deep into the NFL postseason.
     Never raises: a provider outage degrades to None here too, so the caller can still build a
     slate from whichever leagues did resolve.
+
+    is_test_week (Phase 3, preseason support) additionally tries SEASON_TYPE_PRESEASON, ahead
+    of the regular season, so a commissioner's test week can resolve against NFL preseason
+    (college has no separate preseason season type, its own week 0 already lives inside the
+    regular season block). The default stays False and every existing caller is unaffected: a
+    normal build must never accidentally pull preseason games just because an anchor date
+    happens to fall inside one, which is exactly the failure mode this keeps opt-in only.
     """
     try:
         # week and season_type are left at their defaults: the calendar block that comes back
@@ -81,7 +98,10 @@ def resolve_league_week(
         return None
 
     now = anchor_datetime(anchor_date)
-    for season_type in (espn.SEASON_TYPE_REGULAR, espn.SEASON_TYPE_POSTSEASON):
+    season_types = (espn.SEASON_TYPE_REGULAR, espn.SEASON_TYPE_POSTSEASON)
+    if is_test_week:
+        season_types = (espn.SEASON_TYPE_PRESEASON, *season_types)
+    for season_type in season_types:
         week = espn.current_week_from_payload(payload, now=now, season_type=season_type)
         # current_week_from_payload falls back to the next upcoming week, or holds on the last
         # week, when now is not actually inside any window for that season type. Either
@@ -100,15 +120,17 @@ def resolve_league_week(
 
 
 def resolve_pool_weeks(
-    db: Session, pool: Pool, anchor_date: dt.date
+    db: Session, pool: Pool, anchor_date: dt.date, *, is_test_week: bool = False
 ) -> dict[str, LeagueResolution | None]:
     """Every league the pool plays, resolved for one anchor date.
 
     A league that maps to None had no games for that date in either the regular season or the
-    postseason. That is not an error, it means the caller should build the week from whatever
-    leagues did resolve.
+    postseason (or, when is_test_week is True, the preseason either). That is not an error, it
+    means the caller should build the week from whatever leagues did resolve.
     """
     return {
-        league: resolve_league_week(db, league, pool.season_year, anchor_date)
+        league: resolve_league_week(
+            db, league, pool.season_year, anchor_date, is_test_week=is_test_week
+        )
         for league in pool.sports or ["nfl", "ncaaf"]
     }

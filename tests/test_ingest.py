@@ -12,12 +12,14 @@ from __future__ import annotations
 
 import dataclasses
 import datetime as dt
+import time
 
-from sqlalchemy import select
+import pytest
+from sqlalchemy import func, select
 
-from app.models import Game, Pick, Pool, PoolMember, User, Week, WeekEntry
+from app.models import Game, Pick, PlatformSetting, Pool, PoolMember, User, Week, WeekEntry
 from app.providers import espn
-from app.providers.http import cache_put
+from app.providers.http import ProviderError, cache_put, get_platform_settings
 from app.providers.teams import canonical_key
 from app.services import ingest, results
 
@@ -44,6 +46,11 @@ def _pool(db, **overrides) -> Pool:
         "auto_publish": False,
         "timezone": "America/New_York",
         "current_week": 1,
+        # Real by default (Phase 2 remediation, see DECISIONS.md): build_slate now refuses
+        # outright when this is None, so a test that actually wants that fallback behavior
+        # passes week1_anchor_date=None explicitly, same as it already did before this
+        # default existed.
+        "week1_anchor_date": dt.date(2026, 9, 12),
     }
     defaults.update(overrides)
     pool = Pool(**defaults)
@@ -306,6 +313,320 @@ def test_build_slate_succeeds_normally_when_only_one_league_has_no_games(db, loa
 
     assert report.candidates == 24
     assert not any("ESPN returned no games" in w for w in report.warnings)
+
+
+def test_build_slate_refuses_with_no_anchor_date(db):
+    """Phase 2 remediation (see DECISIONS.md): a blank week1_anchor_date used to fall back to
+    sending the pool's own week number straight to ESPN for both leagues, which is what
+    produced a slate spanning two calendar weeks. build_slate now refuses outright."""
+    pool = _pool(db, week1_anchor_date=None)
+
+    report = ingest.build_slate(db, pool, 2026, 1, allow_metered=False)
+
+    assert report.selected == 0
+    assert len(report.warnings) == 1
+    assert "Set your week 1 anchor date in Settings" in report.warnings[0]
+    assert db.scalar(select(Week).where(Week.pool_id == pool.id)) is None
+
+
+# The global "ESPN only" switch (Phase 5 remediation) --------------------------
+#
+# Replaces the old per-build commissioner checkbox: build_slate now ANDs its own
+# allow_metered parameter (still True by default, unchanged for every existing caller) with
+# the site admin's persisted, global PlatformSetting.espn_only, read fresh from the database
+# on every call via app.providers.http.get_platform_settings. These two tests prove the AND
+# actually gates the metered providers, not just the report's own bookkeeping: neither
+# odds_api.fetch_spreads nor cfbd.fetch_lines is ever called while the switch is on, and both
+# are called, exactly as before this phase, while it is off.
+
+
+def test_build_slate_espn_only_switch_on_skips_odds_api_and_cfbd(db, load_fixture, monkeypatch):
+    _cache_calendar(db, load_fixture, "nfl", 2026, NFL_2026_CALENDAR)
+    _cache_calendar(db, load_fixture, "ncaaf", 2026, CFB_2026_CALENDAR)
+    _cache_week(db, load_fixture, "ncaaf", 2026, 2, 1, CFB_SOME_GAMES)
+
+    pool = _pool(db, target_nfl=0, target_ncaaf=4, num_games_per_week=4)
+    ingest.ensure_week(db, pool, 2026, 1, anchor_date=dt.date(2026, 8, 29))
+    db.add(PlatformSetting(espn_only=True))
+    db.commit()
+
+    odds_api_calls: list[str] = []
+    cfbd_calls: list[tuple[int, int]] = []
+    monkeypatch.setattr(
+        ingest.odds_api,
+        "fetch_spreads",
+        lambda db, league, ttl_minutes=None: (odds_api_calls.append(league), ([], "live"))[1],
+    )
+    monkeypatch.setattr(
+        ingest.cfbd,
+        "fetch_lines",
+        lambda db, year, week, season_type="regular": (
+            cfbd_calls.append((year, week)),
+            ([], "live"),
+        )[1],
+    )
+
+    # allow_metered defaults to True here, exactly the value every existing caller (the old
+    # commissioner checkbox, app/cli.py, sync_week) already passes or defaults to. The switch
+    # alone is what must stop these calls.
+    report = ingest.build_slate(db, pool, 2026, 1)
+
+    assert report.candidates == 24
+    assert odds_api_calls == []
+    assert cfbd_calls == []
+    assert any("metered lookups were skipped" in w for w in report.warnings)
+
+
+def test_build_slate_espn_only_switch_off_calls_odds_api_and_cfbd_as_before(
+    db, load_fixture, monkeypatch
+):
+    _cache_calendar(db, load_fixture, "nfl", 2026, NFL_2026_CALENDAR)
+    _cache_calendar(db, load_fixture, "ncaaf", 2026, CFB_2026_CALENDAR)
+    _cache_week(db, load_fixture, "ncaaf", 2026, 2, 1, CFB_SOME_GAMES)
+
+    pool = _pool(db, target_nfl=0, target_ncaaf=4, num_games_per_week=4)
+    ingest.ensure_week(db, pool, 2026, 1, anchor_date=dt.date(2026, 8, 29))
+    # No PlatformSetting row at all: get_platform_settings creates one on first read, with
+    # espn_only defaulting to False, exactly the "off by default" the brief requires.
+    assert db.scalar(select(PlatformSetting)) is None
+
+    odds_api_calls: list[str] = []
+    cfbd_calls: list[tuple[int, int]] = []
+    monkeypatch.setattr(
+        ingest.odds_api,
+        "fetch_spreads",
+        lambda db, league, ttl_minutes=None: (odds_api_calls.append(league), ([], "live"))[1],
+    )
+    monkeypatch.setattr(
+        ingest.cfbd,
+        "fetch_lines",
+        lambda db, year, week, season_type="regular": (
+            cfbd_calls.append((year, week)),
+            ([], "live"),
+        )[1],
+    )
+
+    report = ingest.build_slate(db, pool, 2026, 1)
+
+    assert report.candidates == 24
+    assert odds_api_calls == ["ncaaf"]
+    assert cfbd_calls == [(2026, 1)]
+    assert get_platform_settings(db).espn_only is False
+
+
+# Test weeks (Phase 3, preseason and test week support) -----------------------
+
+
+def test_ensure_week_marks_is_test_week_and_labels_it_on_creation(db):
+    pool = _pool(db, week1_anchor_date=None)
+
+    week = ingest.ensure_week(
+        db, pool, 2026, ingest.TEST_WEEK_NUMBER, anchor_date=dt.date(2026, 8, 10), is_test_week=True
+    )
+
+    assert week.is_test_week is True
+    assert week.label == "Test week"
+    assert week.week_number == 0
+
+
+def test_ensure_week_does_not_retroactively_flag_an_existing_week(db):
+    """is_test_week only ever applies the first time a week row is created, the same
+    one-time-on-creation shape a rivalry auto-pin already uses (upsert_games)."""
+    pool = _pool(db, week1_anchor_date=dt.date(2026, 9, 12))
+    real_week = ingest.ensure_week(db, pool, 2026, 1)
+    assert real_week.is_test_week is False
+
+    same_week = ingest.ensure_week(db, pool, 2026, 1, is_test_week=True)
+
+    assert same_week.id == real_week.id
+    assert same_week.is_test_week is False
+
+
+def test_build_slate_test_week_resolves_preseason_without_a_pool_anchor_date(db, load_fixture):
+    """A test week needs no pool.week1_anchor_date at all (Phase 2's refusal is for a real
+    week only): it resolves against right now instead. August 10, 2026 sits inside NFL's real
+    Hall of Fame Weekend window in the recorded calendar (season type 1, week 1)."""
+    _cache_calendar(db, load_fixture, "nfl", 2026, NFL_2026_CALENDAR)
+    _cache_week(db, load_fixture, "nfl", 2026, 1, 1, NFL_SOME_GAMES)
+
+    pool = _pool(db, week1_anchor_date=None, target_nfl=4, target_ncaaf=0, num_games_per_week=4)
+
+    report = ingest.build_slate(
+        db,
+        pool,
+        2026,
+        ingest.TEST_WEEK_NUMBER,
+        allow_metered=False,
+        is_test_week=True,
+        now=dt.datetime(2026, 8, 10, 12, 0, tzinfo=UTC),
+    )
+
+    week = db.scalar(select(Week).where(Week.pool_id == pool.id))
+    assert week is not None
+    assert week.is_test_week is True
+    assert week.anchor_date == dt.date(2026, 8, 10)
+    assert week.resolved_weeks["nfl"] == {"week": 1, "season_type": espn.SEASON_TYPE_PRESEASON}
+    assert report.candidates > 0
+    assert report.selected > 0
+
+
+def test_build_slate_normal_week_does_not_pull_preseason_on_the_same_date(db, load_fixture):
+    """The exact same cached calendar and the exact same effective anchor date as the test
+    above (week1_anchor_date is set directly to August 10, so a plain week 1 build resolves
+    against it), but is_test_week left at its default False. Neither the regular season nor
+    the postseason cover August 10, so this must be a dead end, never a preseason resolution,
+    proving the default path genuinely never pulls preseason games."""
+    _cache_calendar(db, load_fixture, "nfl", 2026, NFL_2026_CALENDAR)
+    _cache_week(db, load_fixture, "nfl", 2026, 1, 1, NFL_SOME_GAMES)
+
+    pool = _pool(db, week1_anchor_date=dt.date(2026, 8, 10), sports=["nfl"])
+
+    report = ingest.build_slate(db, pool, 2026, 1, allow_metered=False)
+
+    week = db.scalar(select(Week).where(Week.pool_id == pool.id))
+    assert week is not None
+    assert week.is_test_week is False
+    assert week.resolved_weeks["nfl"] is None  # not the preseason week the fixture has cached
+    assert report.candidates == 0
+    assert report.selected == 0
+
+
+def test_test_week_can_be_deleted_and_cascades_its_games_picks_and_entries(db):
+    pool = _pool(db, week1_anchor_date=None)
+    week = ingest.ensure_week(
+        db, pool, 2026, ingest.TEST_WEEK_NUMBER, anchor_date=dt.date(2026, 8, 10), is_test_week=True
+    )
+    user = User(email="alice@example.com", password_hash="x", display_name="Alice")
+    db.add(user)
+    db.flush()
+    db.add(PoolMember(pool_id=pool.id, user_id=user.id, role_in_pool="member"))
+    game = Game(
+        week_id=week.id,
+        league="nfl",
+        espn_event_id="evt-test-1",
+        start_time=dt.datetime(2026, 8, 10, 17, 0, tzinfo=UTC),
+        home_team="Home Team",
+        away_team="Away Team",
+        home_abbr="HOM",
+        away_abbr="AWY",
+        canonical_home_key="nfl:home-test",
+        canonical_away_key="nfl:away-test",
+        in_slate=True,
+        slate_rank=1,
+    )
+    db.add(game)
+    db.flush()
+    db.add(
+        Pick(
+            user_id=user.id,
+            pool_id=pool.id,
+            week_id=week.id,
+            game_id=game.id,
+            picked_team="home",
+            confidence=1,
+        )
+    )
+    db.add(WeekEntry(user_id=user.id, pool_id=pool.id, week_id=week.id, points=0))
+    db.commit()
+
+    week_id, game_id = week.id, game.id
+    db.delete(db.get(Week, week_id))
+    db.commit()
+
+    assert db.get(Week, week_id) is None
+    assert db.get(Game, game_id) is None
+    assert db.scalar(select(Pick).where(Pick.week_id == week_id)) is None
+    assert db.scalar(select(WeekEntry).where(WeekEntry.week_id == week_id)) is None
+    # The pool and the user themselves are untouched.
+    assert db.get(Pool, pool.id) is not None
+    assert db.get(User, user.id) is not None
+
+
+# Slate span guard (Phase 2 remediation) --------------------------------------
+
+
+def _spanning_week(db, pool: Pool, *, span_days: int) -> Week:
+    """A drafted week with two in-slate games span_days apart, real NFL and college weeks
+    resolved so _span_too_wide_message has something to report."""
+    week = _week_row(db, pool)
+    week.resolved_weeks = {
+        "nfl": {"week": 1, "season_type": 2},
+        "ncaaf": {"week": 3, "season_type": 2},
+    }
+    base = dt.datetime(2026, 9, 12, 17, 0, tzinfo=UTC)
+    for index, offset in enumerate((0, span_days)):
+        db.add(
+            Game(
+                week_id=week.id,
+                league="nfl",
+                espn_event_id=f"span-{index}",
+                start_time=base + dt.timedelta(days=offset),
+                home_team=f"Home {index}",
+                away_team=f"Away {index}",
+                home_abbr=f"H{index}",
+                away_abbr=f"A{index}",
+                canonical_home_key=f"nfl:home-{index}",
+                canonical_away_key=f"nfl:away-{index}",
+                in_slate=True,
+                slate_rank=index + 1,
+            )
+        )
+    db.flush()
+    return week
+
+
+def test_publish_week_refuses_a_slate_spanning_more_than_eight_days(db):
+    pool = _pool(db)
+    week = _spanning_week(db, pool, span_days=17)
+
+    with pytest.raises(ingest.SlateSpanTooWide) as excinfo:
+        ingest.publish_week(db, week)
+
+    message = str(excinfo.value)
+    assert "spans 17 days" in message
+    assert "NFL resolved to week 1" in message
+    assert "College resolved to week 3" in message
+    assert week.status == "draft"
+
+
+def test_publish_week_allows_a_normal_slate_within_eight_days(db):
+    pool = _pool(db)
+    week = _spanning_week(db, pool, span_days=3)
+
+    ingest.publish_week(db, week)
+
+    assert week.status == "open"
+
+
+def test_slate_span_is_none_with_fewer_than_two_games(db):
+    pool = _pool(db)
+    week = _week_row(db, pool)
+    assert ingest.slate_span(db, week) is None
+
+
+def test_duplicate_team_warnings_explains_a_dropped_game_with_real_names(db):
+    """Phase 2 remediation (see DECISIONS.md): app.slate refuses to select two games sharing
+    a team; this explains the drop to the commissioner using real team names, which the pure
+    slate module deliberately does not have."""
+    pool = _pool(db, target_ncaaf=1, target_nfl=0, num_games_per_week=1, sports=["ncaaf"])
+    week = _week_row(db, pool)
+    closer = _rivalry_game("evt-close", "Ohio State", "Penn State")
+    farther = dataclasses.replace(
+        _rivalry_game("evt-far", "Ohio State", "Iowa"),
+        kickoff=dt.datetime(2026, 9, 19, 17, 0, tzinfo=UTC),
+    )
+    ingest.upsert_games(db, week, [closer, farther], {}, pool)
+
+    ingest.apply_slate(db, pool, week, now=dt.datetime(2026, 9, 1, tzinfo=UTC))
+    warnings = ingest.duplicate_team_warnings(db, week)
+
+    assert len(warnings) == 1
+    assert "Ohio State" in warnings[0]
+    assert "left off the slate" in warnings[0]
+    on_slate = list(
+        db.scalars(select(Game).where(Game.week_id == week.id, Game.in_slate.is_(True)))
+    )
+    assert [g.espn_event_id for g in on_slate] == ["evt-close"]
 
 
 # Pinned and rivalry games (Phase 5) -------------------------------------------
@@ -637,7 +958,11 @@ def test_a_new_rivalry_game_does_not_resize_a_frozen_slate(db, monkeypatch):
     db.flush()
 
     rivalry_game = _rivalry_game("evt-rivalry", "Ohio State", "Michigan")
-    monkeypatch.setattr(ingest, "fetch_candidates", lambda db, pool, week: ([rivalry_game], []))
+    monkeypatch.setattr(
+        ingest,
+        "fetch_candidates",
+        lambda db, pool, week, **kwargs: ([rivalry_game], []),
+    )
 
     report = ingest.build_slate(db, pool, pool.season_year, week.week_number, allow_metered=False)
 
@@ -651,6 +976,135 @@ def test_a_new_rivalry_game_does_not_resize_a_frozen_slate(db, monkeypatch):
     assert report.selected == 1  # the game count genuinely did not move
 
 
+# Phase 6 remediation: idempotency guard and hard timeout ---------------------
+#
+# See DECISIONS.md, Phase 6, for the full reasoning. Two things pinned here: a second build
+# for the exact same (pool, week) is refused rather than allowed to race the first (an
+# in-process, lock-guarded set, sufficient for this app's single uvicorn worker, insufficient
+# for a multi-process deployment, documented rather than built around), and a build that
+# exceeds its wall-clock budget fails with a message naming whichever provider call was in
+# flight, rather than hanging indefinitely.
+
+
+def test_slate_build_guard_rejects_a_second_concurrent_build_for_the_same_week():
+    """Simulates a race deterministically, no real threads needed: acquire the guard directly,
+    the same call build_slate itself makes internally, then assert a second acquire for the
+    exact same (pool_id, week_number) is refused with the specific commissioner facing message,
+    while a different week number for the same pool is an entirely separate lock."""
+    ingest._acquire_build_lock(pool_id=1, week_number=3)
+    try:
+        with pytest.raises(ingest.BuildInProgress, match="This week is already being built"):
+            ingest._acquire_build_lock(pool_id=1, week_number=3)
+        # A different week is a different key, unaffected by the held lock above.
+        ingest._acquire_build_lock(pool_id=1, week_number=4)
+        ingest._release_build_lock(pool_id=1, week_number=4)
+    finally:
+        ingest._release_build_lock(pool_id=1, week_number=3)
+
+    # Released, so a fresh acquire for the same key now succeeds again.
+    ingest._acquire_build_lock(pool_id=1, week_number=3)
+    ingest._release_build_lock(pool_id=1, week_number=3)
+
+
+def test_build_slate_refuses_when_the_guard_is_already_held_for_that_week(db, load_fixture):
+    """build_slate acquires the guard itself (not just the router), so a caller racing an
+    already-in-progress build for this exact pool/week is refused before any candidate fetch or
+    database write happens, not merely queued behind it: no Game rows appear, and a normal
+    build for the same week still works once the lock is released."""
+    _cache_calendar(db, load_fixture, "nfl", 2026, NFL_2026_CALENDAR)
+    _cache_calendar(db, load_fixture, "ncaaf", 2026, CFB_2026_CALENDAR)
+    _cache_week(db, load_fixture, "ncaaf", 2026, 2, 1, CFB_SOME_GAMES)
+
+    pool = _pool(db, target_nfl=0, target_ncaaf=4, num_games_per_week=4)
+    week = ingest.ensure_week(db, pool, 2026, 1, anchor_date=dt.date(2026, 8, 29))
+
+    ingest._acquire_build_lock(pool.id, 1)
+    try:
+        with pytest.raises(ingest.BuildInProgress, match="This week is already being built"):
+            ingest.build_slate(db, pool, 2026, 1, allow_metered=False)
+    finally:
+        ingest._release_build_lock(pool.id, 1)
+
+    assert db.scalar(select(func.count(Game.id)).where(Game.week_id == week.id)) == 0
+
+    # The lock is released now, so the very next build for the same week runs normally and
+    # is not left refusing itself forever.
+    report = ingest.build_slate(db, pool, 2026, 1, allow_metered=False)
+    assert report.candidates == 24
+
+
+def test_build_slate_times_out_naming_the_provider_in_flight(db, load_fixture, monkeypatch):
+    """Injects a slow ESPN core odds lookup (follows this file's existing monkeypatch
+    convention, see test_a_new_rivalry_game_does_not_resize_a_frozen_slate above) and a tiny
+    wall clock budget, so the timeout is deterministic rather than depending on real elapsed
+    time anywhere else in the test process. The deadline is checked between major steps (see
+    ingest._Deadline), not inside the per-game core odds loop itself, so the raised message
+    names the next stage, The Odds API, the one actually about to run when the budget had
+    already been blown by the slow core odds lookups before it."""
+    _cache_calendar(db, load_fixture, "nfl", 2026, NFL_2026_CALENDAR)
+    _cache_calendar(db, load_fixture, "ncaaf", 2026, CFB_2026_CALENDAR)
+    _cache_week(db, load_fixture, "ncaaf", 2026, 2, 1, CFB_SOME_GAMES)
+
+    pool = _pool(db, target_nfl=0, target_ncaaf=4, num_games_per_week=4)
+    ingest.ensure_week(db, pool, 2026, 1, anchor_date=dt.date(2026, 8, 29))
+
+    def _slow_core_odds(db, league, event_id):
+        time.sleep(0.02)
+        raise ProviderError("not cached, offline")
+
+    monkeypatch.setattr(ingest.espn, "fetch_core_odds", _slow_core_odds)
+
+    with pytest.raises(ingest.BuildTimeout, match="The Odds API"):
+        ingest.build_slate(db, pool, 2026, 1, time_budget_seconds=0.05)
+
+
+def test_build_slate_schedule_call_times_out_naming_espn_and_the_league(
+    db, load_fixture, monkeypatch
+):
+    """Proves fetch_candidates itself checks the deadline, not only resolve_spreads: a slow
+    calendar lookup (calendar_svc.resolve_league_week's own, separate espn.fetch_scoreboard
+    call, used to resolve which ESPN week the anchor date falls in, happens first and is what
+    is slowed down here) burns the whole budget, so the per-week scoreboard call right after it
+    never runs at all. The calendar itself is cached, so this is a real cache hit slowed down
+    by hand, not a genuine ProviderError that could masquerade as this timeout."""
+    _cache_calendar(db, load_fixture, "ncaaf", 2026, CFB_2026_CALENDAR)
+
+    pool = _pool(db, sports=["ncaaf"])
+    ingest.ensure_week(db, pool, 2026, 1, anchor_date=dt.date(2026, 8, 29))
+
+    real_fetch_scoreboard = ingest.espn.fetch_scoreboard
+
+    def _guard_scoreboard(db, league, year, week=None, **kwargs):
+        if week is not None:
+            raise AssertionError("should never reach the per-week scoreboard call")
+        time.sleep(0.05)  # simulates a slow calendar lookup, a real cache hit either way
+        return real_fetch_scoreboard(db, league, year, week, **kwargs)
+
+    monkeypatch.setattr(ingest.espn, "fetch_scoreboard", _guard_scoreboard)
+
+    with pytest.raises(ingest.BuildTimeout, match="ESPN for the college schedule"):
+        ingest.build_slate(db, pool, 2026, 1, allow_metered=False, time_budget_seconds=0.03)
+
+
+def test_build_slate_logs_wall_clock_duration(db, load_fixture, caplog):
+    """Reproduce-it-first (Phase 6 remediation): build_slate logs its own elapsed wall clock
+    time on every call, success or not, which is what let this phase measure a real build's
+    duration in the first place (see REMEDIATION-REPORT.md, Phase 6 notes)."""
+    _cache_calendar(db, load_fixture, "nfl", 2026, NFL_2026_CALENDAR)
+    _cache_calendar(db, load_fixture, "ncaaf", 2026, CFB_2026_CALENDAR)
+    _cache_week(db, load_fixture, "ncaaf", 2026, 2, 1, CFB_SOME_GAMES)
+
+    pool = _pool(db, target_nfl=0, target_ncaaf=4, num_games_per_week=4)
+    ingest.ensure_week(db, pool, 2026, 1, anchor_date=dt.date(2026, 8, 29))
+
+    with caplog.at_level("INFO", logger="picksportplus.ingest"):
+        ingest.build_slate(db, pool, 2026, 1, allow_metered=False)
+
+    assert any(
+        "slate build finished" in r.message and "elapsed" in r.message for r in caplog.records
+    )
+
+
 # The cron path: build, fetch results, score, run three times in a row (Phase 9b) ------------
 
 
@@ -661,10 +1115,18 @@ def test_the_build_fetch_score_pipeline_is_idempotent_across_three_runs(db, load
     run_cron does, per pool: sync_week (detect_week, then build_slate), then for every week
     still open or locked, fetch_results followed by score_week_for_pool. detect_week itself
     reads the real wall clock and is covered on its own in this file and in
-    tests/test_calendar.py, so this test calls build_slate directly with an explicit week
-    number (week1_anchor_date left unset, the documented pre-anchor fallback that sends the
-    week number straight to both leagues) rather than routing through sync_week, which is
-    what keeps this test's outcome independent of what day pytest happens to run.
+    tests/test_calendar.py, so this test drives build_slate's own constituent steps directly
+    with an explicit week number (week1_anchor_date left unset, the documented pre-anchor
+    fallback that sends the week number straight to both leagues) rather than routing through
+    sync_week, which is what keeps this test's outcome independent of what day pytest happens
+    to run.
+
+    Phase 2 remediation (see DECISIONS.md) made build_slate itself refuse outright when
+    week1_anchor_date is None, exactly to close off this fallback for a real build. This test
+    still wants to exercise the fallback, so run_once below calls ensure_week,
+    fetch_candidates, resolve_spreads, upsert_games and apply_slate directly instead of
+    build_slate, a direct continuation of this test's already-stated reason for bypassing the
+    higher level sync_week to begin with.
 
     Run 1 to run 2 may legitimately change something, this is the first time results are
     fetched and scored. Run 2 to run 3, against the exact same cached ESPN and CFBD
@@ -699,16 +1161,20 @@ def test_the_build_fetch_score_pipeline_is_idempotent_across_three_runs(db, load
     )
 
     def run_once() -> Week:
-        ingest.build_slate(db, pool, year, week_number, allow_metered=True, publish=True)
-        week = db.scalar(
-            select(Week).where(
-                Week.pool_id == pool.id,
-                Week.season_year == year,
-                Week.week_number == week_number,
-            )
-        )
+        week = ingest.ensure_week(db, pool, year, week_number)
+        games, _attempts = ingest.fetch_candidates(db, pool, week)
+        spreads, _warnings = ingest.resolve_spreads(db, week, games, allow_metered=True)
+        ingest.upsert_games(db, week, games, spreads, pool)
+        ingest.apply_slate(db, pool, week, now=None)
         if week.status == "draft":
-            ingest.publish_week(db, week)
+            # This fixture's NFL and college week 5 games genuinely span 11 days once both
+            # leagues' week numbers are sent directly (the pre-anchor fallback under test
+            # here), which Phase 2's span guard correctly refuses to publish. That guard is
+            # covered on its own elsewhere; this test only cares that the results/scoring
+            # pipeline is idempotent, so it opens the week directly rather than through
+            # ingest.publish_week.
+            week.status = "open"
+            week.published_at = dt.datetime.now(UTC)
         results.fetch_results(db, pool, week)
         results.score_week_for_pool(db, pool, week)
         db.flush()

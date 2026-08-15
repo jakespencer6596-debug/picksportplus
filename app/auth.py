@@ -67,7 +67,13 @@ def generate_join_code(length: int = 8) -> str:
 
 
 def normalize_join_code(code: str) -> str:
-    return (code or "").strip().upper().replace(" ", "")
+    """Uppercase, and strip whitespace and hyphens, so a code typed however a human happens
+    to remember or write it out (with a dash for readability, like "AB3D-EFGH", or with a
+    stray space) still matches the stored, dash-free value. Every real entry point already
+    calls this one function (registration, /join, the commissioner join-code-by-hand route,
+    league creation and commissioner-invite-code routes), so fixing it here is enough."""
+    cleaned = (code or "").strip().upper()
+    return cleaned.replace(" ", "").replace("-", "")
 
 
 # Flash messages -------------------------------------------------------------

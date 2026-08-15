@@ -899,6 +899,40 @@
     }
   });
 
+  /* Slate build loading state (Phase 6 remediation, see DECISIONS.md). Building a slate can
+     legitimately take several seconds to just under a minute (ESPN for the schedule, then
+     possibly The Odds API/CFBD for every candidate game), and the request used to give no
+     feedback at all while it ran: a commissioner reasonably assumed the click did nothing and
+     clicked again. This is the client side half only; the real guard against a second
+     concurrent build for the same week lives server side in app.services.ingest, this button
+     staying disabled is a courtesy, not the defence.
+
+     The route (app/routers/admin.py's slate_build) always finishes an htmx request with an
+     HX-Redirect response header, success or refused alike, so htmx does a real full page
+     navigation the instant the response lands, which is what actually clears this state most
+     of the time; htmx:afterRequest below is only needed for the one case that never reaches
+     that (a genuine network failure that never got a response at all). */
+  document.addEventListener("htmx:beforeRequest", function (e) {
+    if (!e.target.matches("[data-build-btn]")) return;
+    var btn = e.target;
+    btn.disabled = true;
+    btn.dataset.buildLabel = btn.textContent;
+    btn.textContent = "Building the slate";
+    var note = document.querySelector("[data-build-note]");
+    if (note) note.hidden = false;
+  });
+
+  document.addEventListener("htmx:afterRequest", function (e) {
+    if (!e.target.matches("[data-build-btn]")) return;
+    var btn = e.target;
+    if (!btn.dataset.buildLabel) return;
+    btn.disabled = false;
+    btn.textContent = btn.dataset.buildLabel;
+    delete btn.dataset.buildLabel;
+    var note = document.querySelector("[data-build-note]");
+    if (note) note.hidden = true;
+  });
+
   window.PSP = {
     renumber: renumber,
     updateSummary: updateSummary,

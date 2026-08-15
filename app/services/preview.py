@@ -11,8 +11,20 @@ which this pool never has.
 
 Building or refreshing its slate is never triggered from inside a request handler, so an
 anonymous or poolless visitor's page load can never itself spend a metered provider credit.
-It only happens from the explicit, human-triggered `python -m app.cli seed-preview` command,
-the same "deliberate trigger" contract every real pool's slate already follows.
+It is created (find-or-create) only by the explicit, human-triggered
+`python -m app.cli seed-preview` command, the same "deliberate trigger" contract every real
+pool's own creation follows.
+
+Once it exists, `python -m app.cli run-cron` (Phase 8 remediation, see DECISIONS.md) refreshes
+its slate on the same hourly, operator-scheduled cadence every real pool's slate already gets,
+through the same `sync_week`, with the same metered-budget carefulness (the site admin's
+global "ESPN only" switch, the per-week refresh cap): a scheduled cron tick is a controlled,
+operator-owned trigger, not a visitor's page view, so refreshing the preview there does not
+reopen the "no request handler ever spends a credit" guarantee above. `run-cron` never calls
+`ensure_preview_pool`, only the read only `get_preview_pool`, so a deployment that has never
+run `seed-preview` once by hand still never gets a preview pool conjured out from under it by
+an unattended cron tick; `python -m app.cli doctor` flags that missing-or-stale state so an
+operator notices.
 """
 
 from __future__ import annotations

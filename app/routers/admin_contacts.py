@@ -22,7 +22,7 @@ from app.db import get_db
 from app.models import ContactSubmission, User
 from app.templating import render
 
-router = APIRouter(prefix="/admin/contacts", tags=["admin-contacts"])
+router = APIRouter(prefix="/site/contacts", tags=["admin-contacts"])
 
 
 @router.get("")
@@ -41,7 +41,7 @@ def contacts_page(
         current_user=user,
         pool=None,
         is_commissioner=True,
-        active_nav="admin_contacts",
+        active_nav="site_contacts",
     )
 
 

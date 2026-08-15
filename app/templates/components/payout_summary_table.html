@@ -2,7 +2,7 @@
   The commissioner payout summary table (Payout system rebuild, Phase 6). Included once from
   admin/payout_summary.html's own first render, and re-rendered whole as an HTMX partial swap
   into #payout-summary-wrap whenever a Paid checkbox is toggled
-  (POST /admin/payouts/player/{user_id}/paid, app/routers/payouts.py), so the settlement line
+  (POST /league/payouts/player/{user_id}/paid, app/routers/payouts.py), so the settlement line
   and the totals row both stay in sync with the checkbox without a full page reload.
 #}
 <div id="payout-summary-wrap">
@@ -42,7 +42,7 @@
                        aria-label="{{ row.display_name }} is not owed anything yet">
               {% else %}
                 <input type="checkbox" class="paid-checkbox"
-                       hx-post="/admin/payouts/player/{{ row.user_id }}/paid"
+                       hx-post="/league/payouts/player/{{ row.user_id }}/paid"
                        hx-target="#payout-summary-wrap" hx-swap="outerHTML"
                        {% if unpaid_only %}hx-vals='{"unpaid": "1"}'{% endif %}
                        {% if row.unpaid_total == 0 %}checked{% endif %}
@@ -79,7 +79,7 @@
   </div>
 
   <div class="row payout-summary-actions">
-    <a class="btn btn-secondary" href="/admin/payouts/summary.csv">Download CSV</a>
+    <a class="btn btn-secondary" href="/league/payouts/summary.csv">Download CSV</a>
     <button type="button" class="btn btn-secondary" data-copy="#payout-summary-text">Copy as text</button>
   </div>
   <pre id="payout-summary-text" class="visually-hidden">{{ text_table }}</pre>

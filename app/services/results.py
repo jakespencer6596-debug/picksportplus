@@ -220,6 +220,15 @@ def score_week_for_pool(db: Session, pool: Pool, week: Week) -> ScoreReport:
             week.status = "scored"
             week.scored_at = utcnow()
 
+            # A test week (Phase 3, preseason and test week support) scores normally within
+            # itself, that is what report.players/scored_games above already reflect, but it
+            # must never generate a PayoutAward of any scope, and finishing its own scoring is
+            # never the season's real completion signal. Skipping the whole freeze block below
+            # is what makes that a computation-level guarantee rather than a template-only one.
+            if week.is_test_week:
+                db.flush()
+                return report
+
             # Freeze this week's payout awards the instant it finishes scoring, so a pot that
             # grows later (a member pays late) never silently changes a figure the
             # commissioner may already have paid over Venmo. snapshot_awards is itself

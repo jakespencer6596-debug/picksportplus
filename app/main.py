@@ -45,6 +45,24 @@ app.add_middleware(ProxyHeadersMiddleware, trusted_hosts="*")
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
 
+@app.on_event("startup")
+def _log_storage_status() -> None:
+    """Loud, impossible-to-miss log line on boot so an operator reading the Render deploy
+    log sees data-loss risk immediately, not just from a banner someone has to click into
+    (Phase 1 remediation, see DECISIONS.md)."""
+    from app.db import engine
+
+    log.info("database dialect: %s", engine.dialect.name)
+    if settings.is_ephemeral_storage:
+        log.warning(
+            "DATABASE_URL points at ephemeral storage (%s). Every account, league, pick, "
+            "payout rule and award will be LOST the next time this service sleeps or "
+            "redeploys. Set DATABASE_URL to a persistent Postgres database (for example "
+            "Neon) before inviting real players.",
+            settings.database_url,
+        )
+
+
 @app.exception_handler(StarletteHTTPException)
 async def http_exception_handler(request: Request, exc: StarletteHTTPException):
     """Redirects for signed-out users, in-theme pages for everything else."""
@@ -100,11 +118,13 @@ from app.routers import (  # noqa: E402
     auth,
     leaderboard,
     leagues,
+    legacy_redirects,
     legal,
     payouts,
     picks,
     public,
     results,
+    site,
 )
 
 app.include_router(auth.router)
@@ -114,9 +134,13 @@ app.include_router(results.router)
 app.include_router(admin.router)
 app.include_router(payouts.router)
 app.include_router(leagues.router)
+app.include_router(site.router)
 app.include_router(admin_contacts.router)
 app.include_router(legal.router)
 app.include_router(public.router)
+# Registered last: every real /admin/... route from before Phase 4 is gone, so these bare
+# 301s only ever catch an old bookmark or an old link, never shadow a live route.
+app.include_router(legacy_redirects.router)
 
 
 @app.get("/", include_in_schema=False)

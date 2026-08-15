@@ -10,6 +10,7 @@ the model layer.
 
 from __future__ import annotations
 
+import datetime as dt
 from decimal import Decimal
 
 import pytest
@@ -62,6 +63,98 @@ def _configure_admin_credentials(monkeypatch) -> None:
     monkeypatch.setattr(settings, "admin_email", "commissioner@example.com")
     monkeypatch.setattr(settings, "admin_password", "hunter2hunter2")
     monkeypatch.setattr(settings, "default_join_code", "TESTCODE")
+
+
+def test_doctor_warns_on_ephemeral_storage_and_reports_row_counts(isolated_db, monkeypatch, capsys):
+    """Phase 1 remediation (see DECISIONS.md): doctor is the data-loss check a commissioner or
+    site admin can run to see, at a glance, whether the last restart kept the data."""
+    from app.cli import doctor
+
+    monkeypatch.setattr(settings, "database_url", "sqlite:////tmp/picksportplus.db")
+
+    session = isolated_db()
+    session.add(User(email="a@example.com", password_hash="x", display_name="A"))
+    session.commit()
+    session.close()
+
+    doctor(pool_id=None, probe=False)
+    out = capsys.readouterr().out.lower()
+    assert "ephemeral storage" in out
+    assert "users       : 1" in out
+
+
+def test_doctor_reports_durable_storage_when_not_ephemeral(isolated_db, monkeypatch, capsys):
+    from app.cli import doctor
+
+    monkeypatch.setattr(settings, "database_url", "sqlite:///./picksportplus.db")
+
+    doctor(pool_id=None, probe=False)
+    out = capsys.readouterr().out.lower()
+    assert "storage     : durable" in out
+    assert "ephemeral" not in out
+
+
+def test_backfill_anchor_dates_sets_the_second_saturday_of_september(
+    isolated_db, monkeypatch, capsys
+):
+    """Phase 2 remediation (see DECISIONS.md): a pool created before the anchor date became
+    required at league creation."""
+    from app.cli import backfill_anchor_dates_cmd
+
+    session = isolated_db()
+    pool = Pool(
+        name="Legacy Pool",
+        join_code="LEGACY01",
+        season_year=2026,
+        week1_anchor_date=None,
+    )
+    session.add(pool)
+    session.commit()
+    pool_id = pool.id
+    session.close()
+
+    backfill_anchor_dates_cmd()
+
+    out = capsys.readouterr().out
+    assert "Legacy Pool" in out
+    assert "2026-09-12" in out
+
+    session = isolated_db()
+    try:
+        refreshed = session.get(Pool, pool_id)
+        assert refreshed.week1_anchor_date is not None
+        assert refreshed.week1_anchor_date.isoformat() == "2026-09-12"
+        assert refreshed.week1_anchor_date.weekday() == 5
+    finally:
+        session.close()
+
+
+def test_backfill_anchor_dates_is_idempotent_and_leaves_a_real_date_alone(
+    isolated_db, monkeypatch, capsys
+):
+    from app.cli import backfill_anchor_dates_cmd
+
+    session = isolated_db()
+    pool = Pool(
+        name="Already Set",
+        join_code="ALREADY1",
+        season_year=2026,
+        week1_anchor_date=dt.date(2026, 9, 19),
+    )
+    session.add(pool)
+    session.commit()
+    session.close()
+
+    backfill_anchor_dates_cmd()
+    out = capsys.readouterr().out
+    assert "Nothing to backfill" in out
+
+    session = isolated_db()
+    try:
+        pool = session.scalar(select(Pool).where(Pool.name == "Already Set"))
+        assert pool.week1_anchor_date.isoformat() == "2026-09-19"
+    finally:
+        session.close()
 
 
 def test_seed_admin_creates_a_pool_with_auto_publish_off(isolated_db, monkeypatch):
@@ -177,6 +270,207 @@ def test_ensure_preview_pool_is_idempotent(isolated_db):
         assert len(list(session.scalars(select(Pool).where(Pool.is_preview.is_(True))))) == 1
     finally:
         session.close()
+
+
+# run-cron and doctor: keeping the public preview fresh (Phase 8 remediation) ------------
+#
+# See DECISIONS.md, Phase 8. run-cron used to exclude the preview pool from every step of
+# its work, on purpose, so an anonymous visitor's page view could never trigger a metered
+# provider call. That reasoning still holds for page views, but a scheduled, operator-owned
+# cron tick is not a page view, so run-cron now refreshes the preview pool's slate the same
+# way it refreshes every real pool's, once the preview pool actually exists. It still never
+# creates the preview pool itself (only seed-preview does that).
+
+
+def test_run_cron_refreshes_the_preview_pool_when_it_exists(isolated_db, monkeypatch):
+    """The preview pool must not go stale just because nobody remembers to run seed-preview
+    by hand. run-cron now calls the same sync_week every real pool goes through against the
+    preview pool too, once it exists."""
+    import app.services.ingest as ingest_module
+    from app.cli import run_cron
+    from app.services.preview import ensure_preview_pool
+
+    session = isolated_db()
+    try:
+        real_pool = Pool(
+            name="Real Pool",
+            join_code="REALPOOL",
+            season_year=2026,
+            sports=["nfl"],
+            timezone="America/New_York",
+            current_week=1,
+        )
+        session.add(real_pool)
+        session.flush()
+        preview_pool = ensure_preview_pool(session)
+        session.commit()
+        real_pool_id, preview_pool_id = real_pool.id, preview_pool.id
+    finally:
+        session.close()
+
+    synced_pool_ids: list[int] = []
+
+    def _fake_sync_week(db, pool, *args, **kwargs):
+        synced_pool_ids.append(pool.id)
+        return None
+
+    monkeypatch.setattr(ingest_module, "sync_week", _fake_sync_week)
+
+    run_cron(pool_id=None)
+
+    assert real_pool_id in synced_pool_ids
+    assert preview_pool_id in synced_pool_ids
+
+
+def test_run_cron_never_creates_the_preview_pool(isolated_db, monkeypatch):
+    """A deployment that has never run seed-preview once by hand must not get a preview pool
+    conjured out from under it by an unattended cron tick. run-cron only ever calls the read
+    only get_preview_pool, never ensure_preview_pool."""
+    import app.services.ingest as ingest_module
+    from app.cli import run_cron
+
+    session = isolated_db()
+    try:
+        real_pool = Pool(
+            name="Real Pool",
+            join_code="REALPOOL",
+            season_year=2026,
+            sports=["nfl"],
+            timezone="America/New_York",
+            current_week=1,
+        )
+        session.add(real_pool)
+        session.commit()
+    finally:
+        session.close()
+
+    monkeypatch.setattr(ingest_module, "sync_week", lambda db, pool, *a, **k: None)
+
+    run_cron(pool_id=None)
+
+    session = isolated_db()
+    try:
+        assert session.scalar(select(Pool).where(Pool.is_preview.is_(True))) is None
+    finally:
+        session.close()
+
+
+def test_doctor_reports_preview_missing_when_none_seeded(isolated_db, capsys):
+    from app.cli import doctor
+
+    doctor(pool_id=None, probe=False)
+    out = capsys.readouterr().out
+    assert "MISSING" in out
+    assert "seed-preview" in out
+
+
+def test_doctor_reports_preview_missing_when_pool_exists_but_no_week_built(isolated_db, capsys):
+    from app.cli import doctor
+    from app.services.preview import ensure_preview_pool
+
+    session = isolated_db()
+    try:
+        ensure_preview_pool(session)
+        session.commit()
+    finally:
+        session.close()
+
+    doctor(pool_id=None, probe=False)
+    out = capsys.readouterr().out
+    assert "MISSING" in out
+    assert "no week has been built yet" in out
+
+
+def test_doctor_reports_preview_healthy_when_current(isolated_db, capsys):
+    from app.cli import doctor
+    from app.services.ingest import detect_week
+    from app.services.preview import ensure_preview_pool
+
+    session = isolated_db()
+    try:
+        pool = ensure_preview_pool(session)
+        session.flush()
+        current_week_number = detect_week(session, pool)
+        session.add(
+            Week(
+                pool_id=pool.id,
+                season_year=pool.season_year,
+                week_number=current_week_number,
+                label=f"Week {current_week_number}",
+                status="open",
+                created_at=utcnow(),
+            )
+        )
+        session.commit()
+    finally:
+        session.close()
+
+    doctor(pool_id=None, probe=False)
+    out = capsys.readouterr().out
+    assert "STALE" not in out
+    assert "MISSING" not in out
+    assert "healthy" in out
+
+
+def test_doctor_reports_preview_stale_when_built_long_ago(isolated_db, capsys):
+    from app.cli import doctor
+    from app.services.ingest import detect_week
+    from app.services.preview import ensure_preview_pool
+
+    session = isolated_db()
+    try:
+        pool = ensure_preview_pool(session)
+        session.flush()
+        current_week_number = detect_week(session, pool)
+        session.add(
+            Week(
+                pool_id=pool.id,
+                season_year=pool.season_year,
+                week_number=current_week_number,
+                label=f"Week {current_week_number}",
+                status="open",
+                created_at=utcnow() - dt.timedelta(days=10),
+            )
+        )
+        session.commit()
+    finally:
+        session.close()
+
+    doctor(pool_id=None, probe=False)
+    out = capsys.readouterr().out
+    assert "STALE" in out
+    assert "days ago" in out
+
+
+def test_doctor_reports_preview_stale_when_built_for_the_wrong_week(isolated_db, capsys):
+    from app.cli import doctor
+    from app.services.ingest import detect_week
+    from app.services.preview import ensure_preview_pool
+
+    session = isolated_db()
+    try:
+        pool = ensure_preview_pool(session)
+        session.flush()
+        current_week_number = detect_week(session, pool)
+        stale_week_number = current_week_number + 1 if current_week_number else 2
+        session.add(
+            Week(
+                pool_id=pool.id,
+                season_year=pool.season_year,
+                week_number=stale_week_number,
+                label=f"Week {stale_week_number}",
+                status="open",
+                created_at=utcnow(),
+            )
+        )
+        session.commit()
+    finally:
+        session.close()
+
+    doctor(pool_id=None, probe=False)
+    out = capsys.readouterr().out
+    assert "STALE" in out
+    assert "current week is" in out
 
 
 # Payout CLI commands (Payout system rebuild, Phase 7) -----------------------------------

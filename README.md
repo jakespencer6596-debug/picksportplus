@@ -12,10 +12,18 @@ picked: your most confident pick stakes 15 points, your least confident stakes 1
 value exactly once. The pool's real, default rule is **inverse scoring**: a wrong pick counts
 its staked points against you, a correct pick costs nothing, and the lowest weekly total wins.
 The older rule (correct picks earn their staked points, highest total wins) is still available
-per pool from Admin, Pool settings.
+per pool from `/league/settings`.
 
 The point spread only decides **which** games make the slate. Scoring is straight up: did you
 pick the team that won.
+
+> **Before real players join, make sure `DATABASE_URL` points at a real, persistent Postgres
+> database, not a SQLite file on a Render free instance's own disk.** That disk is ephemeral:
+> every redeploy or sleep/wake cycle wipes it, taking every account, league, pick, payout rule
+> and payment record with it. The free demo deployed by the button above runs on that ephemeral
+> disk on purpose, since it is meant to reset to a known-good state on its own. See
+> "Persistent database (Neon), required before real players join" below before you invite anyone
+> who is going to play for money.
 
 The pool mostly runs itself. An hourly job detects the current football week and builds a
 draft slate; a commissioner reviews and publishes it by hand by default (a pool can switch
@@ -111,7 +119,7 @@ This is enforced in code, not left to good intentions.
 - A monthly counter per provider is checked against `ODDS_API_MONTHLY_BUDGET` (default 400) and
   `CFBD_MONTHLY_BUDGET` (default 800), both deliberately below the true free limits. When a
   provider hits its budget the app stops calling it, falls back to ESPN, and shows a warning on
-  the admin page.
+  `/site/providers`.
 
 A realistic season costs roughly 2 to 8 Odds API credits per week and about 1 CFBD call per
 week, well inside both free tiers.
@@ -142,38 +150,77 @@ Every variable is documented in `.env.example`. The ones that matter most:
 | `DEFAULT_JOIN_CODE` | none | The join code for the default pool. |
 | `TIMEZONE` | `America/New_York` | How kickoffs and lock times are displayed. |
 | `OFFLINE_MODE` | `false` | Blocks all outbound HTTP. Used by the test suite. |
+| `MAIL_ENABLED` | `false` | Turns on transactional email (commissioner invites, player invites, password reset, week-published notices). Off by default; false is the normal state for local dev. |
+| `RESEND_API_KEY` | none | [Resend](https://resend.com) API key. Required (along with `MAIL_FROM_ADDRESS`) for `MAIL_ENABLED=true` to actually send; missing either one keeps mail refusing loudly rather than attempting a call with a blank credential. |
+| `MAIL_FROM_ADDRESS` | none | The verified sender address every email sends from. |
+| `MAIL_FROM_NAME` | `PickSportPlus` | The sender display name. |
+| `MAIL_RATE_LIMIT_PER_HOUR` | `20` | Per-sender send cap, backed by a durable log so it survives a restart. |
 
 The slate size variables are only **seeds for a new pool**. Once the pool exists the
-commissioner owns those numbers from Admin, Pool settings.
+commissioner owns those numbers from `/league/settings`.
+
+`WEEK1_ANCHOR_DATE` is also only a seed: it is required at league creation (validated as a
+Saturday) and from then on lives on `Pool.week1_anchor_date`, editable from `/league/settings`.
+A build refuses outright, with no `Week` row created, if a pool's anchor date is ever missing;
+run `python -m app.cli backfill-anchor-dates` to fix any pool created before this rule existed.
 
 ---
 
+## Setting up a league
+
+A plain-English walkthrough for a commissioner who has never touched the code.
+
+1. **Get a league.** A site admin creates it for you from `/site/leagues` and either attaches
+   your account by email or hands you a one-time commissioner invite link. Opening that link
+   creates your commissioner account directly, no email address needed in advance.
+2. **Check the anchor date.** Every league needs a week 1 anchor date (a Saturday) so the app
+   can tell NFL week numbers and college week numbers apart; it defaults to the second Saturday
+   of September and is set when the league is created. You can change it later from
+   `/league/settings` if your season starts on a different Saturday.
+3. **Build and publish a week.** From `/league/slate`, type a week number and click "Build the
+   slate." It reads the schedule from ESPN and can take up to a minute; when it finishes you
+   land on a summary of what was built. Review the games (swap or remove anything that does not
+   look right), then click Publish to open it for picks. Want to try the app before the real
+   season starts? "Create a test week" on the same page builds one from preseason or college
+   week 0 games; it scores normally but never counts toward standings or payouts.
+4. **Invite your players.** From `/league/members`, share the join code, or use "Email the
+   invite" to send it directly if the site has email turned on. A new player registers with
+   that code and lands straight on the current week's picks.
+5. **Configure payouts.** From `/league/payouts`, set an entry fee and (optionally) your own
+   Venmo handle, then fill in each of the four payout ladders (weekly, bowl, season points,
+   season wins), or click "Load preset" for a known starting ladder you can tune from there.
+
 ## The commissioner
 
-Every pool has a commissioner, the league admin. Players cannot change any of this. From
-`/admin` the commissioner controls:
+Every pool has a commissioner. Players cannot change any of this. From `/league` the
+commissioner controls:
 
 - League name, join code (view, set or rotate), season year, week 1 anchor date, timezone.
 - Auto publish on or off (off by default), open registration on or off, the lock time.
 - The total games per week, how many come from each league, and the pinned rivalry list.
+
+A commissioner's tools live entirely under `/league`; a site admin's separate tools (creating
+leagues, minting commissioners, API budgets, email) live under `/site` and a commissioner
+cannot reach them (see "The site admin" below). Every old bookmarked `/admin/...` link still
+works, redirecting automatically to its new `/league` or `/site` address.
 
 ### How the slate is chosen
 
 The tool takes the closest `target_nfl` NFL games and the closest `target_ncaaf` college games
 by absolute point spread, defaulting to 8 and 12. If one league is short of games with a usable
 line that week, the gap is filled with the next closest games from the other league so the
-total still lands, and the shortfall is reported on the admin page.
+total still lands, and the shortfall is reported on the slate editor.
 
 A game can also be **pinned** so it always makes the slate regardless of its spread, because
 closest-spread selection alone tends to drop a rivalry game the moment either side is having a
 lopsided season. Pins are set by hand from the slate editor, or automatically the first time a
-game matching one of the pool's configured rivalry pairs (Admin, Pool settings) is created; an
+game matching one of the pool's configured rivalry pairs (`/league/settings`) is created; an
 unpin sticks across later rebuilds. The slate editor always shows why a game is on the slate:
 pinned, a rivalry match, or the closest spread.
 
 ### Editing the slate
 
-The tool always proposes a slate. The commissioner can override it from Admin, Slate:
+The tool always proposes a slate. The commissioner can override it from `/league/slate`:
 
 - Change the total and the per league counts.
 - Remove a proposed game, add any other game from that week's candidate pool, or swap one for
@@ -194,7 +241,7 @@ Timing rules:
 
 ### Payouts
 
-From Admin, Payouts the commissioner sets how the pool's money moves. Set an entry fee per
+From `/league/payouts` the commissioner sets how the pool's money moves. Set an entry fee per
 member, paid status tracked from the Members page, or type in a flat pot override that always
 wins over the computed figure. Configure each of the four payout ladders (weekly, bowl, season
 points, season wins) place by place, or click "Load preset" to seed a known dollar ladder for
@@ -204,6 +251,28 @@ past week never quietly changes later just because more members pay their entry 
 fact. The Payouts summary page lists what every player is owed across all four scopes, with a
 running paid and unpaid total and a plain text or CSV export for bookkeeping outside the app.
 
+### The site admin
+
+The site admin (the global `admin` role, sometimes called the platform owner in the UI) runs
+the whole deployment, not any one league. Everything lives under `/site`, a separate URL
+namespace from a commissioner's `/league` tools; a plain commissioner gets a 403 there.
+
+- `/site/leagues` is the only place a new league gets created. Create one, then either attach
+  an existing user as its commissioner by email or copy its commissioner invite link and send
+  it yourself; opening that link lets someone create their own commissioner account with no
+  email address needed in advance. "View as commissioner" lets a site admin step into any
+  league's own tools exactly as its commissioner would see them, with a "Viewing X as
+  commissioner" banner on every page and a clear way back out.
+- `/site/providers` shows each API key's presence, spend, and last call, plus a global
+  "ESPN only" switch that stops every league's builds from spending an Odds API or CFBD credit,
+  site-wide, at once.
+- `/site/mail` shows whether email is turned on, a log of recent sends, and a real test-send
+  button.
+- Confirm the database is persistent from here too: `python -m app.cli doctor` (also runnable
+  from a shell on the Render service) reports storage as ephemeral or persistent, row counts,
+  and the age of the oldest row, and the dashboard shows the same warning banner as the CLI
+  when storage is still ephemeral.
+
 ---
 
 ## Running a week end to end
@@ -211,6 +280,7 @@ running paid and unpaid total and a plain text or CSV export for bookkeeping out
 The hourly cron does all of this. These are the manual equivalents.
 
 ```
+python -m app.cli backfill-anchor-dates      # set week1_anchor_date on any pool still missing one
 python -m app.cli sync-week                  # detect the week, build it, publish only if auto publish is on
 python -m app.cli build-slate --week 6       # rebuild one week
 python -m app.cli build-slate --week 6 --no-metered   # ESPN only, spends no credits
@@ -248,14 +318,30 @@ the free service sleeps or redeploys, the file is lost and the start command reb
 from the recordings in `tests/fixtures`. The seeded week, the standings and both demo logins
 are therefore always present, and the demo always looks right. What does not survive a restart
 is anything a visitor typed, such as picks they made while clicking around, or a payout ladder
-a commissioner configured by hand from `/admin/payouts`: `seed-demo` reseeds its own known
+a commissioner configured by hand from `/league/payouts`: `seed-demo` reseeds its own known
 payout ladder on every restart, but any change made on top of that by hand in the hosted demo
 is gone the next time the free service sleeps or redeploys.
 
-To make it permanent and still free, create a database at [Neon](https://neon.tech) and set
-`DATABASE_URL` on the service to its connection string. That is the only change, no redeploy
-of code needed, and Neon's free tier does not expire the way Render's 30 day free Postgres
-does.
+### Persistent database (Neon), required before real players join
+
+Do this before inviting anyone who is going to play for money. SQLite on the instance disk
+is demo-only: it is wiped every time the free service sleeps or redeploys, taking every
+account, league, pick, payout rule and award with it.
+
+1. Create a free database at [Neon](https://neon.tech). Its free tier does not expire, unlike
+   Render's 30 day free Postgres.
+2. Copy its connection string and set it as `DATABASE_URL` on the Render service (Render
+   dashboard, Environment tab). `render.yaml` leaves `DATABASE_URL` for you to paste in at
+   deploy time for exactly this reason, rather than defaulting to the disposable file.
+3. Redeploy. No code change needed; the app only needs a standard Postgres URL and already
+   runs `alembic upgrade head` on every boot.
+4. Confirm it stuck: run `python -m app.cli doctor` (or check the site admin dashboard,
+   which shows the same warning) and confirm the storage line no longer reads ephemeral.
+
+The app also warns you if you skip this: a loud line in the server log at boot, a persistent
+brick-colored banner on every page the site admin views, and a check in `python -m app.cli
+doctor` that reports row counts and the age of the oldest row, so you can see at a glance
+whether the last restart actually kept the data.
 
 The demo runs entirely on the real 2025 weeks 5 and 6 recordings committed in `tests/fixtures`,
 and `OFFLINE_MODE` blocks outbound HTTP, so the deployed site never calls ESPN, The Odds API or
@@ -276,23 +362,20 @@ Both accounts use the password `demo-pass-2025`.
 
 | Role | Email | What it shows |
 | --- | --- | --- |
-| Commissioner | `commissioner@picksportplus.demo` | The admin side: pool settings, the slate editor, members |
+| Commissioner | `commissioner@picksportplus.demo` | The commissioner side: pool settings, the slate editor, members |
 | Player | `player@picksportplus.demo` | The ordinary side: picks, standings, results |
 
 Registration is closed on the demo (`OPEN_REGISTRATION=false`), so nobody can sign themselves
-up. Add players by sharing the pool join code from the admin Members page.
+up. Add players by sharing the pool join code from `/league/members`.
 
 ### What to expect on the free plan
 
 - **The web service sleeps after about 15 minutes idle** and takes roughly a minute to wake on
   the next visit. That is normal on Render's free plan. The first click on a shared link may
   therefore feel slow.
-- **The demo database is ephemeral.** See the storage note above. Swap `DATABASE_URL` to a free [Neon](https://neon.tech) database to make it permanent. Neon does not expire, unlike Render's 30 day free Postgres.
-  past 30 days, point `DATABASE_URL` at a free external Postgres such as
-  [Neon](https://neon.tech), which does not expire. It is a one line swap: replace the
-  `fromDatabase` block for `DATABASE_URL` in `render.yaml` with your Neon connection string,
-  or just paste the Neon URL into `DATABASE_URL` in the Render dashboard and delete the Render
-  database. The app only needs a standard Postgres URL.
+- **The demo database is ephemeral.** See "Persistent database (Neon)" above. Paste a Neon
+  connection string into `DATABASE_URL` in the Render dashboard to make it permanent; the app
+  only needs a standard Postgres URL.
 - **Live weekly automation is intentionally left out.** The auto slate, live scores and scoring
   are the `run-cron` command, and Render does not offer cron jobs on the free plan. Enable it
   later on a paid plan, or run `python -m app.cli run-cron` hourly from any external scheduler
@@ -372,7 +455,9 @@ app/
     results.py       finals from ESPN, scoring a week
     standings.py     weekly and season leaderboards
     demo.py          the recorded historical week
-  routers/           auth, picks, leaderboard, results, admin
+    mail.py          transactional email over the Resend REST API
+  routers/           auth, picks, leaderboard, results, admin (/league), site (/site),
+                     leagues, legacy_redirects
   templates/         Jinja pages and partials
   static/            app.css, app.js, vendored htmx and SortableJS
 alembic/             migrations

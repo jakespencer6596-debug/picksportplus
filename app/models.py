@@ -125,7 +125,7 @@ class Pool(Base):
     # member) and the product owner was explicit that rotating one must never affect the
     # other (Post-launch fixes: commissioner invite links). Every existing pool is backfilled
     # with a fresh one in the migration that adds this column; every new pool gets one at
-    # creation time in POST /admin/leagues/new, so in practice this is never left null, but
+    # creation time in POST /site/leagues/new, so in practice this is never left null, but
     # the column stays nullable at the type level since nothing here structurally requires
     # every pool to always have one (matching Pool.venmo_handle and Pool.entry_fee's own
     # nullable, "no value set yet" convention rather than forcing a NOT NULL with a synthetic
@@ -232,6 +232,14 @@ class Pool(Base):
     scenarios_min_final_games: Mapped[int] = mapped_column(Integer, default=5, nullable=False)
     scenarios_min_remaining_games: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
 
+    # Opt in, off by default (Phase 7 remediation, see DECISIONS.md): when True, every pool
+    # member with a real account gets a short email the moment a week opens for picks (wired
+    # into app/services/ingest.py's publish_week, both the commissioner's manual "Publish this
+    # week" and build_slate's own auto_publish path). Off by default so a pool that never
+    # configures mail, or a commissioner who does not want the noise, sees no change in
+    # behavior. Exposed on /league/settings.
+    notify_week_published: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+
     created_at: Mapped[dt.datetime] = mapped_column(
         DateTime(timezone=True), default=utcnow, server_default=func.now(), nullable=False
     )
@@ -287,10 +295,10 @@ class PoolMember(Base):
         DateTime(timezone=True), default=utcnow, server_default=func.now(), nullable=False
     )
     # Set the moment a full commissioner invites this still-plain member to become a
-    # co-commissioner (POST /admin/members/{id}/co-commissioner/invite). role_in_pool stays
+    # co-commissioner (POST /league/members/{id}/co-commissioner/invite). role_in_pool stays
     # "member" until the invited member accepts it themselves (POST
-    # /admin/co-commissioner/accept), which sets role_in_pool = "co_commissioner" and clears
-    # this back to null; declining (POST /admin/co-commissioner/decline) also clears it to
+    # /league/co-commissioner/accept), which sets role_in_pool = "co_commissioner" and clears
+    # this back to null; declining (POST /league/co-commissioner/decline) also clears it to
     # null with no other change. Unlike the site admin's existing instant member_role toggle,
     # a full commissioner's promotion never takes effect on its own, exactly the confirmation
     # step the product owner asked for. Null the rest of the time: no invite pending. See
@@ -298,7 +306,7 @@ class PoolMember(Base):
     co_commissioner_invited_at: Mapped[dt.datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
-    # Set the moment a commissioner marks this member paid (POST /admin/members/{id}/paid or
+    # Set the moment a commissioner marks this member paid (POST /league/members/{id}/paid or
     # the bulk action), cleared to unmark. Null means unpaid, the only state the Venmo gate
     # (Pool.payment_required_to_pick) checks; there is no separate "confirmed by whom" table,
     # paid_marked_by_user_id below is enough for accountability.
@@ -360,6 +368,15 @@ class Week(Base):
     # True when any enabled league needed season_type=3 (postseason/bowl season) to find a
     # calendar window containing anchor_date.
     is_bowl_week: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    # True for a commissioner-built low-stakes test week (Phase 3: preseason and test week
+    # support), built from whatever is live right now (NFL preseason, college week 0)
+    # rather than the pool's real season. Scores normally within itself (WeekEntry rows are
+    # real and correct) but is fully quarantined from everything season-wide: excluded from
+    # season standings and weekly-win counts (app/services/standings.py), never generates a
+    # PayoutAward of any scope (the freeze hook in app/services/results.py.score_week_for_pool
+    # skips it outright), and the scenarios panel treats it as never visible
+    # (app/services/scenarios.py.week_scenario_panel). See DECISIONS.md, Phase 3.
+    is_test_week: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     label: Mapped[str] = mapped_column(String(60), nullable=False)
     status: Mapped[str] = mapped_column(String(12), default="draft", nullable=False)
     lock_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
@@ -541,7 +558,7 @@ class PayoutRule(Base):
     "This will be done manually, so if there's a way in settings to Set Payouts for weekly,
     bowl week, season points, and season wins... it's a function of total $$ pool." Ships with
     zero rows for every pool, always: the commissioner enters every real number by hand from
-    /admin/payouts, never a seeded or hard coded figure (see DECISIONS.md, "Payout system").
+    /league/payouts, never a seeded or hard coded figure (see DECISIONS.md, "Payout system").
     Matched against rank at read time (app/payouts.py, app/services/payouts.py), never stored
     against a specific week or player itself, so the same structure applies to every week
     without re-entering it; PayoutAward below is the frozen, per-week/per-player result.
@@ -643,7 +660,7 @@ class ContactSubmission(Base):
     """One submission from the public /contact page (Post-launch fixes: a real contact form,
     replacing the old bare mailto link). A lead capture form, not a support ticket system: no
     status, no assignment, no reply-from-here feature. The site admin reads these from
-    GET /admin/contacts and replies to the submitter directly, over their own normal email
+    GET /site/contacts and replies to the submitter directly, over their own normal email
     client, within 24 hours. No email is ever sent by this model or by POST /contact.
     """
 
@@ -696,3 +713,92 @@ class ProviderUsage(Base):
         DateTime(timezone=True), nullable=True
     )
     last_error: Mapped[str | None] = mapped_column(String(255), nullable=True)
+
+
+class PlatformSetting(Base):
+    """The one platform-wide, site-admin-controlled settings row (Phase 5 remediation,
+    provider controls move to site admin).
+
+    Exactly one row ever exists in practice: app.providers.http.get_platform_settings creates
+    it on first read if the table is still empty, the same get-or-create shape
+    app.providers.http.get_usage already uses for ProviderUsage. Deliberately not a generic
+    key-value settings table: espn_only is the only platform-wide toggle this codebase needs
+    today, and a generic table would be over-engineering for one boolean (see DECISIONS.md,
+    Phase 5). Deliberately not a Pool column either: this switch is explicitly global, read by
+    app.services.ingest.build_slate for every pool's build at once, not a per-league
+    preference a commissioner could set.
+    """
+
+    __tablename__ = "platform_settings"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    # When True, build_slate skips The Odds API and CollegeFootballData entirely for every
+    # pool's build, ESPN only, regardless of any per-call allow_metered a caller passes (see
+    # ingest.build_slate's own docstring). Off by default: the full provider path with
+    # existing spend limits intact. Read fresh from the database on every build, never cached
+    # in process memory, so a toggle from POST /site/providers/espn-only takes effect on the
+    # very next build with no redeploy and no restart.
+    espn_only: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+
+
+class PasswordResetToken(Base):
+    """A single use, one hour password reset token (Phase 7 remediation, see DECISIONS.md).
+
+    token_hash is a SHA-256 hex digest of the raw token mailed to the user, never the raw
+    token itself, deliberately NOT run through app.auth.hash_password's bcrypt (bcrypt's slow,
+    salted hash exists to resist offline brute forcing of a low entropy human-chosen secret;
+    this token is a 256 bit value from secrets.token_urlsafe(32), already far past brute
+    forceable, so a fast, deterministic hash is used instead so GET/POST /reset-password can
+    look the row up by an exact match rather than a full table scan verifying every pending
+    token by hand). See app/routers/auth.py's _hash_token.
+
+    used_at enforces single use: set the moment the token is spent, checked by every reset
+    attempt, never cleared. expires_at is created_at + one hour, checked on every attempt
+    regardless of used_at, so an old, unused token cannot be spent late either.
+    """
+
+    __tablename__ = "password_reset_tokens"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), index=True, nullable=False
+    )
+    token_hash: Mapped[str] = mapped_column(String(64), index=True, nullable=False)
+    created_at: Mapped[dt.datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, server_default=func.now(), nullable=False
+    )
+    expires_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    used_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    user: Mapped[User] = relationship()
+
+
+class MailLog(Base):
+    """One row per attempted send, successful or not (Phase 7 remediation, see DECISIONS.md).
+
+    This is the site admin's only way to prove whether an email actually went out
+    (/site/mail): app.services.mail.send writes exactly one row here for every call, before
+    returning on success or raising on failure, so there is no code path that sends (or tries
+    to send) without a matching row here. actor_key is the rate limiting bucket
+    app.services.mail._rate_limited counts against, "user:{id}" for a signed in sender
+    (a site admin or commissioner) or "email:{address}" for the one anonymous sender, a
+    password reset request.
+    """
+
+    __tablename__ = "mail_log"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    recipient: Mapped[str] = mapped_column(String(255), nullable=False)
+    kind: Mapped[str] = mapped_column(String(32), nullable=False)
+    result: Mapped[str] = mapped_column(
+        String(16), nullable=False
+    )  # sent, disabled, failed, rate_limited
+    detail: Mapped[str | None] = mapped_column(Text, nullable=True)
+    actor_key: Mapped[str] = mapped_column(String(120), index=True, nullable=False)
+    created_at: Mapped[dt.datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=utcnow,
+        server_default=func.now(),
+        index=True,
+        nullable=False,
+    )

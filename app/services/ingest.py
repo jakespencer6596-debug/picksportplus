@@ -18,6 +18,9 @@ from __future__ import annotations
 
 import datetime as dt
 import logging
+import threading
+import time
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -25,17 +28,110 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.config import settings
-from app.models import Game, Pick, Pool, Week, utcnow
+from app.models import Game, Pick, Pool, PoolMember, User, Week, utcnow
 from app.providers import cfbd, espn, odds_api
-from app.providers.http import BudgetExceeded, ProviderError
+from app.providers.http import BudgetExceeded, ProviderError, get_platform_settings
 from app.providers.teams import match_by_teams_and_date
 from app.services import calendar as calendar_svc
+from app.services import mail
 from app.slate import Candidate, compute_lock_at, select_slate_by_targets
+from app.templating import fmt_kickoff_long
 
 log = logging.getLogger("picksportplus.ingest")
 
 # ESPN core odds are unmetered but cost one request per game, so a build stays polite.
 MAX_CORE_ODDS_LOOKUPS = 60
+
+
+# Idempotency guard (Phase 6 remediation, see DECISIONS.md) ------------------
+#
+# A plain, synchronous form POST with no loading feedback of any kind reasonably gets
+# double-clicked, or opened in a second tab, or retried by a client whose JS never loaded.
+# This app runs as a single uvicorn process, no --workers flag (see render.yaml's
+# startCommand), so a simple in-process, lock-guarded set keyed by (pool_id, week_number) is a
+# real, sufficient guard against two concurrent builds for the same pool week: it would NOT be
+# sufficient if this service were ever run with multiple worker processes or across multiple
+# instances, since each process gets its own, unshared copy of this set. That limitation is
+# accepted and documented rather than built around, per DECISIONS.md.
+
+
+class BuildInProgress(RuntimeError):
+    """Another build for this exact (pool, week) is already running."""
+
+
+_builds_lock = threading.Lock()
+_builds_in_progress: set[tuple[int, int]] = set()
+
+
+def _acquire_build_lock(pool_id: int, week_number: int) -> None:
+    key = (pool_id, week_number)
+    with _builds_lock:
+        if key in _builds_in_progress:
+            raise BuildInProgress("This week is already being built. Wait for it to finish.")
+        _builds_in_progress.add(key)
+
+
+def _release_build_lock(pool_id: int, week_number: int) -> None:
+    with _builds_lock:
+        _builds_in_progress.discard((pool_id, week_number))
+
+
+@contextmanager
+def slate_build_guard(pool_id: int, week_number: int):
+    """Refuse a second concurrent build for the same (pool, week), raising BuildInProgress
+    rather than queuing it. See the module note above for why an in-process set is enough here.
+    Exposed as its own context manager, not folded silently into build_slate's body, so a test
+    can acquire and release it directly to simulate a race deterministically (see
+    tests/test_ingest.py) without needing real threads."""
+    _acquire_build_lock(pool_id, week_number)
+    try:
+        yield
+    finally:
+        _release_build_lock(pool_id, week_number)
+
+
+# Hard timeout (Phase 6 remediation, see DECISIONS.md) ------------------------
+#
+# build_slate can make several sequential HTTP calls (ESPN for the schedule, then ESPN core
+# odds per game, then up to one Odds API call per league, then one CFBD call), each already
+# bounded by its own settings.http_timeout_seconds/http_retries, but with no budget across the
+# whole call. _Deadline is checked between major steps, not via a signal-based hard interrupt,
+# the same periodic wall-clock check app/scenarios.py's own time budget already uses (see that
+# module's docstring), so the message it raises can name exactly which step was in flight.
+
+
+class BuildTimeout(RuntimeError):
+    """A build exceeded its wall-clock budget. The message names what was in flight."""
+
+
+@dataclass
+class _Deadline:
+    at: float
+    budget_seconds: float
+
+    def check(self, what: str) -> None:
+        if time.monotonic() >= self.at:
+            raise BuildTimeout(
+                f"Build timed out after {int(self.budget_seconds)} seconds while waiting "
+                f"for a response from {what}."
+            )
+
+
+def _make_deadline(time_budget_seconds: float | None) -> _Deadline | None:
+    budget = (
+        settings.slate_build_timeout_seconds
+        if time_budget_seconds is None
+        else (time_budget_seconds)
+    )
+    if not budget or budget <= 0:
+        return None
+    return _Deadline(at=time.monotonic() + budget, budget_seconds=budget)
+
+
+# Schedule fetch labels for a timeout message, e.g. "ESPN for the college schedule". Deliberately
+# lowercase "college" to match SPEC.md Section 3h's sentence-case, mid-sentence voice; NFL stays
+# an uppercase acronym either way.
+_SCHEDULE_LABELS = {"nfl": "NFL", "ncaaf": "college"}
 
 
 @dataclass
@@ -45,6 +141,13 @@ class IngestReport:
     candidates: int = 0
     with_spread: int = 0
     selected: int = 0
+    # Of the games actually selected onto the slate, how many still have no spread. Computed
+    # in build_slate right after apply_slate (Phase 6 remediation), separate from with_spread
+    # above, which counts across every candidate, not just the ones that made the slate. Used
+    # by the commissioner facing "Week N built" flash in app/routers/admin.py, not by
+    # summary() below, which predates this field and is left exactly as it was for its own
+    # existing callers (the CLI, app/services/demo.py). See DECISIONS.md, Phase 6.
+    missing_spread: int = 0
     per_league: dict[str, int] = field(default_factory=dict)
     shortfalls: dict[str, int] = field(default_factory=dict)
     sources: dict[str, int] = field(default_factory=dict)
@@ -85,10 +188,13 @@ def ensure_week(
     week_number: int,
     *,
     anchor_date: dt.date | None = None,
+    is_test_week: bool = False,
 ) -> Week:
     """Get or create the pool's week row.
 
     week_number is always the pool's own 1, 2, 3... sequence, never an ESPN week number.
+    week_number 0 is reserved for a test week (TEST_WEEK_NUMBER below), so it never collides
+    with a real season week.
 
     anchor_date is the calendar Saturday each enabled league resolves its own ESPN week
     against, see app/services/calendar.py. Left unset, it is computed from
@@ -96,7 +202,20 @@ def ensure_week(
     pool with no week1_anchor_date gets a week with no anchor_date at all, and
     fetch_candidates falls back to sending week_number to ESPN directly (the pre anchor
     behaviour), with a clear warning that the pool needs configuring.
+
+    is_test_week (Phase 3) only matters the first time this week row is created: it sets
+    Week.is_test_week and labels the row "Test week" instead of "Week {N}". It is never
+    applied to an existing row on a later call, the same one-time-on-creation shape
+    upsert_games already uses for a rivalry auto-pin.
     """
+    # Computed once, before branching, so a week that already exists but was created before
+    # the pool had an anchor date (or before Phase 2's backfill ran) still gets backfilled
+    # below. The earlier version of this function only computed anchor_date inside the "week
+    # is None" branch, so an existing week's null anchor_date was never repaired even after
+    # the pool itself gained one (Phase 2 remediation, see DECISIONS.md).
+    if anchor_date is None and pool.week1_anchor_date is not None:
+        anchor_date = pool.week1_anchor_date + dt.timedelta(weeks=week_number - 1)
+
     week = db.scalar(
         select(Week).where(
             Week.pool_id == pool.id,
@@ -105,15 +224,14 @@ def ensure_week(
         )
     )
     if week is None:
-        if anchor_date is None and pool.week1_anchor_date is not None:
-            anchor_date = pool.week1_anchor_date + dt.timedelta(weeks=week_number - 1)
         week = Week(
             pool_id=pool.id,
             season_year=year,
             week_number=week_number,
             anchor_date=anchor_date,
-            label=f"Week {week_number}",
+            label="Test week" if is_test_week else f"Week {week_number}",
             status="draft",
+            is_test_week=is_test_week,
         )
         db.add(week)
         db.flush()
@@ -123,6 +241,13 @@ def ensure_week(
         week.anchor_date = anchor_date
         db.flush()
     return week
+
+
+# Reserved pool week number for the commissioner's test week (Phase 3, preseason and test
+# week support). Real pool weeks are always 1, 2, 3..., so 0 can never collide with one,
+# which is what lets "Create a test week" stay idempotent (a second click rebuilds the same
+# week rather than creating a duplicate) without any extra bookkeeping.
+TEST_WEEK_NUMBER = 0
 
 
 def week_has_picks(db: Session, week: Week) -> bool:
@@ -154,15 +279,26 @@ def _scoreboard_url(league: str) -> str:
 
 
 def fetch_candidates(
-    db: Session, pool: Pool, week: Week
+    db: Session, pool: Pool, week: Week, *, deadline: _Deadline | None = None
 ) -> tuple[list[espn.EspnGame], list[LeagueAttempt]]:
     """Every game for this pool week across its enabled leagues. ESPN only, unmetered.
+
+    deadline (Phase 6 remediation, see DECISIONS.md), when given, is checked once per league
+    right before that league's ESPN scoreboard call, so a build that has already blown its
+    wall-clock budget fails fast with a message naming which league's schedule call was about
+    to run, rather than piling on every remaining league's call first.
 
     Each league resolves its own ESPN week number and season type from week.anchor_date via
     app/services/calendar.py, because NFL and college week numbers are not aligned: college
     starts about three weeks earlier than the NFL and has a bowl season the NFL has no
     equivalent of on the same calendar. The resolution is recorded on week.resolved_weeks and
     week.is_bowl_week so the commissioner can see exactly what was asked for.
+
+    week.is_test_week (Phase 3) is read straight off the week row, not taken as a separate
+    parameter here: it is already set the moment ensure_week creates the row, so reading it
+    keeps this function's own signature, and therefore every existing caller, unchanged. It
+    is passed through to calendar_svc.resolve_league_week as is_test_week, which is what lets
+    a test week additionally resolve against NFL preseason.
 
     week.anchor_date is None for a week created while the pool had no week1_anchor_date
     configured. That week falls back to the pre anchor behaviour: the pool's own week_number
@@ -182,6 +318,8 @@ def fetch_candidates(
             pool.id,
         )
         for league in leagues:
+            if deadline is not None:
+                deadline.check(f"ESPN for the {_SCHEDULE_LABELS.get(league, league)} schedule")
             resolved[league] = {"week": week.week_number, "season_type": espn.SEASON_TYPE_REGULAR}
             error: str | None = None
             league_games: list[espn.EspnGame] = []
@@ -209,7 +347,7 @@ def fetch_candidates(
     any_bowl = False
     for league in leagues:
         resolution = calendar_svc.resolve_league_week(
-            db, league, week.season_year, week.anchor_date
+            db, league, week.season_year, week.anchor_date, is_test_week=week.is_test_week
         )
         if resolution is None:
             resolved[league] = None
@@ -227,6 +365,9 @@ def fetch_candidates(
 
         resolved[league] = {"week": resolution.week, "season_type": resolution.season_type}
         any_bowl = any_bowl or resolution.is_postseason
+
+        if deadline is not None:
+            deadline.check(f"ESPN for the {_SCHEDULE_LABELS.get(league, league)} schedule")
 
         error = None
         league_games = []
@@ -324,10 +465,17 @@ def resolve_spreads(
     *,
     allow_metered: bool = True,
     use_core_odds: bool = True,
+    deadline: _Deadline | None = None,
 ) -> tuple[dict[str, tuple[float, str]], list[str]]:
     """Resolve a home relative spread per event id, following the Section 5e order.
 
     Returns (by_event_id -> (spread_home, source), warnings).
+
+    deadline (Phase 6 remediation, see DECISIONS.md), when given, is checked once before each
+    of the three provider stages below (ESPN core odds, The Odds API, CollegeFootballData),
+    never inside the per-game core odds loop itself: that keeps the check at "major step"
+    granularity, matching app/scenarios.py's own periodic wall-clock check, and lets the raised
+    BuildTimeout name exactly which provider was about to be called.
     """
     resolved: dict[str, tuple[float, str]] = {}
     warnings: list[str] = []
@@ -342,6 +490,8 @@ def resolve_spreads(
     # 2. ESPN core API. Unmetered, and the only source that still has odds for a game that
     #    has already finished, which is what makes a historical week reproducible.
     if use_core_odds and missing:
+        if deadline is not None:
+            deadline.check("ESPN for core odds")
         looked_up = 0
         for game in missing:
             if looked_up >= MAX_CORE_ODDS_LOOKUPS:
@@ -377,6 +527,8 @@ def resolve_spreads(
                 "Falling back to ESPN only."
             )
             break
+        if deadline is not None:
+            deadline.check("The Odds API")
         try:
             api_games, source = odds_api.fetch_spreads(db, league)
         except BudgetExceeded as exc:
@@ -405,6 +557,8 @@ def resolve_spreads(
     # 4. CFBD, college only, hard capped. The id join is exact so there is no match risk.
     college_missing = [g for g in missing if g.league == "ncaaf"]
     if college_missing and week.cfbd_calls < settings.max_cfbd_calls_per_week:
+        if deadline is not None:
+            deadline.check("CollegeFootballData")
         try:
             lines, source = cfbd.fetch_lines(db, week.season_year, week.week_number)
             if source == "live":
@@ -553,6 +707,8 @@ def apply_slate(db: Session, pool: Pool, week: Week, *, now: dt.datetime | None 
             kickoff=_aware(row.start_time),
             spread_home=row.spread_home,
             pinned=row.pinned,
+            home_key=row.canonical_home_key,
+            away_key=row.canonical_away_key,
         )
         for row in rows
         if row.status != "void"
@@ -578,6 +734,96 @@ def apply_slate(db: Session, pool: Pool, week: Week, *, now: dt.datetime | None 
     db.flush()
     recompute_lock(db, week)
     return result
+
+
+def duplicate_team_warnings(db: Session, week: Week) -> list[str]:
+    """Explain, in real team names, any game app.slate refused to select because one of its
+    teams already plays in a game that did make the slate (Phase 2 remediation, see
+    DECISIONS.md). apply_slate's own call into select_slate_by_targets already guarantees
+    this never happens in the chosen slate itself; this only explains it after the fact, using
+    data the pure slate module deliberately does not have (real team names), so it can be
+    surfaced to the commissioner as a build warning rather than a silent drop.
+    """
+    rows = list(db.scalars(select(Game).where(Game.week_id == week.id)))
+    on_slate_by_team: dict[str, Game] = {}
+    for row in rows:
+        if not row.in_slate:
+            continue
+        on_slate_by_team[row.canonical_home_key] = row
+        on_slate_by_team[row.canonical_away_key] = row
+
+    warnings: list[str] = []
+    reported_pairs: set[frozenset[str]] = set()
+    for row in rows:
+        if row.in_slate or row.status == "void":
+            continue
+        for key, name in (
+            (row.canonical_home_key, row.home_team),
+            (row.canonical_away_key, row.away_team),
+        ):
+            other = on_slate_by_team.get(key)
+            if other is None:
+                continue
+            pair = frozenset((row.espn_event_id, other.espn_event_id))
+            if pair in reported_pairs:
+                continue
+            reported_pairs.add(pair)
+            warnings.append(
+                f"{row.away_abbr} at {row.home_abbr} was left off the slate: {name} already "
+                f"plays in {other.away_abbr} at {other.home_abbr} this week. This usually "
+                "means two different calendar weeks got merged. Check the week 1 anchor date "
+                "in Settings."
+            )
+            break
+    return warnings
+
+
+# A rebuilt slate spanning more than this many days is a strong signal that two different
+# calendar weeks got merged into one pool week (Phase 2 remediation, see DECISIONS.md): a
+# normal week's games all kick off within one long weekend.
+MAX_SLATE_SPAN_DAYS = 8
+
+
+class SlateSpanTooWide(RuntimeError):
+    """The slate's earliest and latest kickoff are too far apart to be one real pool week."""
+
+
+def slate_span(db: Session, week: Week) -> tuple[int, dt.datetime, dt.datetime] | None:
+    """(span_days, earliest kickoff, latest kickoff) among the week's live slate games, or
+    None when fewer than two games are on the slate to compare."""
+    kickoffs = sorted(
+        _aware(g.start_time)
+        for g in db.scalars(
+            select(Game).where(
+                Game.week_id == week.id, Game.in_slate.is_(True), Game.status != "void"
+            )
+        )
+    )
+    if len(kickoffs) < 2:
+        return None
+    earliest, latest = kickoffs[0], kickoffs[-1]
+    return (latest - earliest).days, earliest, latest
+
+
+def _span_too_wide_message(
+    week: Week, span_days: int, earliest: dt.datetime, latest: dt.datetime
+) -> str:
+    parts = [
+        f"This slate spans {span_days} days, from {earliest.isoformat()} to "
+        f"{latest.isoformat()}, more than the {MAX_SLATE_SPAN_DAYS} day limit for one pool "
+        "week. Publishing was refused."
+    ]
+    for league, resolution in (week.resolved_weeks or {}).items():
+        label = LEAGUE_LABELS.get(league, league)
+        if resolution:
+            parts.append(
+                f"{label} resolved to week {resolution.get('week')} "
+                f"(season type {resolution.get('season_type')})."
+            )
+        else:
+            parts.append(f"{label} did not resolve to a week for this anchor date.")
+    parts.append("Check the week 1 anchor date in Settings, then rebuild the slate.")
+    return " ".join(parts)
 
 
 def recompute_lock(db: Session, week: Week) -> None:
@@ -786,10 +1032,110 @@ def build_slate(
     allow_metered: bool = True,
     publish: bool | None = None,
     now: dt.datetime | None = None,
+    is_test_week: bool = False,
+    time_budget_seconds: float | None = None,
 ) -> IngestReport:
-    """Build or rebuild one week. Idempotent and safe to re-run."""
+    """Build or rebuild one week. Idempotent and safe to re-run.
+
+    Thin wrapper (Phase 6 remediation, see DECISIONS.md) around _build_slate_impl below: this
+    level owns only the two things a caller cannot opt out of, the concurrent-build guard
+    (slate_build_guard, raises BuildInProgress rather than letting a second build for the same
+    pool week run alongside the first) and a wall-clock duration log line, so every real code
+    path (a normal build, the picks-already-exist early return, the dead-end early return) is
+    timed and guarded identically without duplicating that logic at each return point inside
+    the implementation. See _build_slate_impl's own docstring for what the parameters mean.
+    """
+    started = time.monotonic()
+    with slate_build_guard(pool.id, week_number):
+        report = _build_slate_impl(
+            db,
+            pool,
+            year,
+            week_number,
+            allow_metered=allow_metered,
+            publish=publish,
+            now=now,
+            is_test_week=is_test_week,
+            time_budget_seconds=time_budget_seconds,
+        )
+    elapsed = time.monotonic() - started
+    log.info(
+        "slate build finished, pool %s week %s, %.2fs elapsed, %s selected",
+        pool.id,
+        week_number,
+        elapsed,
+        report.selected,
+    )
+    return report
+
+
+def _build_slate_impl(
+    db: Session,
+    pool: Pool,
+    year: int,
+    week_number: int,
+    *,
+    allow_metered: bool = True,
+    publish: bool | None = None,
+    now: dt.datetime | None = None,
+    is_test_week: bool = False,
+    time_budget_seconds: float | None = None,
+) -> IngestReport:
+    """The real build, run inside build_slate's guard and timing wrapper above.
+
+    is_test_week (Phase 3, preseason and test week support) builds a low-stakes week from
+    whatever is live right now (NFL preseason, college week 0 included) rather than the
+    pool's real season, for a commissioner who wants to exercise the whole pick/score loop
+    before the real season starts. It takes a different path through this function in two
+    ways: it resolves against right now (see DECISIONS.md, Phase 3, for why) instead of
+    requiring pool.week1_anchor_date, and it flows week.is_test_week down to fetch_candidates
+    so each league's calendar resolution also tries the preseason. Everything after the week
+    is created, resolving spreads, selecting the closest games, publishing, is the same
+    machinery a real week goes through, unchanged.
+
+    allow_metered (Phase 5 remediation: provider controls move to site admin) is no longer a
+    commissioner's per-build choice; it is ANDed with the site admin's global, persisted
+    "ESPN only" switch (app.providers.http.get_platform_settings, read fresh here on every
+    call, never cached), so a commissioner cannot bypass it and a caller cannot force metered
+    calls back on while the switch is on. It still defaults to True and stays a real
+    parameter, both for a smaller diff (every existing caller, app/cli.py's build-slate,
+    sync-week and seed-preview commands among them, keeps working unchanged) and so a trusted
+    CLI operator can still pass allow_metered=False (build-slate's own --no-metered flag) to
+    force one manual run ESPN only regardless of the global switch. There is no equivalent way
+    to force allow_metered=True past an "on" global switch: the AND is one directional, on
+    purpose, since the whole point of the switch is that nobody, commissioner or CLI operator,
+    spends a credit while it is on. See DECISIONS.md, Phase 5.
+
+    time_budget_seconds (Phase 6 remediation, see DECISIONS.md) overrides
+    settings.slate_build_timeout_seconds for this one call; tests pass a small value here for a
+    deterministic timeout rather than lowering the setting globally. None (the default) uses
+    the configured setting; 0 or a negative number disables the budget entirely.
+    """
+    deadline = _make_deadline(time_budget_seconds)
     report = IngestReport(week_number=week_number, season_year=year)
-    week = ensure_week(db, pool, year, week_number)
+    now = now or dt.datetime.now(dt.UTC)
+
+    if is_test_week:
+        # Resolves against right now, not pool.week1_anchor_date (which may be unset, or may
+        # point at a Saturday weeks away): the whole point of a test week is building
+        # something live before the real season is configured. See DECISIONS.md, Phase 3.
+        week = ensure_week(db, pool, year, week_number, anchor_date=now.date(), is_test_week=True)
+    else:
+        # Refuse rather than fall back (Phase 2 remediation, see DECISIONS.md). The old
+        # fallback sent the pool's own week number straight to ESPN for every league, which
+        # is what produced a slate spanning two calendar weeks with the same team on it
+        # twice the moment NFL and college drifted apart. week1_anchor_date is now required
+        # at league creation (POST /site/leagues/new) and backfilled for any pool that
+        # predates that (the backfill-anchor-dates CLI command), so hitting this in practice
+        # means a commissioner cleared the field from Settings.
+        if pool.week1_anchor_date is None:
+            report.warnings.append(
+                "Set your week 1 anchor date in Settings before building a slate. Without it "
+                "the tool cannot tell which NFL and college weeks belong together."
+            )
+            return report
+
+        week = ensure_week(db, pool, year, week_number)
 
     # Once picks exist the slate is settled. Scores still refresh, the selection does not move.
     if week_has_picks(db, week):
@@ -798,7 +1144,7 @@ def build_slate(
             "Picks have already been made for this week, so the slate was left alone. "
             "You can still void a game."
         )
-        games, _attempts = fetch_candidates(db, pool, week)
+        games, _attempts = fetch_candidates(db, pool, week, deadline=deadline)
         existing_spreads = {
             g.espn_event_id: (g.spread_home, g.spread_source or "espn")
             for g in db.scalars(select(Game).where(Game.week_id == week.id))
@@ -814,7 +1160,7 @@ def build_slate(
         )
         return report
 
-    games, attempts = fetch_candidates(db, pool, week)
+    games, attempts = fetch_candidates(db, pool, week, deadline=deadline)
     report.candidates = len(games)
     if not games:
         report.warnings.append(_dead_end_message(db, pool, week, attempts))
@@ -822,7 +1168,12 @@ def build_slate(
 
     before_refreshes = week.spread_refreshes
     before_cfbd = week.cfbd_calls
-    spreads, warnings = resolve_spreads(db, week, games, allow_metered=allow_metered)
+    # The global switch always wins over a stale True default; it never overrides an explicit
+    # allow_metered=False from a trusted caller. See this function's own docstring above.
+    effective_allow_metered = allow_metered and not get_platform_settings(db).espn_only
+    spreads, warnings = resolve_spreads(
+        db, week, games, allow_metered=effective_allow_metered, deadline=deadline
+    )
     report.warnings.extend(warnings)
     report.live_metered_calls = (week.spread_refreshes - before_refreshes) + (
         week.cfbd_calls - before_cfbd
@@ -834,24 +1185,91 @@ def build_slate(
     upsert_games(db, week, games, spreads, pool)
     result = apply_slate(db, pool, week, now=now)
     report.selected = len(result.selected)
+    # Of the games actually selected, how many still have no spread (Phase 6 remediation): the
+    # "Week N built" flash names this so a commissioner does not have to open the slate editor
+    # to see whether anything needs a line set by hand. Selected (app/slate.py) carries
+    # closeness, not spread_home directly, but closeness_of(spread_home) is None exactly when
+    # spread_home is None (see that function), so this reads the same thing without a second
+    # lookup back into games/spreads by event id.
+    report.missing_spread = sum(1 for c in result.selected if c.closeness is None)
     report.per_league = dict(result.per_league)
     report.shortfalls = dict(result.shortfalls)
     report.notes = list(result.notes)
     for note in result.notes:
         log.info("slate note, week %s: %s", week_number, note)
+    report.warnings.extend(duplicate_team_warnings(db, week))
 
     should_publish = pool.auto_publish if publish is None else publish
     if should_publish and report.selected > 0 and week.status == "draft":
-        publish_week(db, week)
-        report.published = True
+        try:
+            report.warnings.extend(publish_week(db, week))
+            report.published = True
+        except SlateSpanTooWide as exc:
+            # Auto publish declines rather than opens a slate that spans two calendar
+            # weeks (Phase 2 remediation); the week stays a draft for the commissioner to
+            # review, exactly the safety net a manual "Publish" click also gets below.
+            report.warnings.append(str(exc))
 
     return report
 
 
-def publish_week(db: Session, week: Week) -> None:
+def _notify_week_published(db: Session, week: Week) -> list[str]:
+    """Best-effort email to every real member once a week opens for picks (Phase 7
+    remediation, see DECISIONS.md), only when the pool has opted in
+    (Pool.notify_week_published, off by default). Never blocks or undoes the publish itself: a
+    mail failure for one member becomes one warning string here, collected the same way every
+    other IngestReport.warnings entry already is, not a raised exception that would leave
+    week.status flipped to "open" with no way to report what happened. actor_key is keyed by
+    the recipient, not the (nonexistent) human who triggered this, since this fan-out can run
+    from a live commissioner click or from the unattended sync_week cron path alike; capping
+    how many notification emails any one player can receive an hour is the meaningful limit
+    here, not "how many did the system send," which is not the kind of runaway abuse rate
+    limiting exists to catch."""
+    pool = week.pool
+    if not pool.notify_week_published:
+        return []
+    rows = db.execute(
+        select(PoolMember, User)
+        .join(User, User.id == PoolMember.user_id)
+        .where(PoolMember.pool_id == pool.id, User.is_active.is_(True))
+    ).all()
+    if not rows:
+        return []
+
+    lock_text = fmt_kickoff_long(week.lock_at, pool.timezone) if week.lock_at else "soon"
+    subject = f"Week {week.week_number} is open for picks, {pool.name}"
+    body = (
+        "Hey,\n\n"
+        f"Week {week.week_number} of {pool.name} is open for picks. Picks lock {lock_text}.\n\n"
+        f"{settings.base_url}/picks"
+    )
+    warnings: list[str] = []
+    for _member, player in rows:
+        try:
+            mail.send(
+                db,
+                to=player.email,
+                subject=subject,
+                html=mail.text_to_html(body),
+                text=body,
+                kind="week_published",
+                actor_key=f"user:{player.id}",
+            )
+        except mail.MailError as exc:
+            warnings.append(f"Could not email {player.email} about week {week.week_number}: {exc}")
+    return warnings
+
+
+def publish_week(db: Session, week: Week) -> list[str]:
+    span = slate_span(db, week)
+    if span is not None:
+        span_days, earliest, latest = span
+        if span_days > MAX_SLATE_SPAN_DAYS:
+            raise SlateSpanTooWide(_span_too_wide_message(week, span_days, earliest, latest))
     week.status = "open"
     week.published_at = utcnow()
     db.flush()
+    return _notify_week_published(db, week)
 
 
 # The set and forget entry point ---------------------------------------------

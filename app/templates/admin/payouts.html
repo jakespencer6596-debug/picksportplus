@@ -79,9 +79,9 @@
               <td class="cell-actions">
                 <input type="hidden" name="scope" value="{{ scope }}" form="{{ form_id }}">
                 <input type="hidden" name="rule_id" value="{{ rule.id }}" form="{{ form_id }}">
-                <form id="{{ form_id }}" method="post" action="/admin/payouts/rule"></form>
+                <form id="{{ form_id }}" method="post" action="/league/payouts/rule"></form>
                 <button class="btn btn-secondary btn-sm" type="submit" form="{{ form_id }}">Save</button>
-                <form method="post" action="/admin/payouts/rule/{{ rule.id }}/delete" class="inline-form">
+                <form method="post" action="/league/payouts/rule/{{ rule.id }}/delete" class="inline-form">
                   <button class="btn btn-ghost btn-sm" type="submit"
                           aria-label="Remove this place from {{ heading }}">
                     {{ ic.icon("x", 16) }}
@@ -98,7 +98,7 @@
       </table>
     </div>
 
-    <form method="post" action="/admin/payouts/rule" class="payout-add-row">
+    <form method="post" action="/league/payouts/rule" class="payout-add-row">
       <input type="hidden" name="scope" value="{{ scope }}">
       <div class="field">
         <label class="field-label" for="{{ scope }}-add-place">Place</label>
@@ -134,15 +134,15 @@
     <h1 class="page-title">Set payouts</h1>
   </div>
   <p class="muted">{{ pool.name }}, {{ pool.season_year }} season</p>
-  <a class="btn btn-secondary" href="/admin/payouts/summary">View payout summary</a>
+  <a class="btn btn-secondary" href="/league/payouts/summary">View payout summary</a>
 </div>
 
 <nav class="subnav" aria-label="Commissioner tools">
-  <a class="subnav-link" href="/admin">Overview</a>
-  <a class="subnav-link" href="/admin/slate">Slate</a>
-  <a class="subnav-link" href="/admin/members">Members</a>
-  <a class="subnav-link" href="/admin/settings">Settings</a>
-  <a class="subnav-link is-active" href="/admin/payouts" aria-current="page">Payouts</a>
+  <a class="subnav-link" href="/league">Overview</a>
+  <a class="subnav-link" href="/league/slate">Slate</a>
+  <a class="subnav-link" href="/league/members">Members</a>
+  <a class="subnav-link" href="/league/settings">Settings</a>
+  <a class="subnav-link is-active" href="/league/payouts" aria-current="page">Payouts</a>
 </nav>
 
 <div class="stack">
@@ -152,7 +152,7 @@
       <h2 id="pot-title">The pot</h2>
     </div>
     <div class="card-body">
-      <form method="post" action="/admin/payouts/pot" class="stack">
+      <form method="post" action="/league/payouts/pot" class="stack">
         <div class="form-row">
           <div class="field">
             <label class="field-label" for="entry_fee">Entry fee</label>
@@ -161,7 +161,7 @@
                    min="0" step="0.01" placeholder="Not set">
             <p class="form-hint">
               {{ paid_count }} member{{ "s" if paid_count != 1 else "" }} marked paid on the
-              <a href="/admin/members">Members</a> page.
+              <a href="/league/members">Members</a> page.
             </p>
           </div>
           <div class="field">
@@ -244,11 +244,11 @@
     </div>
     <div class="card-body">
       <div class="row">
-        <form method="post" action="/admin/payouts/scale-to-pot"
+        <form method="post" action="/league/payouts/scale-to-pot"
               onsubmit="return confirm('Convert every configured payout rule, in every scope, to percent mode at its current dollar value against the pot? Nothing changes today, only how each rule is expressed.');">
           <button class="btn btn-secondary" type="submit">Scale every rule to percent of pot</button>
         </form>
-        <form method="post" action="/admin/payouts/load-preset"
+        <form method="post" action="/league/payouts/load-preset"
               onsubmit="return confirm('{% if has_any_rules %}This clears every payout rule currently configured for this pool and replaces it with the standard ladder. Continue?{% else %}Load the standard payout ladder (weekly 105/55/25, bowl 250/100/50, season points 600/405/150, season wins 325/185/110)?{% endif %}');">
           <button class="btn btn-secondary" type="submit">Load standard ladder</button>
         </form>

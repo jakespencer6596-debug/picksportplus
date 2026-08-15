@@ -88,6 +88,18 @@ class Candidate:
     including every existing test, constructing a Candidate unchanged.
     """
 
+    home_key: str | None = None
+    away_key: str | None = None
+    """Canonical team keys (app.providers.teams.canonical_key), optional.
+
+    Phase 2 remediation, see DECISIONS.md: a team appearing on two different
+    games in one slate is what a merged-calendar-week bug (an unset or wrong
+    anchor date) looks like from the selection side, and select_slate_by_targets
+    refuses to let it happen when these are populated. None by default so every
+    caller that predates this, including every existing test, constructs a
+    Candidate unchanged and opts out of the check.
+    """
+
 
 @dataclass(frozen=True)
 class Selected:
@@ -351,13 +363,23 @@ def select_slate_by_targets(
             continue
         eligible.append(candidate)
 
-    # One entry per key, keeping the closest, in global order.
+    # One entry per key, keeping the closest, in global order. A candidate whose home or away
+    # team key is already claimed by a closer candidate is dropped here too (Phase 2
+    # remediation): two games sharing a team in one slate is what a merged calendar week
+    # looks like from this side, and the closest (first encountered, since eligible is
+    # already sorted by _sort_key) game for that team wins. A candidate with no team keys set
+    # (home_key/away_key both None, every pre-Phase-2 caller) never triggers this.
     ordered: list[Candidate] = []
     seen: set[str] = set()
+    seen_teams: set[str] = set()
     for candidate in sorted(eligible, key=_sort_key):
         if candidate.key in seen:
             continue
+        team_keys = {key for key in (candidate.home_key, candidate.away_key) if key is not None}
+        if team_keys & seen_teams:
+            continue
         seen.add(candidate.key)
+        seen_teams |= team_keys
         ordered.append(candidate)
 
     by_league: dict[str, list[Candidate]] = {}

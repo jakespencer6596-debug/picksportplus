@@ -1,0 +1,121 @@
+{% extends "base.html" %}
+{% import "components/icons.html" as ic %}
+{% block title %}Mail. {{ APP_NAME }}{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <div>
+    <p class="eyebrow">Site admin</p>
+    <h1 class="page-title">Mail</h1>
+  </div>
+  <div class="row">
+    <a class="btn btn-secondary" href="/site">
+      {{ ic.icon("home", 18) }}<span>Site overview</span>
+    </a>
+  </div>
+</div>
+
+<p class="muted">
+  Site admin only. Every invite, password reset and week-published notification sends through
+  this one path, so a failure or a disabled state always shows up here, never silently.
+</p>
+
+<section class="section" aria-labelledby="status-title">
+  <h2 class="section-title" id="status-title">Configuration status</h2>
+  <div class="budget-grid">
+    <article class="panel budget-card{% if not mail_enabled %} is-exhausted{% endif %}">
+      <div class="budget-head">
+        <h3 class="budget-name">Mail enabled</h3>
+      </div>
+      <p class="budget-figure num">{{ "On" if mail_enabled else "Off" }}</p>
+      <p class="form-hint">
+        {% if mail_enabled %}
+          MAIL_ENABLED is on. Sends go out when the key and from address below are also set.
+        {% else %}
+          MAIL_ENABLED is off. Every send fails loudly with a message to share the link or
+          code directly instead. Nothing here can send until this is turned on in the
+          environment.
+        {% endif %}
+      </p>
+    </article>
+
+    <article class="panel budget-card{% if not key_configured %} is-exhausted{% endif %}">
+      <div class="budget-head">
+        <h3 class="budget-name">Provider key</h3>
+      </div>
+      <p class="form-hint">Key: {{ "set" if key_configured else "NOT SET" }}</p>
+    </article>
+
+    <article class="panel budget-card{% if not from_configured %} is-exhausted{% endif %}">
+      <div class="budget-head">
+        <h3 class="budget-name">From address</h3>
+      </div>
+      <p class="form-hint">From address: {{ "set" if from_configured else "NOT SET" }}</p>
+    </article>
+
+    <article class="panel budget-card">
+      <div class="budget-head">
+        <h3 class="budget-name">Rate limit</h3>
+      </div>
+      <p class="budget-figure num">{{ rate_limit }} <span class="muted">per sender, per hour</span></p>
+    </article>
+  </div>
+</section>
+
+<section class="section" aria-labelledby="test-title">
+  <h2 class="section-title" id="test-title">Send a test email</h2>
+  <div class="card">
+    <div class="card-body">
+      <p class="form-hint">
+        Goes through the exact same send path as every invite, reset and notification, no
+        special cased test send.
+      </p>
+      <form method="post" action="/site/mail/test" class="inline-form">
+        <input class="input" type="email" name="email" value="{{ test_email_default }}"
+               placeholder="name@example.com" required>
+        <button class="btn btn-primary" type="submit">Send test email</button>
+      </form>
+    </div>
+  </div>
+</section>
+
+<section class="section" aria-labelledby="recent-title">
+  <h2 class="section-title" id="recent-title">Recent sends</h2>
+  {% if recent %}
+    <div class="table-wrap">
+      <table class="table">
+        <thead>
+          <tr>
+            <th scope="col">When</th>
+            <th scope="col">Recipient</th>
+            <th scope="col">Kind</th>
+            <th scope="col">Result</th>
+            <th scope="col">Detail</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for row in recent %}
+            <tr>
+              <td data-label="When">{{ row.created_at | kickoff_long(tz) }}</td>
+              <td data-label="Recipient">{{ row.recipient }}</td>
+              <td data-label="Kind">{{ row.kind }}</td>
+              <td data-label="Result">
+                <span class="badge {% if row.result == 'sent' %}badge-commissioner{% endif %}">
+                  {{ row.result }}
+                </span>
+              </td>
+              <td data-label="Detail">{{ row.detail or "" }}</td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  {% else %}
+    <div class="empty-state">
+      {{ ic.icon("mail", 28) }}
+      <h3 class="empty-state-title">Nothing sent yet</h3>
+      <p>Every attempted send, successful or not, will show up here.</p>
+    </div>
+  {% endif %}
+</section>
+{% endblock %}

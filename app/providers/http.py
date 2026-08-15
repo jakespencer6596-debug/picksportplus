@@ -33,7 +33,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.config import settings
-from app.models import FeedCache, ProviderUsage, utcnow
+from app.models import FeedCache, PlatformSetting, ProviderUsage, utcnow
 
 log = logging.getLogger("picksportplus.http")
 
@@ -163,6 +163,24 @@ def provider_warnings(db: Session) -> list[str]:
         if report["last_error"]:
             warnings.append(f"{report['label']} last call reported: {report['last_error']}")
     return warnings
+
+
+# Platform settings -----------------------------------------------------------
+
+
+def get_platform_settings(db: Session) -> PlatformSetting:
+    """The one platform-wide settings row (Phase 5 remediation: provider controls move to
+    site admin), created on first read if it does not exist yet, the same get-or-create shape
+    get_usage above already uses for ProviderUsage. Read fresh from the database on every
+    call, never cached in process memory, so a site admin's toggle from POST
+    /site/providers/espn-only takes effect on the very next slate build with no redeploy and
+    no restart."""
+    row = db.scalar(select(PlatformSetting))
+    if row is None:
+        row = PlatformSetting()
+        db.add(row)
+        db.flush()
+    return row
 
 
 # Cache ----------------------------------------------------------------------

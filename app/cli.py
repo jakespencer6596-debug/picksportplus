@@ -16,7 +16,7 @@ from sqlalchemy import func, select
 
 from app.config import settings
 from app.db import engine, session_scope
-from app.models import PAYOUT_SCOPES, Base, Pool, User, Week
+from app.models import PAYOUT_SCOPES, Base, PayoutAward, Pick, Pool, User, Week, utcnow
 from app.providers import espn
 from app.providers.http import usage_report
 
@@ -143,7 +143,7 @@ def seed_admin() -> None:
                 # Real, confirmed anchor for the season (see DECISIONS.md, Phase 9b). Nullable,
                 # so leaving WEEK1_ANCHOR_DATE unset in the environment still seeds a working
                 # pool, just one that falls back to detect_week's pre-anchor behaviour until a
-                # commissioner sets it from /admin/settings.
+                # commissioner sets it from /league/settings.
                 week1_anchor_date=settings.week1_anchor_date,
             )
             db.add(pool)
@@ -153,15 +153,15 @@ def seed_admin() -> None:
             _echo(f"Pool {pool.name} already exists with join code {pool.join_code}.")
 
         # The admin is never enrolled as a PoolMember here (Post-launch fixes, see
-        # DECISIONS.md): the site admin manages every league from /admin/leagues but never
+        # DECISIONS.md): the site admin manages every league from /site/leagues but never
         # runs one, structurally, not just by convention. The pool created above still needs
-        # a real commissioner attached, either by email from /admin/leagues/new or by sharing
+        # a real commissioner attached, either by email from /site/leagues/new or by sharing
         # its commissioner invite link, before anyone can manage it day to day.
 
     _echo("")
     _echo(f"Sign in at http://localhost:8000/login as {email}")
     _echo(f"{pool.name} has no commissioner yet. Attach one from the admin portal, either by")
-    _echo("email at /admin/leagues/new or with that league's commissioner invite link.")
+    _echo("email at /site/leagues/new or with that league's commissioner invite link.")
 
 
 @app.command("seed-demo")
@@ -224,6 +224,27 @@ def seed_preview_cmd(
         _echo(f"  note: {note}")
     for warning in report.warnings:
         typer.secho(f"  warning: {warning}", fg=typer.colors.YELLOW)
+
+
+@app.command("backfill-anchor-dates")
+def backfill_anchor_dates_cmd() -> None:
+    """One-time fix for a pool created before the week 1 anchor date became required (Phase 2
+    remediation, see DECISIONS.md). Sets week1_anchor_date to the second Saturday of
+    September of that pool's own season_year for any pool where it is still null. Idempotent:
+    a pool that already has one is left untouched, so this is safe to run more than once, for
+    example once per deploy alongside seed-admin and seed-demo.
+    """
+    from app.services.calendar import default_week1_anchor_date
+
+    with session_scope() as db:
+        pools = list(db.scalars(select(Pool).where(Pool.week1_anchor_date.is_(None))))
+        if not pools:
+            _echo("Every pool already has a week 1 anchor date. Nothing to backfill.")
+            return
+        for pool in pools:
+            anchor = default_week1_anchor_date(pool.season_year)
+            pool.week1_anchor_date = anchor
+            _echo(f"Pool {pool.id} ({pool.name}): anchor date set to {anchor.isoformat()}.")
 
 
 # Weekly lifecycle -----------------------------------------------------------
@@ -349,6 +370,42 @@ def score_week_cmd(
     _echo(report.summary())
 
 
+def _cron_pass(db, pool: Pool) -> None:
+    """Sync, refresh and score one pool. The one block of work run-cron does per pool,
+    factored out so the preview pool (below) goes through the exact same steps, with the
+    exact same metered-budget carefulness, as every real pool.
+    """
+    from app.services.ingest import sync_week
+    from app.services.results import fetch_results, score_week_for_pool
+
+    _echo(f"[{pool.name}]")
+    report = sync_week(db, pool)
+    if report is not None:
+        _echo(f"  {report.summary()}")
+        for note in report.notes:
+            _echo(f"  note: {note}")
+        for warning in report.warnings:
+            typer.secho(f"  warning: {warning}", fg=typer.colors.YELLOW)
+
+    # Refresh and score every week that is still live. Cheap, ESPN only.
+    live = list(
+        db.scalars(
+            select(Week)
+            .where(
+                Week.pool_id == pool.id,
+                Week.season_year == pool.season_year,
+                Week.status.in_(("open", "locked")),
+            )
+            .order_by(Week.week_number)
+        )
+    )
+    for row in live:
+        results = fetch_results(db, pool, row)
+        _echo(f"  {results.summary()}")
+        score = score_week_for_pool(db, pool, row)
+        _echo(f"  {score.summary()}")
+
+
 @app.command("run-cron")
 def run_cron(
     pool_id: int | None = typer.Option(None, "--pool"),
@@ -358,14 +415,14 @@ def run_cron(
     ESPN work happens every run because it is free. Metered spread lookups only happen
     while a slate is actually being built or refreshed, and only inside the per week cap.
     """
-    from app.services.ingest import sync_week
-    from app.services.results import fetch_results, score_week_for_pool
+    from app.services.preview import get_preview_pool
 
     started = dt.datetime.now(dt.UTC)
     with session_scope() as db:
-        # is_preview excluded (Post-launch fixes, see DECISIONS.md): run-cron is exactly the
-        # kind of automatic, scheduled trigger the preview pool must never be refreshed by.
-        # Its slate is only ever built by the explicit seed-preview command.
+        # is_preview excluded from the real-pool query: an operator command run without an
+        # explicit --pool must never silently land on the hidden preview pool, matching
+        # _resolve_pool's own rule. The preview pool is still refreshed below, deliberately,
+        # just never counted as "the" default pool and never created here.
         pools = list(db.scalars(select(Pool).where(Pool.is_preview.is_(False)).order_by(Pool.id)))
         if pool_id:
             pools = [p for p in pools if p.id == pool_id]
@@ -374,32 +431,18 @@ def run_cron(
             return
 
         for pool in pools:
-            _echo(f"[{pool.name}]")
-            report = sync_week(db, pool)
-            if report is not None:
-                _echo(f"  {report.summary()}")
-                for note in report.notes:
-                    _echo(f"  note: {note}")
-                for warning in report.warnings:
-                    typer.secho(f"  warning: {warning}", fg=typer.colors.YELLOW)
+            _cron_pass(db, pool)
 
-            # Refresh and score every week that is still live. Cheap, ESPN only.
-            live = list(
-                db.scalars(
-                    select(Week)
-                    .where(
-                        Week.pool_id == pool.id,
-                        Week.season_year == pool.season_year,
-                        Week.status.in_(("open", "locked")),
-                    )
-                    .order_by(Week.week_number)
-                )
-            )
-            for row in live:
-                results = fetch_results(db, pool, row)
-                _echo(f"  {results.summary()}")
-                score = score_week_for_pool(db, pool, row)
-                _echo(f"  {score.summary()}")
+        # The preview pool (Phase 8 remediation, see DECISIONS.md and app/services/preview.py):
+        # refreshed on this same operator-scheduled cadence, once it exists, so it does not go
+        # stale just because nobody remembers to run seed-preview by hand. Only when --pool did
+        # not restrict this run to one specific real pool, and only get_preview_pool (read
+        # only): a cron tick still never creates the preview pool, that stays seed-preview's
+        # job alone.
+        if pool_id is None:
+            preview_pool = get_preview_pool(db)
+            if preview_pool is not None:
+                _cron_pass(db, preview_pool)
 
     elapsed = (dt.datetime.now(dt.UTC) - started).total_seconds()
     _echo(f"Done in {elapsed:.1f}s.")
@@ -569,7 +612,7 @@ def payouts_summary_cmd(
     the grand total, and the paid/unpaid split.
 
     Read only, writes nothing. Reads only frozen PayoutAward rows, the same data the
-    /admin/payouts/summary page shows, safe to run at any time.
+    /league/payouts/summary page shows, safe to run at any time.
     """
     from app.services.payouts import payout_summary
 
@@ -629,6 +672,70 @@ def _redact_db_url(url: str) -> str:
     return f"{scheme}//***@{rest}"
 
 
+# A quiet week (bye week, off season lull) can legitimately go a few days between real
+# rebuilds, since sync_week only rebuilds once the week is close enough to matter (see its
+# own docstring). Three days is comfortably past that normal quiet period while still catching
+# "run-cron has not actually run in a while".
+PREVIEW_STALE_AFTER_DAYS = 3
+
+
+def _report_preview_health(db) -> None:
+    """Doctor's "is the public preview actually any good right now" check (Phase 8
+    remediation, see DECISIONS.md): the preview is the first live slate a signed out visitor
+    from /pricing ever sees, so its health deserves the same at-a-glance visibility as the
+    database and provider checks above it, not a silent, easy-to-forget dependency on someone
+    having once run seed-preview by hand.
+    """
+    from app.services.ingest import detect_week
+    from app.services.preview import get_preview_pool
+
+    preview_pool = get_preview_pool(db)
+    if preview_pool is None:
+        typer.secho(
+            "  MISSING: no preview pool has been seeded yet. Run: python -m app.cli seed-preview",
+            fg=typer.colors.YELLOW,
+        )
+        return
+
+    latest_week = db.scalars(
+        select(Week)
+        .where(Week.pool_id == preview_pool.id)
+        .order_by(Week.season_year.desc(), Week.week_number.desc())
+    ).first()
+    if latest_week is None:
+        typer.secho(
+            "  MISSING: preview pool exists but no week has been built yet. "
+            "Run: python -m app.cli seed-preview",
+            fg=typer.colors.YELLOW,
+        )
+        return
+
+    created_at = latest_week.created_at
+    if created_at.tzinfo is None:
+        created_at = created_at.replace(tzinfo=dt.UTC)
+    age_days = (utcnow() - created_at).days
+
+    stale_reasons = []
+    if age_days > PREVIEW_STALE_AFTER_DAYS:
+        stale_reasons.append(f"last built {age_days} days ago")
+    current_week_number = detect_week(db, preview_pool)
+    if current_week_number is not None and latest_week.week_number != current_week_number:
+        stale_reasons.append(
+            f"built for week {latest_week.week_number}, current week is {current_week_number}"
+        )
+
+    if stale_reasons:
+        typer.secho(
+            f"  STALE: {'; '.join(stale_reasons)}. Run: python -m app.cli seed-preview",
+            fg=typer.colors.YELLOW,
+        )
+    else:
+        _echo(
+            f"  healthy: week {latest_week.week_number}, built {age_days} day(s) ago, "
+            f"status {latest_week.status}"
+        )
+
+
 @app.command("doctor")
 def doctor(
     pool_id: int | None = typer.Option(None, "--pool"),
@@ -667,12 +774,47 @@ def doctor(
     else:
         _echo("  migrations  : no alembic.ini found")
 
+    if settings.is_ephemeral_storage:
+        typer.secho(
+            "  WARNING     : this is ephemeral storage. Every account, league, pick, "
+            "payout rule and award will be lost the next time the service sleeps or "
+            "redeploys. Set DATABASE_URL to a persistent database before real players join.",
+            fg=typer.colors.RED,
+        )
+    else:
+        _echo("  storage     : durable")
+
+    with session_scope() as db:
+        user_count = db.scalar(select(func.count(User.id))) or 0
+        pool_count = db.scalar(select(func.count(Pool.id))) or 0
+        pick_count = db.scalar(select(func.count(Pick.id))) or 0
+        award_count = db.scalar(select(func.count(PayoutAward.id))) or 0
+        oldest_user = db.scalar(select(func.min(User.created_at)))
+        _echo("")
+        _echo("Data survived the last restart (a commissioner or admin data-loss check)")
+        _echo(f"  users       : {user_count}")
+        _echo(f"  pools       : {pool_count}")
+        _echo(f"  picks       : {pick_count}")
+        _echo(f"  payout awards : {award_count}")
+        if oldest_user is not None:
+            age = utcnow() - (
+                oldest_user if oldest_user.tzinfo else oldest_user.replace(tzinfo=dt.UTC)
+            )
+            _echo(f"  oldest user row is {age.days} days old")
+        else:
+            _echo("  oldest user row : no users yet")
+
     _echo("")
     _echo(f"OFFLINE_MODE  : {settings.offline_mode}")
     _echo("")
     _echo("Provider keys (presence only, values are never printed)")
     _echo(f"  ODDS_API_KEY : {'set' if settings.odds_api_key else 'NOT SET'}")
     _echo(f"  CFBD_API_KEY : {'set' if settings.cfbd_api_key else 'NOT SET'}")
+
+    _echo("")
+    _echo("Public preview (first impression for a signed out visitor from /pricing)")
+    with session_scope() as db:
+        _report_preview_health(db)
 
     with session_scope() as db:
         pool = (

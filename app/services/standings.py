@@ -99,13 +99,24 @@ def _points_sort_key(pool: Pool):
 
 
 def season_standings(db: Session, pool: Pool, viewer_id: int | None = None) -> list[StandingRow]:
-    """Every member of the pool, including players who have not scored yet."""
+    """Every member of the pool, including players who have not scored yet.
+
+    A test week's WeekEntry rows are excluded outright (Phase 3, preseason and test week
+    support): a test week scores normally within itself, but must contribute zero to season
+    totals, correct counts, and weekly-win counts. This is the one place that filter needs to
+    live, since every season aggregate (here, and app/services/payouts.py's
+    _season_points_standings/_season_wins_standings) reads from this function.
+    """
     members = _members(db, pool)
     entries_by_user: dict[int, list[WeekEntry]] = {m.id: [] for m in members}
     entries = db.scalars(
         select(WeekEntry)
         .join(Week, Week.id == WeekEntry.week_id)
-        .where(WeekEntry.pool_id == pool.id, Week.season_year == pool.season_year)
+        .where(
+            WeekEntry.pool_id == pool.id,
+            Week.season_year == pool.season_year,
+            Week.is_test_week.is_(False),
+        )
     )
     for entry in entries:
         entries_by_user.setdefault(entry.user_id, []).append(entry)

@@ -36,12 +36,12 @@
         <a class="nav-link {{ 'is-active' if active_nav == 'results' }}" href="/results"
            {{ 'aria-current=page' if active_nav == 'results' }}>Results</a>
         {% if is_commissioner %}
-          <a class="nav-link {{ 'is-active' if active_nav == 'admin' }}" href="/admin"
-             {{ 'aria-current=page' if active_nav == 'admin' }}>Admin</a>
+          <a class="nav-link {{ 'is-active' if active_nav == 'league' }}" href="/league"
+             {{ 'aria-current=page' if active_nav == 'league' }}>League</a>
         {% endif %}
         {% if current_user.is_admin %}
-          <a class="nav-link {{ 'is-active' if active_nav == 'admin_leagues' }}" href="/admin/leagues"
-             {{ 'aria-current=page' if active_nav == 'admin_leagues' }}>Leagues</a>
+          <a class="nav-link {{ 'is-active' if active_nav in ('site', 'site_leagues', 'site_contacts', 'site_providers', 'site_mail') }}" href="/site"
+             {{ 'aria-current=page' if active_nav in ('site', 'site_leagues', 'site_contacts', 'site_providers', 'site_mail') }}>Site</a>
         {% endif %}
       </nav>
 
@@ -80,7 +80,7 @@
     {% if current_user %}
       <a href="/">{{ ic.icon("home", 18) }}<span>Back to the home page</span></a>
       {% if current_user.is_admin %}
-        <a href="/admin/leagues">{{ ic.icon("flag", 18) }}<span>Leagues</span></a>
+        <a href="/site">{{ ic.icon("flag", 18) }}<span>Site</span></a>
       {% endif %}
     {% else %}
       <a href="/pricing">{{ ic.icon("dollar", 18) }}<span>Pricing</span></a>
@@ -91,12 +91,24 @@
   </nav>
 </div>
 
-{% if current_user and current_user.is_admin and active_nav == 'admin' and pool %}
+{% if current_user and current_user.is_admin and IS_EPHEMERAL_STORAGE %}
+  <div class="lockbar lockbar-strong" role="status">
+    <div class="lockbar-inner row">
+      {{ ic.icon("alert", 16) }}
+      <span>
+        This deployment is using temporary storage. All data will be lost when the service
+        restarts. Set DATABASE_URL to a persistent database.
+      </span>
+    </div>
+  </div>
+{% endif %}
+
+{% if current_user and current_user.is_admin and pool and request.url.path.startswith('/league') %}
   <div class="lockbar" role="status">
     <div class="lockbar-inner row">
       {{ ic.icon("settings", 16) }}
       <span>Viewing <strong>{{ pool.name }}</strong> as commissioner.</span>
-      <a class="lockbar-link" href="/admin/leagues">Exit to leagues</a>
+      <a class="lockbar-link" href="/site/leagues">Exit to leagues</a>
     </div>
   </div>
 {% endif %}
@@ -114,10 +126,10 @@
           could never manage another commissioner.
         </span>
         <div class="invite-banner-actions">
-          <form method="post" action="/admin/co-commissioner/accept" class="inline-form">
+          <form method="post" action="/league/co-commissioner/accept" class="inline-form">
             <button class="btn btn-primary btn-sm" type="submit">Accept</button>
           </form>
-          <form method="post" action="/admin/co-commissioner/decline" class="inline-form">
+          <form method="post" action="/league/co-commissioner/decline" class="inline-form">
             <button class="btn btn-ghost btn-sm" type="submit">Decline</button>
           </form>
         </div>
@@ -153,8 +165,8 @@
       {{ ic.icon("list", 20) }}<span>Results</span>
     </a>
     {% if is_commissioner %}
-      <a class="tabbar-link {{ 'is-active' if active_nav == 'admin' }}" href="/admin">
-        {{ ic.icon("settings", 20) }}<span>Admin</span>
+      <a class="tabbar-link {{ 'is-active' if active_nav == 'league' }}" href="/league">
+        {{ ic.icon("settings", 20) }}<span>League</span>
       </a>
     {% endif %}
   </nav>

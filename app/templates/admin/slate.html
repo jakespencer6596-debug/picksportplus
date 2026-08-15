@@ -59,7 +59,7 @@
 {% endmacro %}
 
 {% macro spread_form(week_id, game) %}
-  <form method="post" action="/admin/slate/game" class="action-form">
+  <form method="post" action="/league/slate/game" class="action-form">
     <input type="hidden" name="week_id" value="{{ week_id }}">
     <input type="hidden" name="game_id" value="{{ game.id }}">
     <input type="hidden" name="action" value="spread">
@@ -84,16 +84,26 @@
     <p class="muted">
       {{ week.label }}, {{ week.season_year }} season
       <span class="badge badge-{{ week.status }}">{{ week.status }}</span>
+      {% if week.is_test_week %}
+        <span class="badge badge-test-week">Test week</span>
+      {% endif %}
     </p>
   {% endif %}
 </div>
+{% if week and week.is_test_week %}
+  <p class="form-hint">
+    This is a test week, built from whatever is live right now (NFL preseason, college week 0
+    included) so the group can try the pick and scoring flow. It does not count toward season
+    standings or payouts.
+  </p>
+{% endif %}
 
 <nav class="subnav" aria-label="Commissioner tools">
-  <a class="subnav-link" href="/admin">Overview</a>
-  <a class="subnav-link is-active" href="/admin/slate" aria-current="page">Slate</a>
-  <a class="subnav-link" href="/admin/members">Members</a>
-  <a class="subnav-link" href="/admin/settings">Settings</a>
-  <a class="subnav-link" href="/admin/payouts">Payouts</a>
+  <a class="subnav-link" href="/league">Overview</a>
+  <a class="subnav-link is-active" href="/league/slate" aria-current="page">Slate</a>
+  <a class="subnav-link" href="/league/members">Members</a>
+  <a class="subnav-link" href="/league/settings">Settings</a>
+  <a class="subnav-link" href="/league/payouts">Payouts</a>
 </nav>
 
 {% if warnings %}
@@ -114,9 +124,9 @@
     <nav class="week-switch" aria-label="Weeks in this season">
       {% for row in weeks %}
         <a class="week-switch-link{% if week and row.id == week.id %} is-active{% endif %}"
-           href="/admin/slate?week={{ row.week_number }}"
+           href="/league/slate?week={{ row.week_number }}"
            {% if week and row.id == week.id %}aria-current="page"{% endif %}>
-          <span class="week-switch-num num">{{ row.week_number }}</span>
+          <span class="week-switch-num num">{% if row.is_test_week %}Test{% else %}{{ row.week_number }}{% endif %}</span>
           <span class="week-switch-status">{{ row.status }}</span>
         </a>
       {% endfor %}
@@ -130,7 +140,7 @@
       <h3>Build a slate</h3>
     </div>
     <div class="card-body">
-      <form method="post" action="/admin/slate/build" class="stack">
+      <form method="post" action="/league/slate/build" class="stack">
         <div class="field">
           <label class="field-label" for="week_number">Week number</label>
           <input class="input num" type="number" id="week_number" name="week_number"
@@ -138,35 +148,56 @@
                  min="1" max="25" step="1" required>
           <p class="form-hint">
             Building a week that already exists refreshes its candidate pool and reselects the
-            closest games. A line you set by hand is never overwritten by a feed.
+            closest games. A line you set by hand is never overwritten by a feed. Publishing
+            follows the auto publish setting, currently {{ "on" if pool.auto_publish else "off" }};
+            use the Publish button below to open a drafted week by hand.
           </p>
+          {% if espn_only %}
+            <p class="form-hint">
+              Some games may not have a line yet. You can set one by hand.
+            </p>
+          {% endif %}
         </div>
 
-        <div class="field">
-          <label class="checkbox" for="publish">
-            <input type="checkbox" id="publish" name="publish" value="1">
-            <span>Open it for picks straight away</span>
-          </label>
-          <p class="form-hint">
-            Leave this off to follow the auto publish setting, currently
-            {{ "on" if pool.auto_publish else "off" }}.
-          </p>
-        </div>
-
-        <div class="field">
-          <label class="checkbox" for="no_metered">
-            <input type="checkbox" id="no_metered" name="no_metered" value="1">
-            <span>ESPN only, spend no API credits</span>
-          </label>
-          <p class="form-hint">
-            The Odds API and CollegeFootballData are not called at all. Any game ESPN has no line
-            for stays without one until you set it by hand.
-          </p>
-        </div>
+        {# Phase 6 remediation, see DECISIONS.md: this used to give no feedback at all while
+           the build ran, several seconds to just under a minute, so a commissioner reasonably
+           assumed the click did nothing and clicked again. Starts hidden, app.js flips it on
+           for the duration of the request (htmx:beforeRequest/afterRequest, the same event
+           pair picks.html's own Save button already reacts to for its save-state badge). #}
+        <p class="form-hint" data-build-note hidden>
+          Building the slate reads the schedule from ESPN and resolves a line for every game.
+          This can take up to a minute.
+        </p>
 
         <div class="form-actions">
-          <button class="btn btn-primary" type="submit">Build the slate</button>
+          <button class="btn btn-primary"
+                  type="submit"
+                  data-build-btn
+                  hx-post="/league/slate/build"
+                  hx-target="this"
+                  hx-swap="none"
+                  hx-include="closest form">
+            Build the slate
+          </button>
         </div>
+      </form>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-head">
+      <h3>Test week</h3>
+    </div>
+    <div class="card-body">
+      <p class="form-hint">
+        Builds a low-stakes week from whatever is live right now, NFL preseason and college
+        week 0 included, so the group can try picks and scoring before the real season
+        starts. It scores normally on its own, but never counts toward season standings,
+        weekly-win counts, or payouts, and the scenarios panel skips it. Building it again
+        refreshes it the same way building a real week does.
+      </p>
+      <form method="post" action="/league/test-week/create" class="inline-form">
+        <button class="btn btn-secondary" type="submit">Create a test week</button>
       </form>
     </div>
   </div>
@@ -212,22 +243,30 @@
 
       <div class="row">
         {% if week.status == "draft" %}
-          <form method="post" action="/admin/slate/publish" class="inline-form">
+          <form method="post" action="/league/slate/publish" class="inline-form">
             <input type="hidden" name="week_id" value="{{ week.id }}">
             <button class="btn btn-primary" type="submit">Publish this week</button>
           </form>
         {% endif %}
-        <form method="post" action="/admin/run/results" class="inline-form">
+        <form method="post" action="/league/run/results" class="inline-form">
           <input type="hidden" name="week_id" value="{{ week.id }}">
           <button class="btn btn-secondary" type="submit">
             {{ ic.icon("refresh", 18) }}<span>Refresh and score now</span>
           </button>
         </form>
+        {% if week.is_test_week %}
+          <form method="post" action="/league/test-week/{{ week.id }}/delete" class="inline-form">
+            <button class="btn btn-secondary" type="submit">Delete this test week</button>
+          </form>
+        {% endif %}
       </div>
 
       <p class="form-hint">
         Publishing opens the week for picks. Refresh and score pulls finals from ESPN and rescores
         the week. Both are free to run and safe to run again.
+        {% if week.is_test_week %}
+          Deleting this test week removes its games, picks and entries for good.
+        {% endif %}
       </p>
     </div>
 
@@ -236,7 +275,19 @@
         <h3>Lock time</h3>
       </div>
       <div class="card-body">
-        <form method="post" action="/admin/slate/lock" class="stack">
+        {% if slate_span and slate_span.wide %}
+          <div class="flash flash-info">
+            {{ ic.icon("alert", 18) }}
+            <span>
+              This slate's games span {{ slate_span.span_days }} days, from
+              {{ slate_span.earliest | kickoff_long(tz) }} to
+              {{ slate_span.latest | kickoff_long(tz) }}. Picks lock at the first kickoff by
+              default, well before the later games. Set a manual lock time below if you want
+              to give players more time to finish their picks.
+            </span>
+          </div>
+        {% endif %}
+        <form method="post" action="/league/slate/lock" class="stack">
           <input type="hidden" name="week_id" value="{{ week.id }}">
           <div class="field">
             <label class="field-label" for="lock_at_local">Picks lock at</label>
@@ -305,7 +356,7 @@
                   </span>
                 </td>
                 <td data-label="Actions" class="cell-actions">
-                  <form method="post" action="/admin/slate/game" class="inline-form">
+                  <form method="post" action="/league/slate/game" class="inline-form">
                     <input type="hidden" name="week_id" value="{{ week.id }}">
                     <input type="hidden" name="game_id" value="{{ game.id }}">
                     <input type="hidden" name="action" value="{% if game.pinned %}unpin{% else %}pin{% endif %}">
@@ -317,7 +368,7 @@
                   </form>
 
                   {% if editable %}
-                    <form method="post" action="/admin/slate/game" class="inline-form">
+                    <form method="post" action="/league/slate/game" class="inline-form">
                       <input type="hidden" name="week_id" value="{{ week.id }}">
                       <input type="hidden" name="game_id" value="{{ game.id }}">
                       <input type="hidden" name="action" value="remove">
@@ -328,7 +379,7 @@
                     </form>
 
                     {% if swap_options %}
-                      <form method="post" action="/admin/slate/game" class="action-form">
+                      <form method="post" action="/league/slate/game" class="action-form">
                         <input type="hidden" name="week_id" value="{{ week.id }}">
                         <input type="hidden" name="game_id" value="{{ game.id }}">
                         <input type="hidden" name="action" value="swap">
@@ -348,7 +399,7 @@
                     {% endif %}
                   {% endif %}
 
-                  <form method="post" action="/admin/slate/game" class="inline-form">
+                  <form method="post" action="/league/slate/game" class="inline-form">
                     <input type="hidden" name="week_id" value="{{ week.id }}">
                     <input type="hidden" name="game_id" value="{{ game.id }}">
                     <input type="hidden" name="action" value="{% if game.is_void %}unvoid{% else %}void{% endif %}">
@@ -408,7 +459,7 @@
                     <span class="badge badge-pinned">Pinned</span>
                   {% endif %}
                   {% if editable %}
-                    <form method="post" action="/admin/slate/game" class="inline-form">
+                    <form method="post" action="/league/slate/game" class="inline-form">
                       <input type="hidden" name="week_id" value="{{ week.id }}">
                       <input type="hidden" name="game_id" value="{{ game.id }}">
                       <input type="hidden" name="action" value="add">
@@ -421,7 +472,7 @@
                     <span class="cell-note muted">Picks are in, the slate is fixed.</span>
                   {% endif %}
 
-                  <form method="post" action="/admin/slate/game" class="inline-form">
+                  <form method="post" action="/league/slate/game" class="inline-form">
                     <input type="hidden" name="week_id" value="{{ week.id }}">
                     <input type="hidden" name="game_id" value="{{ game.id }}">
                     <input type="hidden" name="action" value="{% if game.pinned %}unpin{% else %}pin{% endif %}">

@@ -196,6 +196,10 @@ def render(request, template_name: str, context: dict | None = None, **base):
         **base,
         "flashes": pop_flashes(request),
         "tz": (base.get("pool").timezone if base.get("pool") else settings.timezone),
+        # Read fresh on every render, not baked into templates.env.globals at import time, so
+        # a DATABASE_URL that only becomes known once the process boots (and any test that
+        # patches settings.database_url) is reflected immediately. See DECISIONS.md, Phase 1.
+        "IS_EPHEMERAL_STORAGE": settings.is_ephemeral_storage,
     }
     ctx.update(context or {})
     return templates.TemplateResponse(request, template_name, ctx, status_code=status_code)

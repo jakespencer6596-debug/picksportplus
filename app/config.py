@@ -10,6 +10,19 @@ from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
+def is_ephemeral_sqlite_path(database_url: str) -> bool:
+    """True for a sqlite URL whose file lives under /tmp, the one directory Render's free
+    instance disk guarantees is writable and the one it wipes on every sleep or redeploy
+    (Phase 1 remediation, see DECISIONS.md). A non-sqlite URL (Postgres, MySQL) is never
+    ephemeral by this check; a sqlite file anywhere other than /tmp is treated as durable
+    enough for local development, even though no path on a Render free instance actually
+    survives a restart outside a persistent disk or an external database."""
+    if not database_url.startswith("sqlite"):
+        return False
+    path = database_url.split("///", 1)[-1]
+    return path == "/tmp" or path.startswith("/tmp/")
+
+
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
         env_file=".env",
@@ -40,7 +53,7 @@ class Settings(BaseSettings):
     # league's own ESPN week from this date, see DECISIONS.md, Phase 1). Real, confirmed
     # value for the 2026 season: seed_admin threads this straight onto a freshly created
     # pool's Pool.week1_anchor_date, the same field a commissioner can also edit later from
-    # /admin/settings. Nullable so a pool can be seeded without one and configured by hand
+    # /league/settings. Nullable so a pool can be seeded without one and configured by hand
     # instead, matching Pool.week1_anchor_date's own nullability.
     week1_anchor_date: dt.date | None = dt.date(2026, 9, 12)
     open_registration: bool = False
@@ -82,9 +95,35 @@ class Settings(BaseSettings):
 
     offline_mode: bool = False
 
+    # Transactional email (Phase 7 remediation, see DECISIONS.md). Off by default so a fresh
+    # deploy or a local dev environment never accidentally tries to send: every call site
+    # (invites, password reset, week-published notification) must keep working through its
+    # existing copy-and-paste fallback when this is False. Blank api key/from address is a
+    # valid answer too, matching ODDS_API_KEY/CFBD_API_KEY's own "optional, blank is fine"
+    # convention; app.services.mail.send treats "disabled" and "not configured" as the same
+    # loud failure rather than two different silent no-ops.
+    mail_enabled: bool = False
+    resend_api_key: str = ""
+    mail_from_address: str = ""
+    mail_from_name: str = "PickSportPlus"
+    # Simple per-actor cap, counted from real MailLog rows rather than an in-process counter
+    # (see app/services/mail.py), since this app can restart at will (Phase 1 remediation) and
+    # an in-process counter would silently reset on every sleep or redeploy.
+    mail_rate_limit_per_hour: int = 20
+
     # Network behaviour for the three feeds. Kept here so tests can tighten them.
     http_timeout_seconds: float = 15.0
     http_retries: int = 2
+
+    # Phase 6 remediation (see DECISIONS.md): a whole build_slate call has no wall-clock
+    # budget of its own, only the per-HTTP-call timeout above, so a slow or hanging provider
+    # could otherwise hold a build open indefinitely with the commissioner staring at a blank
+    # page. 90 seconds comfortably covers a real build (ESPN for the schedule, then up to a
+    # few Odds API/CFBD calls, one per league, each bounded by http_timeout_seconds) while
+    # still failing loud well before a commissioner gives up and reloads. Tests that want a
+    # deterministic, fast timeout pass ingest.build_slate(..., time_budget_seconds=...) directly
+    # rather than lowering this setting.
+    slate_build_timeout_seconds: float = 90.0
 
     # The commissioner sets the real numbers per pool. These bounds only stop nonsense.
     # ClassVar keeps pydantic from treating them as settings fields.
@@ -127,6 +166,15 @@ class Settings(BaseSettings):
     @property
     def is_sqlite(self) -> bool:
         return self.database_url.startswith("sqlite")
+
+    @property
+    def is_ephemeral_storage(self) -> bool:
+        """True when database_url is a sqlite file under /tmp, which Render's free instance
+        disk wipes on every restart, sleep or redeploy (Phase 1 remediation, see
+        DECISIONS.md). A Postgres URL, or a sqlite file anywhere other than /tmp, is not
+        flagged: a developer's local sqlite:///./picksportplus.db survives fine between
+        runs on the same machine."""
+        return is_ephemeral_sqlite_path(self.database_url)
 
     @property
     def support_email(self) -> str:
