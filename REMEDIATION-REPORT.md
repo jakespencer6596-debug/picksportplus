@@ -28,7 +28,7 @@ September 12, 2026.
 | 7 | Transactional email | Done | `c615887` |
 | 8 | First-run experience | Done | `cad907b` |
 | 9 | Verify prior fixes against live data | Done | `a8fe738` |
-| 10 | Full sweep | Done | pending |
+| 10 | Full sweep | Done | `1e35dc0` |
 | 11 | Documentation | Pending | |
 | 12 | Merge, push, deploy, verify | Pending | |
 
