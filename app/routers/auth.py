@@ -1,8 +1,11 @@
-"""Register, sign in, sign out, and joining a pool by code."""
+"""Register, sign in, sign out, joining a pool by code, and password reset."""
 
 from __future__ import annotations
 
+import datetime as dt
+import hashlib
 import re
+import secrets
 
 from fastapi import APIRouter, Depends, Form, Request
 from fastapi.responses import RedirectResponse
@@ -24,7 +27,8 @@ from app.auth import (
 )
 from app.config import settings
 from app.db import get_db
-from app.models import Pool, PoolMember, User
+from app.models import PasswordResetToken, Pool, PoolMember, User, utcnow
+from app.services import mail
 from app.templating import render
 
 router = APIRouter(tags=["auth"])
@@ -33,6 +37,52 @@ MIN_PASSWORD_LEN = 8
 # One character that is not a letter or digit. Permissive on purpose: any symbol counts,
 # there is no narrow allow list to accidentally reject a reasonable choice.
 _PASSWORD_SYMBOL_RE = re.compile(r"[^A-Za-z0-9]")
+
+# A password reset link is live for this long, from the moment it is emailed.
+RESET_TOKEN_LIFETIME = dt.timedelta(hours=1)
+
+
+def _password_errors(password: str) -> list[str]:
+    """Shared with register_submit's own inline checks below, kept here as a small helper
+    (Phase 7 remediation) so reset_password_submit enforces the exact same rule without
+    duplicating the two conditions by hand."""
+    errors: list[str] = []
+    if len(password) < MIN_PASSWORD_LEN or not _PASSWORD_SYMBOL_RE.search(password):
+        errors.append(
+            f"Use a password of at least {MIN_PASSWORD_LEN} characters, including one "
+            "symbol (anything that is not a letter or a number)."
+        )
+    elif len(password.encode("utf-8")) > 72:
+        errors.append("That password is too long. Keep it to 72 characters.")
+    return errors
+
+
+def _hash_token(raw_token: str) -> str:
+    """A fast, deterministic hash, deliberately not app.auth.hash_password's bcrypt: bcrypt's
+    slow, salted hash exists to resist offline brute forcing of a low entropy human-chosen
+    secret. A reset token is a 256 bit value from secrets.token_urlsafe(32), already far past
+    brute forceable, so a fast hash is used instead, which is what lets _find_reset_token look
+    a token up by an exact match rather than scanning and verifying every pending row by hand.
+    See PasswordResetToken's own docstring in app/models.py."""
+    return hashlib.sha256(raw_token.encode("utf-8")).hexdigest()
+
+
+def _find_reset_token(db: Session, raw_token: str) -> PasswordResetToken | None:
+    raw_token = (raw_token or "").strip()
+    if not raw_token:
+        return None
+    return db.scalar(
+        select(PasswordResetToken).where(PasswordResetToken.token_hash == _hash_token(raw_token))
+    )
+
+
+def _reset_token_is_live(token: PasswordResetToken) -> bool:
+    if token.used_at is not None:
+        return False
+    expires_at = token.expires_at
+    if expires_at.tzinfo is None:
+        expires_at = expires_at.replace(tzinfo=dt.UTC)
+    return expires_at >= utcnow()
 
 
 def _safe_next(raw: str | None) -> str:
@@ -179,13 +229,7 @@ def register_submit(
         errors.append("That display name is too long. Keep it under 80 characters.")
     if not is_valid_email_format(address):
         errors.append("Enter a valid email address.")
-    if len(password) < MIN_PASSWORD_LEN or not _PASSWORD_SYMBOL_RE.search(password):
-        errors.append(
-            f"Use a password of at least {MIN_PASSWORD_LEN} characters, including one "
-            "symbol (anything that is not a letter or a number)."
-        )
-    elif len(password.encode("utf-8")) > 72:
-        errors.append("That password is too long. Keep it to 72 characters.")
+    errors.extend(_password_errors(password))
 
     # A commissioner code and a plain join code are never both honored: exactly one of these
     # two ends up set. commissioner_code, once present at all, is authoritative and never
@@ -300,6 +344,138 @@ def join_submit(
         flash(request, f"You are already in {pool.name}.", "info")
     request.session["pid"] = pool.id
     return RedirectResponse("/picks", status_code=303)
+
+
+# Password reset -------------------------------------------------------------
+
+
+@router.get("/forgot-password")
+def forgot_password_form(request: Request, user: User | None = Depends(get_current_user)):
+    if user:
+        return RedirectResponse("/picks", status_code=303)
+    return render(request, "auth/forgot_password.html", {"email": ""})
+
+
+@router.post("/forgot-password")
+def forgot_password_submit(
+    request: Request,
+    email: str = Form(""),
+    db: Session = Depends(get_db),
+):
+    """Always the same message, whether or not the address matches an account, and whether or
+    not the email actually sent (mail turned off, misconfigured, or the provider call itself
+    failing all take the same silent-to-the-visitor path here), matching login_submit's own
+    "one message for both cases" convention so this form can never be used to enumerate
+    accounts. A real send failure is not lost, it is still written to MailLog by
+    app.services.mail.send and visible to the site admin at /site/mail; see DECISIONS.md,
+    Phase 7, for why this one call site deliberately does not surface the failure to the
+    caller the way every other mail call site in this app does."""
+    address = normalize_email(email)
+    generic_message = "If an account exists for that email, a reset link was sent."
+
+    target = None
+    if is_valid_email_format(address):
+        target = db.scalar(select(User).where(User.email == address, User.is_active.is_(True)))
+
+    if target is not None:
+        raw_token = secrets.token_urlsafe(32)
+        db.add(
+            PasswordResetToken(
+                user_id=target.id,
+                token_hash=_hash_token(raw_token),
+                expires_at=utcnow() + RESET_TOKEN_LIFETIME,
+            )
+        )
+        db.flush()
+        link = f"{settings.base_url}/reset-password?token={raw_token}"
+        subject = "Reset your PickSportPlus password"
+        body = (
+            "Hey,\n\n"
+            f"Someone (hopefully you) asked to reset the password for {target.email} on "
+            "PickSportPlus. This link works once, and only for the next hour:\n\n"
+            f"{link}\n\n"
+            "If this was not you, ignore this message. Your password stays the same."
+        )
+        try:
+            mail.send(
+                db,
+                to=target.email,
+                subject=subject,
+                html=mail.text_to_html(body),
+                text=body,
+                kind="password_reset",
+                actor_key=f"email:{target.email}",
+            )
+        except mail.MailError:
+            pass
+
+    db.commit()
+    flash(request, generic_message)
+    return RedirectResponse("/login", status_code=303)
+
+
+@router.get("/reset-password")
+def reset_password_form(
+    request: Request, token: str = "", user: User | None = Depends(get_current_user)
+):
+    if user:
+        return RedirectResponse("/picks", status_code=303)
+    return render(request, "auth/reset_password.html", {"token": token})
+
+
+@router.post("/reset-password")
+def reset_password_submit(
+    request: Request,
+    token: str = Form(""),
+    password: str = Form(""),
+    db: Session = Depends(get_db),
+):
+    row = _find_reset_token(db, token)
+    if row is None:
+        return render(
+            request,
+            "auth/reset_password.html",
+            {"token": token, "error": "That reset link is not valid. Request a new one."},
+            status_code=400,
+        )
+    if row.used_at is not None:
+        return render(
+            request,
+            "auth/reset_password.html",
+            {"token": token, "error": "That reset link has already been used. Request a new one."},
+            status_code=400,
+        )
+    if not _reset_token_is_live(row):
+        return render(
+            request,
+            "auth/reset_password.html",
+            {"token": token, "error": "That reset link has expired. Request a new one."},
+            status_code=400,
+        )
+
+    errors = _password_errors(password)
+    if errors:
+        return render(
+            request,
+            "auth/reset_password.html",
+            {"token": token, "error": errors[0]},
+            status_code=400,
+        )
+
+    target = db.get(User, row.user_id)
+    if target is None:
+        return render(
+            request,
+            "auth/reset_password.html",
+            {"token": token, "error": "That reset link is not valid. Request a new one."},
+            status_code=400,
+        )
+
+    target.password_hash = hash_password(password)
+    row.used_at = utcnow()
+    db.commit()
+    flash(request, "Password updated. Sign in with your new password.")
+    return RedirectResponse("/login", status_code=303)
 
 
 __all__ = ["router", "generate_join_code"]

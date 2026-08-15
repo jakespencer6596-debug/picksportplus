@@ -33,6 +33,7 @@ from app.auth import (
     SESSION_POOL_KEY,
     flash,
     generate_join_code,
+    is_valid_email_format,
     normalize_email,
     normalize_join_code,
     require_admin,
@@ -40,6 +41,7 @@ from app.auth import (
 from app.config import settings
 from app.db import get_db
 from app.models import Pool, PoolMember, User
+from app.services import mail
 from app.services.calendar import default_week1_anchor_date
 from app.templating import get_zone, render
 
@@ -324,6 +326,59 @@ def set_commissioner_invite_code(
     pool.commissioner_invite_code = code
     db.commit()
     flash(request, f"Commissioner invite code for {pool.name} set to {code}.")
+    return _redirect("/site/leagues")
+
+
+@router.post("/{pool_id}/commissioner-code/email")
+def email_commissioner_invite(
+    request: Request,
+    pool_id: int,
+    email: str = Form(...),
+    db: Session = Depends(get_db),
+    user: User = Depends(require_admin),
+):
+    """Site admin only (Phase 7 remediation, see DECISIONS.md), sends this one league's
+    commissioner invite link to one address. Sits next to the existing copy-link panel on
+    /site/leagues, never replaces it: on any failure (mail off, not configured, rate limited,
+    or the provider call itself failing) the flash below says so and the copy-link panel is
+    still right there on the same page, unchanged."""
+    pool = db.get(Pool, pool_id)
+    if pool is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "No such league.")
+    address = normalize_email(email)
+    if not is_valid_email_format(address):
+        flash(request, "Enter a valid email address.", "error")
+        return _redirect("/site/leagues")
+
+    if not pool.commissioner_invite_code:
+        pool.commissioner_invite_code = _fresh_commissioner_invite_code(db, exclude_pool_id=pool.id)
+        db.flush()
+
+    link = f"{settings.base_url}/register?commissioner_code={pool.commissioner_invite_code}"
+    subject = f"You're invited to commission {pool.name} on PickSportPlus"
+    body = (
+        "Hey,\n\n"
+        f"You have been invited to become the commissioner of {pool.name} on PickSportPlus. "
+        f"Create your commissioner account with this link:\n\n{link}\n\n"
+        "See you on the leaderboard."
+    )
+    try:
+        mail.send(
+            db,
+            to=address,
+            subject=subject,
+            html=mail.text_to_html(body),
+            text=body,
+            kind="commissioner_invite",
+            actor_key=f"user:{user.id}",
+        )
+    except mail.MailError as exc:
+        db.commit()
+        flash(request, str(exc), "error")
+        flash(request, "The invite link below still works. Copy it and send it yourself.", "info")
+    else:
+        db.commit()
+        flash(request, f"Commissioner invite emailed to {address}.")
     return _redirect("/site/leagues")
 
 

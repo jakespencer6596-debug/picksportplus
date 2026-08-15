@@ -28,12 +28,14 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.config import settings
-from app.models import Game, Pick, Pool, Week, utcnow
+from app.models import Game, Pick, Pool, PoolMember, User, Week, utcnow
 from app.providers import cfbd, espn, odds_api
 from app.providers.http import BudgetExceeded, ProviderError, get_platform_settings
 from app.providers.teams import match_by_teams_and_date
 from app.services import calendar as calendar_svc
+from app.services import mail
 from app.slate import Candidate, compute_lock_at, select_slate_by_targets
+from app.templating import fmt_kickoff_long
 
 log = logging.getLogger("picksportplus.ingest")
 
@@ -1200,7 +1202,7 @@ def _build_slate_impl(
     should_publish = pool.auto_publish if publish is None else publish
     if should_publish and report.selected > 0 and week.status == "draft":
         try:
-            publish_week(db, week)
+            report.warnings.extend(publish_week(db, week))
             report.published = True
         except SlateSpanTooWide as exc:
             # Auto publish declines rather than opens a slate that spans two calendar
@@ -1211,7 +1213,54 @@ def _build_slate_impl(
     return report
 
 
-def publish_week(db: Session, week: Week) -> None:
+def _notify_week_published(db: Session, week: Week) -> list[str]:
+    """Best-effort email to every real member once a week opens for picks (Phase 7
+    remediation, see DECISIONS.md), only when the pool has opted in
+    (Pool.notify_week_published, off by default). Never blocks or undoes the publish itself: a
+    mail failure for one member becomes one warning string here, collected the same way every
+    other IngestReport.warnings entry already is, not a raised exception that would leave
+    week.status flipped to "open" with no way to report what happened. actor_key is keyed by
+    the recipient, not the (nonexistent) human who triggered this, since this fan-out can run
+    from a live commissioner click or from the unattended sync_week cron path alike; capping
+    how many notification emails any one player can receive an hour is the meaningful limit
+    here, not "how many did the system send," which is not the kind of runaway abuse rate
+    limiting exists to catch."""
+    pool = week.pool
+    if not pool.notify_week_published:
+        return []
+    rows = db.execute(
+        select(PoolMember, User)
+        .join(User, User.id == PoolMember.user_id)
+        .where(PoolMember.pool_id == pool.id, User.is_active.is_(True))
+    ).all()
+    if not rows:
+        return []
+
+    lock_text = fmt_kickoff_long(week.lock_at, pool.timezone) if week.lock_at else "soon"
+    subject = f"Week {week.week_number} is open for picks, {pool.name}"
+    body = (
+        "Hey,\n\n"
+        f"Week {week.week_number} of {pool.name} is open for picks. Picks lock {lock_text}.\n\n"
+        f"{settings.base_url}/picks"
+    )
+    warnings: list[str] = []
+    for _member, player in rows:
+        try:
+            mail.send(
+                db,
+                to=player.email,
+                subject=subject,
+                html=mail.text_to_html(body),
+                text=body,
+                kind="week_published",
+                actor_key=f"user:{player.id}",
+            )
+        except mail.MailError as exc:
+            warnings.append(f"Could not email {player.email} about week {week.week_number}: {exc}")
+    return warnings
+
+
+def publish_week(db: Session, week: Week) -> list[str]:
     span = slate_span(db, week)
     if span is not None:
         span_days, earliest, latest = span
@@ -1220,6 +1269,7 @@ def publish_week(db: Session, week: Week) -> None:
     week.status = "open"
     week.published_at = utcnow()
     db.flush()
+    return _notify_week_published(db, week)
 
 
 # The set and forget entry point ---------------------------------------------

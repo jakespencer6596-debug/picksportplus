@@ -3315,3 +3315,100 @@ built), with a regression test (`test_seed_demo_pool_has_a_week1_anchor_date`,
 `tests/test_demo.py`) asserting it is set and falls on a Saturday. This fix is committed
 separately from Phase 6's own commit, since it is a Phase 2 gap surfaced while verifying
 Phase 6, not a Phase 6 defect.
+
+### Phase 7, transactional email
+
+The app could not send email at all: every invite was copy-and-paste-only, and there was no
+password reset. Note on process: the first attempt at this phase stalled for hours with zero
+file changes ever written and had to be killed by the orchestrating session; a second, fresh
+attempt made real, correct progress (the module design, the routes, the migration, the
+templates) but was itself killed mid-flight, before writing its own tests or this section,
+once it became clear the same stall pattern might be starting again. The orchestrating session
+verified the surviving code directly (read every new and changed file, ran the gate, ran a
+real upgrade/downgrade/upgrade migration cycle against a scratch database), found it correct
+and well designed, fixed the one real defect it found (see below), wrote the missing test
+coverage, and is writing this section. Everything described below reflects what is actually in
+the committed diff, not what was planned.
+
+**Provider: Resend, called directly over its REST API with `httpx`, no SDK added and no new
+dependency in `requirements.txt`.** Resend was chosen over SendGrid/Postmark/Mailgun for the
+free tier (3,000 emails a month, 100 a day, comfortably past anything a single pool ever
+needs) and a plain, small JSON API (one POST to `/emails`) that needs nothing beyond `httpx`,
+already a dependency. Raw SMTP was rejected outright: this codebase has no SMTP client
+anywhere, hand rolling one is real surface area (TLS, auth, MIME) an HTTP API entirely avoids,
+and every transactional provider's REST API is simpler to call, test, and reason about than
+SMTP from a server-rendered app that already uses `httpx` for three other integrations.
+
+**The failure contract is the actual point of this phase, not a side detail.**
+`app/services/mail.py`'s `send()` returns a `MailLog` row ONLY on a real, successful send.
+Every other outcome, mail turned off or not configured (`MailDisabled`), the sender over their
+hourly limit (`MailRateLimited`), or the provider call itself failing (`MailSendFailed`),
+raises instead of returning a status a caller could forget to check. There is no boolean
+return value to ignore: a caller either has a `MailLog` row in hand, or it is inside an
+`except mail.MailError` block. Every one of Phase 7's four call sites (`app/routers/leagues.py`
+commissioner invite, `app/routers/admin.py` player invite, `app/routers/auth.py` password
+reset, `app/services/ingest.py`'s week-published notification) follows this same shape: try
+the send, on `MailError` show the visitor or commissioner the real reason and point back at
+the copy-and-paste path that already existed, never silently swallow the failure.
+
+**One deliberate, documented exception to "always surface the failure":**
+`forgot_password_submit` (`app/routers/auth.py`) catches `mail.MailError` and shows the exact
+same generic "if an account exists, a reset link was sent" message whether the send succeeded,
+failed, or the address was not real at all. This is intentional, not a violation of the rule
+above: surfacing a real send failure here would let a visitor distinguish "your email exists
+but sending failed" from "no such account," which is exactly the account-enumeration hole
+`login_submit`'s own long-standing "one message for both cases" convention already guards
+against elsewhere in this file. The failure is never actually lost: `mail.send` still writes
+its `MailLog` row before raising, so the site admin can see it at `/site/mail` same as any
+other failure; only the anonymous visitor's response is deliberately uninformative.
+
+**Rate limiting is backed by `MailLog`, not an in-process counter.** Phase 1 already
+established that this app can restart at will (an in-memory structure would silently reset a
+sender's budget on every redeploy or sleep cycle); counting real `MailLog` rows with
+`result == "sent"` in the trailing hour, per `actor_key`, survives a restart the same way every
+other real state in this app already needs to. `actor_key` is `"user:{id}"` for a signed in
+sender (a site admin or commissioner) or `"email:{address}"` for the one anonymous case, a
+password reset request, so a burst of reset requests against one address cannot be inflated by
+switching accounts, and a busy commissioner's invite volume never throttles anyone else.
+
+**Two new tables, one new `Pool` column, one migration (`c2a91e6f7b3d`).**
+`PasswordResetToken` stores a SHA-256 hash of the raw token, not bcrypt: bcrypt's slow, salted
+hash exists to resist offline brute forcing of a low entropy, human-chosen secret, and a reset
+token is a 256 bit value from `secrets.token_urlsafe(32)`, already far past brute forceable, so
+a fast, deterministic hash is used instead, which is what lets the lookup be an exact index
+match rather than a full table scan verifying every pending row by hand. `used_at` (set once,
+never cleared) and `expires_at` (checked on every attempt regardless of `used_at`) are both
+independent gates, so neither an old unused token nor a spent one can be replayed.
+`Pool.notify_week_published` defaults to `False`; wired into `ingest.publish_week`, which now
+returns the list of any notification warnings (a signature change from Phase 2's version,
+which returned nothing) so its callers can flash them without a failed send ever blocking or
+undoing the publish itself. Verified upgrade, downgrade, upgrade clean on a scratch database.
+
+**A real, separate bug found and fixed while reviewing this phase's surviving work:**
+`app/templates/admin/settings.html`'s new week-published-notification help text originally
+read "...Only works when the site admin has email turned on; see /site/mail for that status,"
+which both names a page a commissioner cannot reach and violates Phase 4's rule that the word
+"admin" never reaches a commissioner's screen (caught immediately by
+`test_league_pages_never_render_the_word_admin_for_a_real_commissioner`, which the killed
+agent's own unfinished work had not yet run against). Reworded to "This only takes effect once
+email sending is turned on for the whole site," no page reference, no "admin."
+
+**Test coverage added directly by the orchestrating session** (the killed agent had written
+none): `tests/test_mail.py`, unit tests for `send()`'s full failure contract (success,
+disabled, unconfigured-but-enabled, provider failure, rate limiting including that it is
+scoped per actor and only counts real sends, never failed or disabled ones) and
+`text_to_html`'s escaping. `tests/test_app.py` gained integration coverage: a full password
+reset round trip (request, recover the link from the intercepted send, set a new password, log
+in with it), single-use and expiry enforcement, account-enumeration-proof messaging, both
+invite routes' permission gates and actual delivery (including multiple addresses for the
+player invite), a real send failure surfacing to the commissioner rather than a silent
+success, `/site/mail` being site admin only, and the week-published notification firing only
+when the pool has opted in. Test count after Phase 7: 1041 (+23 over Phase 6's 1018).
+
+**Deliberately left unbuilt:** no email digest or unsubscribe mechanism (not asked for; the
+one notification type is opt-in per pool, at the commissioner's own discretion, not per
+player); no retry/backoff on a failed send (a failed send is surfaced immediately to a human
+who can just try again, matching this phase's own "fail loudly" principle rather than adding a
+queue for a low volume feature); no HTML email template system beyond `mail.text_to_html`'s
+minimal escaped-paragraphs conversion (every email in this app is short and plain, matching
+the existing plainspoken voice, not a marketing-styled template).

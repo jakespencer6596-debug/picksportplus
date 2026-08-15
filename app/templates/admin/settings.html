@@ -290,6 +290,19 @@
           pool.
         </p>
       </div>
+
+      <div class="field">
+        <label class="checkbox" for="notify_week_published">
+          <input type="checkbox" id="notify_week_published" name="notify_week_published" value="1"
+                 {% if pool.notify_week_published %}checked{% endif %}>
+          <span>Email members when a week opens</span>
+        </label>
+        <p class="form-hint">
+          On sends every member with an account a short email the moment a week opens for
+          picks, naming when it locks. Off by default. This only takes effect once email
+          sending is turned on for the whole site.
+        </p>
+      </div>
     </div>
   </section>
 

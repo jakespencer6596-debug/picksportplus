@@ -618,10 +618,14 @@ a.visually-hidden:focus-visible {
   text-overflow: ellipsis;
 }
 
-/* A form that only exists to POST a single button, for example sign out. */
+/* A form that only exists to POST a single button, for example sign out. Also used, unchanged,
+   for a short one-field-plus-button form (Phase 7 remediation: email an invite link); the gap
+   only ever shows once a second child is present, so every existing single-button usage looks
+   exactly as it did before. */
 .inline-form {
   display: flex;
   align-items: center;
+  gap: var(--space-2);
   margin: 0;
 }
 

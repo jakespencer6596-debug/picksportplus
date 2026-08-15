@@ -19,15 +19,17 @@ Everything here sits behind require_admin, same as every other /site/... route.
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, Form, Request
 from fastapi.responses import RedirectResponse
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from app.auth import flash, require_admin
+from app.auth import flash, is_valid_email_format, normalize_email, require_admin
+from app.config import settings
 from app.db import get_db
-from app.models import ContactSubmission, Pool, PoolMember, User, Week
+from app.models import ContactSubmission, MailLog, Pool, PoolMember, User, Week
 from app.providers.http import get_platform_settings, provider_warnings, usage_report
+from app.services import mail
 from app.templating import render
 
 router = APIRouter(prefix="/site", tags=["site"])
@@ -143,6 +145,80 @@ def providers_espn_only_toggle(
     else:
         flash(request, "ESPN only is off. Slate builds use the full provider path again.")
     return RedirectResponse("/site/providers", status_code=303)
+
+
+# Mail panel -------------------------------------------------------------------
+
+MAIL_LOG_PAGE_SIZE = 50
+
+
+@router.get("/mail")
+def mail_page(
+    request: Request,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_admin),
+):
+    """Site admin only (Phase 7 remediation, see DECISIONS.md): configuration status (presence
+    only, never the key value, the same "set"/"NOT SET" style /site/providers already uses for
+    ESPN key presence), the most recent sends from MailLog so the site admin can prove whether
+    something actually went out, and a test-send form that exercises the exact same
+    mail.send() path every other feature uses, no special cased test-only send."""
+    recent = list(
+        db.scalars(select(MailLog).order_by(MailLog.created_at.desc()).limit(MAIL_LOG_PAGE_SIZE))
+    )
+    return render(
+        request,
+        "admin/site_mail.html",
+        {
+            "mail_enabled": settings.mail_enabled,
+            "key_configured": bool(settings.resend_api_key),
+            "from_configured": bool(settings.mail_from_address),
+            "rate_limit": settings.mail_rate_limit_per_hour,
+            "recent": recent,
+            "test_email_default": user.email,
+        },
+        current_user=user,
+        pool=None,
+        is_commissioner=True,
+        active_nav="site_mail",
+    )
+
+
+@router.post("/mail/test")
+def mail_test_send(
+    request: Request,
+    email: str = Form(""),
+    db: Session = Depends(get_db),
+    user: User = Depends(require_admin),
+):
+    address = normalize_email(email) or user.email
+    if not is_valid_email_format(address):
+        flash(request, "Enter a valid email address.", "error")
+        return RedirectResponse("/site/mail", status_code=303)
+
+    subject = "PickSportPlus test email"
+    body = (
+        "Hey,\n\n"
+        "This is a test email from PickSportPlus's site admin mail panel. If it reached you, "
+        "sending works."
+    )
+    try:
+        mail.send(
+            db,
+            to=address,
+            subject=subject,
+            html=mail.text_to_html(body),
+            text=body,
+            kind="test",
+            actor_key=f"user:{user.id}",
+        )
+    except mail.MailError as exc:
+        db.commit()
+        flash(request, str(exc), "error")
+    else:
+        db.commit()
+        flash(request, f"Test email sent to {address}.")
+    return RedirectResponse("/site/mail", status_code=303)
 
 
 __all__ = ["router"]

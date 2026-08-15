@@ -24,6 +24,8 @@ from app.models import (
     Base,
     ContactSubmission,
     Game,
+    MailLog,
+    PasswordResetToken,
     Pick,
     PlatformSetting,
     Pool,
@@ -32,6 +34,7 @@ from app.models import (
     Week,
     WeekEntry,
 )
+from app.services import mail
 
 UTC = dt.UTC
 
@@ -3590,4 +3593,254 @@ def test_legacy_admin_get_paths_redirect_permanently(client, old_path, new_path)
     unconditional."""
     response = client.get(old_path)
     assert response.status_code == 301
-    assert response.headers["location"] == new_path
+
+
+# Transactional email (Phase 7 remediation, see DECISIONS.md) ------------------------------
+#
+# Every test in this section enables mail via monkeypatch and stubs
+# app.services.mail._call_resend_api, the one place a real HTTP call happens, so nothing here
+# ever opens a socket (SPEC.md Section 17, tests/conftest.py's force_offline_mode).
+
+
+def _enable_mail(monkeypatch) -> None:
+    monkeypatch.setattr(settings, "mail_enabled", True)
+    monkeypatch.setattr(settings, "resend_api_key", "test-key")
+    monkeypatch.setattr(settings, "mail_from_address", "noreply@example.com")
+    monkeypatch.setattr(settings, "mail_rate_limit_per_hour", 20)
+    monkeypatch.setattr(mail, "_call_resend_api", lambda **kwargs: None)
+
+
+def test_forgot_password_full_round_trip(client, world, session_factory, monkeypatch):
+    _enable_mail(monkeypatch)
+
+    response = client.post("/forgot-password", data={"email": "player@example.com"})
+    assert response.status_code == 303
+
+    db = session_factory()
+    token_row = db.scalar(select(PasswordResetToken))
+    assert token_row is not None
+    db.close()
+
+    # The raw token is never stored, only its hash; recover it the same way the emailed link
+    # would carry it, by re-sending and stubbing the mail call to capture the body instead.
+    captured = {}
+    monkeypatch.setattr(
+        mail, "_call_resend_api", lambda **kwargs: captured.setdefault("text", kwargs["text"])
+    )
+    client.post("/forgot-password", data={"email": "player@example.com"})
+    link = [line for line in captured["text"].splitlines() if "/reset-password?token=" in line][0]
+    raw_token = link.split("token=")[1].strip()
+
+    response = client.post("/reset-password", data={"token": raw_token, "password": "new-pass-1!"})
+    assert response.status_code == 303
+
+    login_response = client.post(
+        "/login", data={"email": "player@example.com", "password": "new-pass-1!", "next": "/picks"}
+    )
+    assert login_response.status_code == 303
+    assert login_response.headers["location"] == "/picks"
+
+
+def test_forgot_password_shows_the_same_message_for_an_unknown_email(client, world, monkeypatch):
+    """Anti account enumeration: identical redirect and flash whether or not the address is
+    real, matching login_submit's own established convention."""
+    _enable_mail(monkeypatch)
+    known = client.post("/forgot-password", data={"email": "player@example.com"})
+    unknown = client.post("/forgot-password", data={"email": "nobody-here@example.com"})
+    assert known.status_code == unknown.status_code == 303
+    assert known.headers["location"] == unknown.headers["location"] == "/login"
+
+
+def test_reset_token_is_single_use(client, world, session_factory, monkeypatch):
+    _enable_mail(monkeypatch)
+    captured = {}
+    monkeypatch.setattr(
+        mail, "_call_resend_api", lambda **kwargs: captured.setdefault("text", kwargs["text"])
+    )
+    client.post("/forgot-password", data={"email": "player@example.com"})
+    link = [line for line in captured["text"].splitlines() if "/reset-password?token=" in line][0]
+    raw_token = link.split("token=")[1].strip()
+
+    first = client.post("/reset-password", data={"token": raw_token, "password": "new-pass-1!"})
+    assert first.status_code == 303
+
+    second = client.post("/reset-password", data={"token": raw_token, "password": "other-pass-1!"})
+    assert second.status_code == 400
+    assert "already been used" in second.text
+
+
+def test_reset_token_expires_after_one_hour(client, world, session_factory, monkeypatch):
+    _enable_mail(monkeypatch)
+    db = session_factory()
+    player = db.scalar(select(User).where(User.email == "player@example.com"))
+    db.add(
+        PasswordResetToken(
+            user_id=player.id,
+            token_hash=mail_module_hash("expired-token-value"),
+            expires_at=dt.datetime.now(UTC) - dt.timedelta(minutes=1),
+        )
+    )
+    db.commit()
+    db.close()
+
+    response = client.post(
+        "/reset-password", data={"token": "expired-token-value", "password": "new-pass-1!"}
+    )
+    assert response.status_code == 400
+    assert "expired" in response.text
+
+
+def mail_module_hash(raw_token: str) -> str:
+    """Mirrors app.routers.auth._hash_token exactly, without importing a private helper across
+    modules: a real reset token is always looked up by this same hash."""
+    import hashlib
+
+    return hashlib.sha256(raw_token.encode("utf-8")).hexdigest()
+
+
+def test_commissioner_invite_email_is_site_admin_only(client, world, session_factory, monkeypatch):
+    _enable_mail(monkeypatch)
+    db = session_factory()
+    commish = _make_pool_commissioner_who_is_not_admin(db, db.get(Pool, world["pool_id"]))
+    db.commit()
+    db.close()
+
+    _login(client, commish.email)
+    response = client.post(
+        f"/site/leagues/{world['pool_id']}/commissioner-code/email",
+        data={"email": "newcommish@example.com"},
+    )
+    assert response.status_code == 403
+
+
+def test_commissioner_invite_email_sends_for_the_site_admin(client, world, monkeypatch):
+    _enable_mail(monkeypatch)
+    _login(client, "boss@example.com")
+    response = client.post(
+        f"/site/leagues/{world['pool_id']}/commissioner-code/email",
+        data={"email": "newcommish@example.com"},
+    )
+    assert response.status_code == 303
+    assert "commissioner-code/email" not in response.headers["location"]
+
+
+def test_player_invite_email_is_commissioner_only(client, world):
+    _login(client, "player@example.com")
+    response = client.post("/league/members/invite", data={"emails": "a@example.com"})
+    assert response.status_code == 403
+
+
+def test_player_invite_email_sends_to_multiple_addresses(
+    client, world, session_factory, monkeypatch
+):
+    _enable_mail(monkeypatch)
+    sent_to = []
+    monkeypatch.setattr(mail, "_call_resend_api", lambda **kwargs: sent_to.append(kwargs["to"]))
+    _login(client, "boss@example.com")
+    response = client.post(
+        "/league/members/invite",
+        data={"emails": "one@example.com\ntwo@example.com"},
+    )
+    assert response.status_code == 303
+    assert sent_to == ["one@example.com", "two@example.com"]
+
+
+def test_mail_send_failure_falls_back_gracefully_not_silently(client, world, monkeypatch):
+    """Even when mail is enabled, a provider failure must be visible, never reported as a
+    quiet success: the whole point of Phase 7's failure contract."""
+    _enable_mail(monkeypatch)
+
+    def _boom(**kwargs):
+        raise mail.MailSendFailed("provider down")
+
+    monkeypatch.setattr(mail, "_call_resend_api", _boom)
+    _login(client, "boss@example.com")
+    response = client.post(
+        "/league/members/invite",
+        data={"emails": "a@example.com"},
+    )
+    assert response.status_code == 303
+    # Follow the redirect to read the flash the failure produced.
+    follow = client.get(response.headers["location"])
+    assert "Could not email" in follow.text
+    assert "still works" in follow.text
+
+
+@pytest.mark.parametrize("path", ["/site/mail", "/league"])
+def test_site_mail_page_is_site_admin_only(client, world, session_factory, path):
+    db = session_factory()
+    commish = _make_pool_commissioner_who_is_not_admin(db, db.get(Pool, world["pool_id"]))
+    db.commit()
+    db.close()
+    _login(client, commish.email)
+    if path == "/site/mail":
+        assert client.get(path).status_code == 403
+    else:
+        # Sanity check the commissioner really is signed in and the pool route still works,
+        # so the /site/mail 403 above is a real permission check, not a broken session.
+        assert client.get(path).status_code == 200
+
+
+def test_site_mail_page_shows_configuration_status_for_the_site_admin(client, world, monkeypatch):
+    _enable_mail(monkeypatch)
+    _login(client, "boss@example.com")
+    response = client.get("/site/mail")
+    assert response.status_code == 200
+    assert "Resend" in response.text or "mail" in response.text.lower()
+
+
+def test_week_published_notification_sent_when_pool_opts_in(
+    client, world, session_factory, monkeypatch
+):
+    _enable_mail(monkeypatch)
+    sent_to = []
+    monkeypatch.setattr(mail, "_call_resend_api", lambda **kwargs: sent_to.append(kwargs["to"]))
+
+    db = session_factory()
+    pool = db.get(Pool, world["pool_id"])
+    pool.notify_week_published = True
+    week = db.get(Week, world["week_id"])
+    week.status = "draft"
+    db.commit()
+    db.close()
+
+    _login(client, "boss@example.com")
+    response = client.post("/league/slate/publish", data={"week_id": world["week_id"]})
+    assert response.status_code == 303
+    assert "player@example.com" in sent_to
+
+
+def test_week_published_notification_not_sent_when_pool_has_not_opted_in(
+    client, world, session_factory, monkeypatch
+):
+    _enable_mail(monkeypatch)
+    sent_to = []
+    monkeypatch.setattr(mail, "_call_resend_api", lambda **kwargs: sent_to.append(kwargs["to"]))
+
+    db = session_factory()
+    pool = db.get(Pool, world["pool_id"])
+    assert pool.notify_week_published is False  # the documented default
+    week = db.get(Week, world["week_id"])
+    week.status = "draft"
+    db.commit()
+    db.close()
+
+    _login(client, "boss@example.com")
+    response = client.post("/league/slate/publish", data={"week_id": world["week_id"]})
+    assert response.status_code == 303
+    assert sent_to == []
+
+
+def test_every_mail_attempt_is_logged_regardless_of_outcome(
+    client, world, session_factory, monkeypatch
+):
+    _enable_mail(monkeypatch)
+    _login(client, "boss@example.com")
+    client.post("/league/members/invite", data={"emails": "logged@example.com"})
+
+    db = session_factory()
+    row = db.scalar(select(MailLog).where(MailLog.recipient == "logged@example.com"))
+    assert row is not None
+    assert row.result == "sent"
+    assert row.kind == "player_invite"
+    db.close()

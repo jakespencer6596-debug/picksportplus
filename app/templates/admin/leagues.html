@@ -77,6 +77,15 @@
                         you generate a new one, which retires this link straight away. Separate
                         from the join code above, that one only ever adds a regular player.
                       </p>
+                      <form method="post" action="/site/leagues/{{ pool.id }}/commissioner-code/email"
+                            class="inline-form">
+                        <label class="field-label visually-hidden" for="commish-email-{{ pool.id }}">
+                          Email this link to<span class="visually-hidden">, {{ pool.name }}</span>
+                        </label>
+                        <input class="input" type="email" id="commish-email-{{ pool.id }}" name="email"
+                               placeholder="name@example.com" required>
+                        <button class="btn btn-gold btn-sm" type="submit">Email this link</button>
+                      </form>
                     {% else %}
                       <form method="post" action="/site/leagues/{{ pool.id }}/commissioner-code" class="inline-form">
                         <button class="btn btn-secondary btn-sm" type="submit">

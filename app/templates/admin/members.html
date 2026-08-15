@@ -96,6 +96,18 @@ See you on the leaderboard.
           {{ ic.icon("mail", 18) }}<span class="btn-label">Email it</span>
         </a>
       </div>
+
+      <p class="form-hint">
+        Or have PickSportPlus send it for you, one address per line.
+      </p>
+      <form method="post" action="/league/members/invite" class="stack">
+        <div class="field">
+          <label class="field-label" for="invite-emails">Player emails</label>
+          <textarea class="input" id="invite-emails" name="emails" rows="4"
+                    placeholder="player1@example.com&#10;player2@example.com"></textarea>
+        </div>
+        <button class="btn btn-primary" type="submit">Email the invite</button>
+      </form>
     </div>
   </div>
 </section>

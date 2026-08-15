@@ -232,6 +232,14 @@ class Pool(Base):
     scenarios_min_final_games: Mapped[int] = mapped_column(Integer, default=5, nullable=False)
     scenarios_min_remaining_games: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
 
+    # Opt in, off by default (Phase 7 remediation, see DECISIONS.md): when True, every pool
+    # member with a real account gets a short email the moment a week opens for picks (wired
+    # into app/services/ingest.py's publish_week, both the commissioner's manual "Publish this
+    # week" and build_slate's own auto_publish path). Off by default so a pool that never
+    # configures mail, or a commissioner who does not want the noise, sees no change in
+    # behavior. Exposed on /league/settings.
+    notify_week_published: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+
     created_at: Mapped[dt.datetime] = mapped_column(
         DateTime(timezone=True), default=utcnow, server_default=func.now(), nullable=False
     )
@@ -731,3 +739,66 @@ class PlatformSetting(Base):
     # in process memory, so a toggle from POST /site/providers/espn-only takes effect on the
     # very next build with no redeploy and no restart.
     espn_only: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+
+
+class PasswordResetToken(Base):
+    """A single use, one hour password reset token (Phase 7 remediation, see DECISIONS.md).
+
+    token_hash is a SHA-256 hex digest of the raw token mailed to the user, never the raw
+    token itself, deliberately NOT run through app.auth.hash_password's bcrypt (bcrypt's slow,
+    salted hash exists to resist offline brute forcing of a low entropy human-chosen secret;
+    this token is a 256 bit value from secrets.token_urlsafe(32), already far past brute
+    forceable, so a fast, deterministic hash is used instead so GET/POST /reset-password can
+    look the row up by an exact match rather than a full table scan verifying every pending
+    token by hand). See app/routers/auth.py's _hash_token.
+
+    used_at enforces single use: set the moment the token is spent, checked by every reset
+    attempt, never cleared. expires_at is created_at + one hour, checked on every attempt
+    regardless of used_at, so an old, unused token cannot be spent late either.
+    """
+
+    __tablename__ = "password_reset_tokens"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), index=True, nullable=False
+    )
+    token_hash: Mapped[str] = mapped_column(String(64), index=True, nullable=False)
+    created_at: Mapped[dt.datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, server_default=func.now(), nullable=False
+    )
+    expires_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    used_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    user: Mapped[User] = relationship()
+
+
+class MailLog(Base):
+    """One row per attempted send, successful or not (Phase 7 remediation, see DECISIONS.md).
+
+    This is the site admin's only way to prove whether an email actually went out
+    (/site/mail): app.services.mail.send writes exactly one row here for every call, before
+    returning on success or raising on failure, so there is no code path that sends (or tries
+    to send) without a matching row here. actor_key is the rate limiting bucket
+    app.services.mail._rate_limited counts against, "user:{id}" for a signed in sender
+    (a site admin or commissioner) or "email:{address}" for the one anonymous sender, a
+    password reset request.
+    """
+
+    __tablename__ = "mail_log"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    recipient: Mapped[str] = mapped_column(String(255), nullable=False)
+    kind: Mapped[str] = mapped_column(String(32), nullable=False)
+    result: Mapped[str] = mapped_column(
+        String(16), nullable=False
+    )  # sent, disabled, failed, rate_limited
+    detail: Mapped[str | None] = mapped_column(Text, nullable=True)
+    actor_key: Mapped[str] = mapped_column(String(120), index=True, nullable=False)
+    created_at: Mapped[dt.datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=utcnow,
+        server_default=func.now(),
+        index=True,
+        nullable=False,
+    )

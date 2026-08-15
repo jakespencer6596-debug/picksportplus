@@ -95,6 +95,22 @@ class Settings(BaseSettings):
 
     offline_mode: bool = False
 
+    # Transactional email (Phase 7 remediation, see DECISIONS.md). Off by default so a fresh
+    # deploy or a local dev environment never accidentally tries to send: every call site
+    # (invites, password reset, week-published notification) must keep working through its
+    # existing copy-and-paste fallback when this is False. Blank api key/from address is a
+    # valid answer too, matching ODDS_API_KEY/CFBD_API_KEY's own "optional, blank is fine"
+    # convention; app.services.mail.send treats "disabled" and "not configured" as the same
+    # loud failure rather than two different silent no-ops.
+    mail_enabled: bool = False
+    resend_api_key: str = ""
+    mail_from_address: str = ""
+    mail_from_name: str = "PickSportPlus"
+    # Simple per-actor cap, counted from real MailLog rows rather than an in-process counter
+    # (see app/services/mail.py), since this app can restart at will (Phase 1 remediation) and
+    # an in-process counter would silently reset on every sleep or redeploy.
+    mail_rate_limit_per_hour: int = 20
+
     # Network behaviour for the three feeds. Kept here so tests can tighten them.
     http_timeout_seconds: float = 15.0
     http_retries: int = 2

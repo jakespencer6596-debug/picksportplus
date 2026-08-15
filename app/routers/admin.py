@@ -57,8 +57,8 @@ from app.models import (
 )
 from app.providers.http import get_platform_settings, provider_warnings
 from app.providers.teams import canonical_key, display_name
-from app.routers.leagues import _fresh_commissioner_invite_code
-from app.services import ingest
+from app.routers.leagues import _fresh_commissioner_invite_code, _parse_commissioner_emails
+from app.services import ingest, mail
 from app.templating import get_zone, render
 
 router = APIRouter(prefix="/league", tags=["admin"])
@@ -310,6 +310,7 @@ def settings_save(
     scenarios_min_remaining_games: int = Form(...),
     auto_publish: str = Form(""),
     open_registration: str = Form(""),
+    notify_week_published: str = Form(""),
     sports_nfl: str = Form(""),
     sports_ncaaf: str = Form(""),
     week1_anchor_date: str = Form(""),
@@ -397,6 +398,7 @@ def settings_save(
     pool.sports = sports
     pool.auto_publish = bool(auto_publish)
     pool.open_registration = bool(open_registration)
+    pool.notify_week_published = bool(notify_week_published)
     pool.week1_anchor_date = anchor_date
     pool.rivalries = _parse_rivalries(rivalries)
     pool.entry_fee = fee_value
@@ -509,6 +511,63 @@ def members_page(
         },
         **_base(db, user, pool),
     )
+
+
+@router.post("/members/invite")
+def members_invite_email(
+    request: Request,
+    emails: str = Form(""),
+    db: Session = Depends(get_db),
+    user: User = Depends(require_user),
+    pool: Pool = Depends(require_commissioner),
+):
+    """Commissioner only (Phase 7 remediation, see DECISIONS.md), sends the join link and code
+    to one or more addresses, one per line, reusing
+    app.routers.leagues._parse_commissioner_emails verbatim rather than a second textarea
+    parser. Sits next to the existing "Invite players" copy-and-paste panel on this same page,
+    never replaces it: whatever addresses fail (mail off, not configured, rate limited, or the
+    provider call itself failing) are named in a flash, and the message above still works to
+    copy and send by hand."""
+    addresses = _parse_commissioner_emails(emails)
+    if not addresses:
+        flash(request, "Enter at least one email address, one per line.", "error")
+        return _redirect("/league/members")
+
+    link = f"{settings.base_url}/register?code={pool.join_code}"
+    subject = f"Join {pool.name} on PickSportPlus"
+    body = (
+        "Hey,\n\n"
+        f"You are invited to join {pool.name} on PickSportPlus, a confidence pick'em pool. "
+        f"Join with this link:\n\n{link}\n\n"
+        f"Or use join code {pool.join_code} on the register page.\n\n"
+        "See you on the leaderboard."
+    )
+    sent: list[str] = []
+    failed: list[str] = []
+    for address in addresses:
+        try:
+            mail.send(
+                db,
+                to=address,
+                subject=subject,
+                html=mail.text_to_html(body),
+                text=body,
+                kind="player_invite",
+                actor_key=f"user:{user.id}",
+            )
+        except mail.MailError as exc:
+            failed.append(f"{address} ({exc})")
+        else:
+            sent.append(address)
+    db.commit()
+
+    if sent:
+        noun = "address" if len(sent) == 1 else "addresses"
+        flash(request, f"Invite emailed to {len(sent)} {noun}.")
+    if failed:
+        flash(request, "Could not email: " + "; ".join(failed), "error")
+        flash(request, "The message above still works. Copy it and send it yourself.", "info")
+    return _redirect("/league/members")
 
 
 @router.post("/members/{member_id}/paid")
@@ -924,13 +983,15 @@ def slate_publish(
         flash(request, f"Week {row.week_number} is already {row.status}.", "info")
     else:
         try:
-            ingest.publish_week(db, row)
+            notify_warnings = ingest.publish_week(db, row)
         except ingest.SlateSpanTooWide as exc:
             db.rollback()
             flash(request, str(exc), "error")
         else:
             db.commit()
             flash(request, f"Week {row.week_number} is open for picks.")
+            for warning in notify_warnings:
+                flash(request, warning, "error")
     return _redirect(f"/league/slate?week={row.week_number}")
 
 
