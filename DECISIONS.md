@@ -3412,3 +3412,129 @@ who can just try again, matching this phase's own "fail loudly" principle rather
 queue for a low volume feature); no HTML email template system beyond `mail.text_to_html`'s
 minimal escaped-paragraphs conversion (every email in this app is short and plain, matching
 the existing plainspoken voice, not a marketing-styled template).
+
+### Phase 8, first-run experience
+
+The original bug report: a brand new account landed on "This week's preview is not ready yet.
+Check back soon." with no next step, and `/leagues`/`/leagues/new` 404ed a signed out visitor
+instead of redirecting to sign in. Five things were checked or fixed.
+
+**1. Router audit: every authenticated route already redirects, none 404s.** The literal
+`/leagues` and `/leagues/new` paths from the bug report no longer exist anywhere in this
+codebase; Phase 4's `/admin` -> `/league` + `/site` split removed them outright and nothing
+reintroduced them since. The real, current-day question was audited directly: every route in
+every file under `app/routers/` (`admin.py`, `admin_contacts.py`, `auth.py`, `leaderboard.py`,
+`leagues.py`, `legacy_redirects.py`, `legal.py`, `payouts.py`, `picks.py`, `public.py`,
+`results.py`, `site.py`) was read in full and its dependency chain traced by hand. Every route
+is either deliberately public (`get_current_user`, which never raises: login, register,
+forgot/reset password, the legal pages, the public marketing pages, and the GET-only legacy
+301 redirects) or resolves through `require_user` directly or transitively (`require_admin`,
+`require_commissioner`, `require_full_commissioner`, and `get_active_pool` all wrap
+`require_user`, `app/auth.py`), which raises a 303 to `/login` rather than ever letting a 404
+happen. `app/main.py`'s `http_exception_handler` already appends `?next=<path>` to that
+redirect for any 303 outside `/` and `/login`. No route was found where an ID lookup or other
+dependency ran before the auth check: every `db.get(Pool, pool_id)`-style lookup by path
+parameter (`app/routers/leagues.py`'s `{pool_id}` routes, `app/routers/admin.py`'s
+`{member_id}`/`{week_id}` routes, `app/routers/payouts.py`'s `{rule_id}`/`{user_id}`/
+`{award_id}` routes) happens inside the route body, which FastAPI never runs until every
+`Depends` on the signature, auth included, has already resolved. This phase found no route to
+actually fix here, only a genuine, real audit result: it was already correct. Added
+`tests/test_app.py::test_every_authenticated_route_redirects_a_signed_out_visitor_to_login`
+(a representative GET from every router file that has an authenticated route: `/picks`,
+`/standings`, `/results`, `/join`, `/league`, `/league/settings`, `/league/members`,
+`/league/slate`, `/league/payouts`, `/league/payouts/summary`, `/site`, `/site/providers`,
+`/site/mail`, `/site/contacts`, `/site/leagues`, `/site/leagues/new`) asserting a 303 to
+exactly `/login?next=<path>`, plus
+`test_a_genuinely_nonexistent_route_404s_honestly_rather_than_faking_a_redirect` against the
+two literal old bug report paths as a negative control, proving a route that really does not
+exist still gets an honest 404, not a redirect that would wrongly imply it exists.
+
+**2. The poolless empty state was already built, and holds up under direct verification.**
+`GET /picks` (`app/routers/picks.py`) catches `get_active_pool`'s 403 for a poolless user and
+renders `_preview_page` instead (Post-launch fixes, predating this remediation). Read
+`picks.html`'s state 0 directly: the "This is a preview" panel, with its "Enter a join code"
+(`/join`) and "Start your own league" (`/pricing`) buttons, renders unconditionally at the top
+of that state, before the `{% if week and games %}` check that decides whether the slate
+itself or the honest "not ready yet, check back soon" message renders underneath it. The
+"check back soon" wording only ever replaces the slate, never the actionable panel above it,
+so a poolless visitor can never actually reach a bare dead end, in either case: a real preview
+pool with no week built yet, or no preview pool seeded in the database at all. This was true
+before this phase and needed no fix, only a test locking it down, since none previously
+asserted the buttons stayed present in the no-slate-built case specifically. Strengthened
+`test_poolless_user_with_no_preview_slate_built_sees_an_honest_empty_state` to assert both the
+"not ready yet" copy and the two buttons appear together, and added
+`test_poolless_user_with_no_preview_pool_seeded_at_all_still_sees_actionable_options` for the
+stronger case (no `is_preview` row in the database whatsoever, a totally fresh deployment).
+
+**3. The public preview can now go stale, and `run-cron`/`doctor` fix that.** The preview
+pool's slate used to be refreshed only by the explicit, human-triggered `seed-preview` command,
+deliberately excluded from `run-cron`'s pool loop so an anonymous visitor's page view could
+never itself trigger a metered provider call (Post-launch fixes; read that reasoning and
+`app/services/preview.py`'s own docstring before changing anything here). That reasoning is
+about what a request handler may trigger, not about what an operator-scheduled cron tick may
+touch, and a scheduled `run-cron` tick is exactly as controlled and human-owned as the "real
+pools already get refreshed by it" precedent it was being compared against. `app/cli.py`'s
+`run_cron` was refactored: the per-pool sync/fetch/score block became a small `_cron_pass(db,
+pool)` helper, called once per real pool exactly as before, and then, only when `--pool` did
+not restrict this run to a specific other pool, once more against
+`app/services/preview.get_preview_pool(db)`'s result if one exists. This goes through the
+exact same `sync_week` (and therefore the exact same `allow_metered` / site admin "ESPN only"
+switch / per-week refresh cap) every real pool's cron refresh already goes through, no separate
+or looser path. `run-cron` still never calls `ensure_preview_pool`: a deployment that has never
+run `seed-preview` once by hand still never gets a preview pool conjured into existence by an
+unattended cron tick, only a truly existing preview pool gets kept fresh going forward.
+`app/services/preview.py`'s docstring was updated to record this reconciled reasoning rather
+than silently contradicting itself. `doctor` gained a "Public preview" section
+(`_report_preview_health`, `app/cli.py`), run unconditionally (it needs no `--probe` network
+call: `detect_week` resolves from the pool's own `week1_anchor_date` by pure date arithmetic
+whenever one is configured, which `ensure_preview_pool` always sets from `settings`).
+Reports MISSING when no preview pool has been seeded yet, or one exists with no `Week` row;
+STALE when the most recent week was built more than `PREVIEW_STALE_AFTER_DAYS` (3, chosen
+because a quiet bye week can legitimately go a few days between real rebuilds per `sync_week`'s
+own docstring, while 3 days is comfortably past that and still catches "cron actually stopped
+running") days ago, or when it was built for a different week number than `detect_week` now
+resolves to; otherwise healthy. New tests in `tests/test_cli.py`:
+`test_run_cron_refreshes_the_preview_pool_when_it_exists` (monkeypatches
+`app.services.ingest.sync_week` to record which pool ids it was called with, proving both the
+real pool and the preview pool get a pass) and
+`test_run_cron_never_creates_the_preview_pool` (no preview pool before, none after), plus five
+`doctor` tests covering missing-pool, missing-week, healthy, stale-by-age and
+stale-by-wrong-week.
+
+**4. `normalize_join_code` now strips hyphens too.** `app/auth.py`: was
+`.strip().upper().replace(" ", "")`, now also `.replace("-", "")`, so a code remembered or
+copied with a dash for readability (`"AB3D-EFGH"`) still matches the stored, dash-free value.
+Every real entry point already called this one function (registration's `join_code` and
+`commissioner_code`, `/join`, the commissioner join-code-by-hand route in `app/routers/
+admin.py`, league creation and the commissioner-invite-code routes in
+`app/routers/leagues.py`), so fixing the function once fixes every call site. New unit tests
+(`tests/test_app.py`, no `tests/test_auth.py` existed yet to add to, so these sit alongside the
+router tests that already exercise the same function end to end) cover lowercase, spaced,
+hyphenated and blank input all normalizing consistently, plus
+`test_register_with_a_hyphenated_or_spaced_join_code_still_joins_the_pool` (parametrized over
+`"test-code"`, `"TEST CODE"`, `"te-st co-de"`) and `test_join_route_accepts_a_hyphenated_join_code`
+proving the fix end to end through both real routes, not just the unit function.
+
+**5. Pricing arithmetic fixed by correcting the copy, not the price.** `app/templates/public/
+pricing.html` showed "was 398, now 349" with "Save 50 dollars", but 398 minus 349 is 49. The
+398 anchor is not an arbitrary round number: it equals exactly 2 x 199, the real one-league
+price shown in the card right next to it ("versus two one league plans"), so changing 398 would
+break that comparison, and 349 reads as a deliberately chosen price point ending in 9, not a
+number to adjust to make different arithmetic round. Fixed the copy instead: "Save 50 dollars"
+-> "Save 49 dollars". The pre-existing `test_pricing_page_renders_signed_out` assertion of
+`"50" in response.text` still passes unchanged, since the unrelated "Refer a friend, earn 50
+dollars" copy elsewhere on the same page still contains "50"; no test needed updating for this
+fix.
+
+**Verification.** `ruff check .`, `black .`, and `pytest -q` all clean, 1073 passed, 0 failed
+(1041 at the Phase 7 baseline, 32 net new tests, all in `tests/test_app.py` and
+`tests/test_cli.py`). `grep -rn "—"` across `app/`, `tests/`, `SPEC.md` and `README.md` finds
+only the pre-existing `tests/test_app.py` assertion of its own absence. No emoji anywhere
+touched. No new dependency, no schema change, no CSS framework or bundler, no SPA; the only
+template change was the one-word pricing copy fix above.
+
+**Deliberately left unbuilt:** no change to `PREVIEW_STALE_AFTER_DAYS`'s value beyond the
+reasoning above; no attempt to make `doctor`'s preview check exit non-zero or fail a build,
+since every other `doctor` check is informational only and this phase kept that same contract;
+no UI-facing "preview is stale" banner anywhere a visitor could see, since staleness is an
+operator concern surfaced by `doctor`, not something to expose to an anonymous visitor.

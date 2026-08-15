@@ -308,6 +308,59 @@ def test_protected_page_redirects_signed_out_user(client):
     assert response.headers["location"].startswith("/login")
 
 
+# Router audit (Phase 8 remediation, see DECISIONS.md): the original bug report was
+# /leagues and /leagues/new 404ing a signed out visitor instead of redirecting to sign in.
+# Those exact routes no longer exist anywhere in this codebase (Phase 4 renamed everything
+# under /admin to /league, commissioner scoped, and /site, site admin scoped), so the real
+# question this phase actually audited is the general one: does every authenticated route,
+# across every router file, redirect rather than 404 a signed out visitor? Every route was
+# read directly (app/routers/*.py) and every single one already resolves through
+# require_user, require_commissioner, require_full_commissioner, require_admin or
+# get_active_pool (all of which wrap require_user, see app/auth.py), so this phase found no
+# route to actually fix, only this regression suite to pin the audited result down: a
+# representative GET from every router file that has any authenticated route, plus the two
+# literal old bug report paths as a negative control proving a genuinely nonexistent route
+# still 404s honestly rather than faking a redirect.
+@pytest.mark.parametrize(
+    "path",
+    [
+        "/picks",  # app/routers/picks.py
+        "/standings",  # app/routers/leaderboard.py
+        "/results",  # app/routers/results.py
+        "/join",  # app/routers/auth.py
+        "/league",  # app/routers/admin.py, require_commissioner
+        "/league/settings",  # app/routers/admin.py
+        "/league/members",  # app/routers/admin.py
+        "/league/slate",  # app/routers/admin.py
+        "/league/payouts",  # app/routers/payouts.py, require_commissioner
+        "/league/payouts/summary",  # app/routers/payouts.py
+        "/site",  # app/routers/site.py, require_admin
+        "/site/providers",  # app/routers/site.py
+        "/site/mail",  # app/routers/site.py
+        "/site/contacts",  # app/routers/admin_contacts.py, require_admin
+        "/site/leagues",  # app/routers/leagues.py, require_admin
+        "/site/leagues/new",  # app/routers/leagues.py
+    ],
+)
+def test_every_authenticated_route_redirects_a_signed_out_visitor_to_login(client, path):
+    response = client.get(path)
+    assert response.status_code == 303, f"{path} did not redirect, got {response.status_code}"
+    assert response.headers["location"] == f"/login?next={path}"
+
+
+@pytest.mark.parametrize("path", ["/leagues", "/leagues/new"])
+def test_a_genuinely_nonexistent_route_404s_honestly_rather_than_faking_a_redirect(client, path):
+    """Negative control: these are the exact paths named in the original bug report. They
+    were removed outright by Phase 4's /admin -> /league + /site split and were never
+    reintroduced, so a signed out (or signed in) visitor hitting either one must see a real,
+    honest 404, not a redirect to /login (which would wrongly imply the route exists and is
+    merely gated) and not a 500."""
+    response = client.get(path)
+    assert response.status_code == 404
+    assert "location" not in response.headers
+    assert "That page is not on the schedule" in response.text
+
+
 # Auth -----------------------------------------------------------------------
 
 
@@ -362,6 +415,78 @@ def test_register_with_the_right_code_joins_the_pool(client, world, session_fact
     member = db.scalar(select(PoolMember).where(PoolMember.user_id == user.id))
     assert member is not None and member.role_in_pool == "member"
     db.close()
+
+
+@pytest.mark.parametrize("typed_code", ["test-code", "TEST CODE", "te-st co-de"])
+def test_register_with_a_hyphenated_or_spaced_join_code_still_joins_the_pool(
+    client, world, session_factory, typed_code
+):
+    """Phase 8 remediation (see DECISIONS.md): normalize_join_code (app/auth.py) now strips
+    hyphens as well as spaces, so a code typed with a dash for readability, or copied with a
+    stray space, still matches the stored, dash-free "TESTCODE"."""
+    response = client.post(
+        "/register",
+        data={
+            "display_name": "New Person",
+            "email": "hyphenated@example.com",
+            "password": "hunter2hunter2!",
+            "join_code": typed_code,
+        },
+    )
+    assert response.status_code == 303, response.text
+    db = session_factory()
+    user = db.scalar(select(User).where(User.email == "hyphenated@example.com"))
+    assert user is not None
+    member = db.scalar(select(PoolMember).where(PoolMember.user_id == user.id))
+    assert member is not None and member.role_in_pool == "member"
+    db.close()
+
+
+def test_join_route_accepts_a_hyphenated_join_code(client, session_factory):
+    """The same normalization end to end through POST /join, the second real entry point a
+    join code passes through (Phase 8 remediation, see DECISIONS.md)."""
+    db = session_factory()
+    pool = _make_pool(db)
+    _make_user(db, "lone@example.com", "Lone Player")
+    db.commit()
+    db.close()
+
+    _login(client, "lone@example.com")
+    response = client.post("/join", data={"join_code": "test-code"})
+    assert response.status_code == 303, response.text
+    assert response.headers["location"] == "/picks"
+
+    db = session_factory()
+    user = db.scalar(select(User).where(User.email == "lone@example.com"))
+    member = db.scalar(
+        select(PoolMember).where(PoolMember.pool_id == pool.id, PoolMember.user_id == user.id)
+    )
+    assert member is not None
+    db.close()
+
+
+# app.auth.normalize_join_code (no dedicated tests/test_auth.py exists yet, so this lives
+# alongside the router tests that already exercise the same function end to end above) -------
+
+
+def test_normalize_join_code_strips_hyphens_spaces_and_uppercases_consistently():
+    from app.auth import normalize_join_code
+
+    expected = "AB3DEFGH"
+    assert normalize_join_code("ab-3d efgh") == expected
+    assert normalize_join_code("AB3DEFGH") == expected
+    assert normalize_join_code("ab3defgh") == expected
+    assert normalize_join_code("  ab3defgh  ") == expected
+    assert normalize_join_code("AB-3D-EFGH") == expected
+
+
+def test_normalize_join_code_handles_blank_input():
+    from app.auth import normalize_join_code
+
+    assert normalize_join_code("") == ""
+    assert normalize_join_code(None) == ""  # type: ignore[arg-type]
+    assert normalize_join_code("   ") == ""
+    assert normalize_join_code("---") == ""
 
 
 # The signed-in pages render -------------------------------------------------
@@ -3318,6 +3443,13 @@ def test_poolless_user_sees_the_preview_slate_read_only(client, session_factory)
 def test_poolless_user_with_no_preview_slate_built_sees_an_honest_empty_state(
     client, session_factory
 ):
+    """Phase 8 remediation (see DECISIONS.md): the original bug report was a poolless visitor
+    landing on a bare "check back soon" with no next step. The orchestrating session's own
+    manual QA found the "This is a preview" panel, with its join-code and start-a-league
+    buttons, renders unconditionally, above the slate itself, so even this no-slate-built case
+    (state 0 in picks.html, checked before the "not ready yet" fallback) is never a dead end.
+    This test locks that in: both the honest "not ready yet" message AND the two ways forward
+    must be on the page at once, not one or the other."""
     db = session_factory()
     _make_preview_pool(db)  # exists, but no Week/Game rows built yet
     _make_user(db, "newbie4@example.com", "Newbie Four")
@@ -3328,6 +3460,32 @@ def test_poolless_user_with_no_preview_slate_built_sees_an_honest_empty_state(
     response = client.get("/picks")
     assert response.status_code == 200
     assert "not ready yet" in response.text.lower()
+    assert 'href="/join"' in response.text
+    assert 'href="/pricing"' in response.text
+    assert "enter a join code" in response.text.lower()
+    assert "start your own league" in response.text.lower()
+
+
+def test_poolless_user_with_no_preview_pool_seeded_at_all_still_sees_actionable_options(
+    client, session_factory
+):
+    """The stronger case: no is_preview pool exists in the database at all (a fresh
+    deployment where seed-preview has never been run once). get_preview_pool returns None,
+    _preview_page still renders the same actionable panel rather than erroring or falling
+    back to a bare dead end (Phase 8 remediation, see DECISIONS.md)."""
+    db = session_factory()
+    _make_user(db, "newbie5@example.com", "Newbie Five")
+    db.commit()
+    db.close()
+
+    _login(client, "newbie5@example.com")
+    response = client.get("/picks")
+    assert response.status_code == 200
+    assert "not ready yet" in response.text.lower()
+    assert 'href="/join"' in response.text
+    assert 'href="/pricing"' in response.text
+    assert "enter a join code" in response.text.lower()
+    assert "start your own league" in response.text.lower()
 
 
 @pytest.mark.parametrize("path", ["/standings", "/results"])
