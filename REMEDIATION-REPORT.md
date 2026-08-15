@@ -27,7 +27,7 @@ September 12, 2026.
 | 6 | Fix slate build interaction | Done | `e5bc767` (+ `e862eff` fix) |
 | 7 | Transactional email | Done | `c615887` |
 | 8 | First-run experience | Done | `cad907b` |
-| 9 | Verify prior fixes against live data | Pending | |
+| 9 | Verify prior fixes against live data | Done | `a8fe738` |
 | 10 | Full sweep | Pending | |
 | 11 | Documentation | Pending | |
 | 12 | Merge, push, deploy, verify | Pending | |
@@ -212,6 +212,35 @@ September 12, 2026.
 - Pricing arithmetic fixed ("Save 49 dollars", was "50"). Independently verified in the
   template source.
 - Test count after Phase 8: 1073 (+32 over Phase 7's 1041, +134 over the Phase 0 baseline).
+
+## Phase 9 notes
+
+Done directly by the orchestrating session (live browser against a real seeded database), not
+delegated, since this phase is fundamentally hands-on verification.
+
+- **Inverse scoring:** confirmed on `/results?week=5`. "Low score wins," lowest points-against
+  (22) wins, full ranking strictly ascending (22, 26, 35, 37, 40, 59, 63), non-submitter shown
+  as "No picks submitted" not a bare number.
+- **15 of 20:** a real 15-pick submission renders correctly (verified); rejection of 14/16 relies
+  on the existing, already-passing `tests/test_scoring.py`/`tests/test_app.py` coverage.
+- **Two-step pick entry:** confirmed at desktop width (tap-to-select, live confidence chip and
+  progress bar, auto-regrouping, and the up/down accessible reorder buttons recalculating
+  confidence correctly). Could not force a genuine 360px viewport this session (a tool
+  limitation, `window.innerWidth` never actually changed despite a successful `resize_window`
+  call); not treated as a product defect since this UI predates the remediation and nothing in
+  Phases 0-8 touched it. Flagged for Phase 10 to pick up with better tooling if available.
+- **Player-major grid:** confirmed. Header reads exactly "PLAYER 15 14 13 12 11 10 9 8 7 6 5 4 3
+  2 1."
+- **Payouts:** confirmed the exact required ladder via `payouts-show --pool 2`: weekly 2775,
+  bowl 400, season points 1155, season wins 620, grand total and pot both 4950, unallocated 0.
+  Also saw a real tie-split live on `/standings` (season wins, two players tied at $255 each).
+- **Scenarios: found and fixed a real defect.** A fully scored week showed "Scenarios open once
+  5 games are final. 20 of 5 final so far.", misleading once that threshold is already cleared;
+  the real blocker (zero games remaining) was never named. Fixed the pending message to name
+  the actual blocker; new test added.
+- **Season/weekly tabs:** confirmed genuinely separate, no duplicated content between
+  `/standings` and `/results`.
+- Test count after Phase 9: 1074 (+1 over Phase 8's 1073, +135 over the Phase 0 baseline).
 
 ## Ambiguity decisions
 
