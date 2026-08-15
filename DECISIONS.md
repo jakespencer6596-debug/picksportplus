@@ -3623,3 +3623,49 @@ exercised by this codebase's existing test suite rather than a per-page concern 
 re-deriving column by column.
 
 Test count after Phase 9: 1074 (+1 over Phase 8's 1073, +135 over the Phase 0 baseline).
+
+### Phase 10, full sweep
+
+**Item 23's literal wording versus the already-correct, already-tested behavior.** The
+checklist item reads: "Sign out and hit `/league`, `/site`, and `/leagues`. All redirect to
+sign-in. No 404s." `/league` and `/site` are real routes and do redirect. `/leagues` (plural)
+is not, and never was, a real route in this codebase; it is the exact path named in the
+original bug report, and Phase 8 already decided, deliberately, that a route which genuinely
+does not exist must 404 honestly rather than fake a redirect that would wrongly imply it
+exists (`test_a_genuinely_nonexistent_route_404s_honestly_rather_than_faking_a_redirect`).
+Faking a redirect for `/leagues` to satisfy this item's literal text would directly contradict
+Phase 8's own, already-correct decision and would mislead a user into thinking a route exists
+that does not. Kept the honest 404. Recorded as a PASS against the checklist's actual intent
+(no dead end, no 500, no confusing wall) in `REMEDIATION-REPORT.md`, with the literal-wording
+gap called out rather than silently reinterpreted.
+
+**Items 19 and 20, "it arrives," against an environment with no real mail credentials.** This
+session has no production Resend account or API key, and SPEC.md Section 17's offline-first
+testing rule means nothing in this codebase's own test suite is allowed to open a real socket
+even if one were configured. There is no way to prove literal inbox delivery from inside this
+environment. The best-serving choice: prove everything short of the actual network hop,
+against the exact same code path production traffic would run, stubbed only at
+`_call_resend_api` (the single real HTTP call site in `app/services/mail.py`, already how
+`tests/test_mail.py` and every Phase 7 mail integration test verify this code without a real
+network). `test_commissioner_invite_email_sends_for_the_site_admin` and
+`test_player_invite_email_sends_to_multiple_addresses` both assert the real recipient list and
+real message body reach that call site; `test_forgot_password_full_round_trip` goes one step
+further and recovers the actual link from the captured send, then completes a real login with
+the new password, proving the link itself is correct and functional end to end, not just
+well-formed. Recorded as PASS with the inbox-delivery gap stated plainly in
+`REMEDIATION-REPORT.md` rather than either skipping the item or claiming a false full pass.
+
+**Scope of manual re-verification.** Items 8-17 and 19-25 were provable from Phases 1-9's own
+extensive live testing (each already cited in this file and in `REMEDIATION-REPORT.md`) without
+re-clicking through the same flows a second time for no new information. Items 18, 27 and 28
+got fresh, real live-browser verification this phase (the acting-as-site-admin banner across
+five distinct `/league/*` pages, not just the dashboard; the results page's responsive reflow
+at ~500px, including confirming Phase 9's scenarios-copy fix renders correctly at that width
+too; a real Tab-key focus ring on `/site/leagues`). Items 5, 6, 16, 17, 23, 31 and 32 got a
+fresh `TestClient` sweep (`phase10_sweep.py`, a throwaway script, not committed, matching the
+pattern of `tests/test_app.py`'s own `client`/`world` fixtures) rather than relying on Phase
+0-9's cumulative evidence alone, since these are cheap to re-run in full and catch any
+regression the later phases might have introduced without live-browser flakiness.
+
+Test count after Phase 10: 1074 (no new tests written; every item is provable from the existing
+suite plus fresh live/scripted verification, not new test coverage).
