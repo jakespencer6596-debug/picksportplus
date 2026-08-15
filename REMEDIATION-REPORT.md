@@ -14,6 +14,8 @@ September 12, 2026.
   are absent, not a violation).
 - Branch `remediation-aug-2026` created from `main` at commit `c210499`.
 
+**Test count: 939 before this remediation, 1074 after (+135), 0 failures at every gate.**
+
 ## Phase checklist
 
 | Phase | Description | Status | Commit SHA |
@@ -30,7 +32,7 @@ September 12, 2026.
 | 9 | Verify prior fixes against live data | Done | `a8fe738` |
 | 10 | Full sweep | Done | `1e35dc0` |
 | 11 | Documentation | Done | `10516be` |
-| 12 | Merge, push, deploy, verify | Pending | |
+| 12 | Merge, push, deploy, verify | Done | `b56e68c` (merge commit on `main`) |
 
 ## Phase 1 notes
 
@@ -354,6 +356,48 @@ literal wording, both explained above and in `DECISIONS.md`; neither reflects a 
   (1074 passed, unchanged, since no application code changed), em dash grep and emoji scan both
   clean across `SPEC.md` and `README.md`.
 
+## Phase 12 notes
+
+1. **Gate on the branch**, re-run fresh immediately before merging: `ruff check .` clean,
+   `black --check .` clean, `pytest -q` 1074 passed, em dash grep clean.
+2. `git checkout main && git pull --ff-only`: `main` was already at `c210499`, the exact commit
+   `remediation-aug-2026` branched from, so this was a no-op fast-forward, not a real pull.
+3. `git merge --no-ff remediation-aug-2026 -m "fix: August remediation, role separation, week
+   resolution, email and persistence"`: clean merge, **no conflicts** (the branch never touched
+   a file `main` had changed since the branch point), 71 files changed. Merge commit `b56e68c`.
+4. **Full gate re-run on `main` after the merge**: `ruff check .` clean, `black --check .` clean
+   (65 files), `pytest -q` **1074 passed**, em dash grep clean, emoji scan clean, and a fresh
+   `alembic upgrade head` cycle against a new scratch database, clean, on `main` itself (not
+   reused from the branch), ending at the single head `c2a91e6f7b3d`.
+5. `git push origin main`: no force, `c210499..b56e68c main -> main`.
+6. `git log origin/main -1 --oneline`: confirmed `b56e68c` is what origin now serves.
+7. **Watched the Render deploy** for both services on this repo's `main` branch (this account
+   runs two: the free demo blueprint `picksportplus` at `picksportplus.onrender.com`, and a
+   separate paid Starter service `picksportplus-live` at `picksportplus-live.onrender.com`,
+   which is the one intended for the real group's real-money season). Both auto-deployed commit
+   `b56e68c` on the push and both finished `live` within about a minute and a half, no build or
+   migration failure on either.
+8. **Confirmed live on both services:** `/health` returns `{"status":"ok"}`; `/league` and
+   `/site`, signed out, both 303 to `/login?next=...` (never a 404); `/admin` 301s to `/league`;
+   `/admin/leagues` 301s to `/site/leagues`; `/` returns 200. The ephemeral storage banner check
+   below covers "appears if and only if the deployment is still on temporary storage."
+9. Nothing failed. No revert needed.
+
+**Ephemeral storage banner, confirmed live, and a real finding.** `picksportplus-live`'s own
+boot log for this deploy reads: `WARNING picksportplus: DATABASE_URL points at ephemeral
+storage (sqlite:////tmp/picksportplus.db). Every account, league, pick, payout rule and award
+will be LOST the next time this service sleeps or redeploys. Set DATABASE_URL to a persistent
+Postgres database (for example Neon) before inviting real players.` This proves Phase 1's
+detection code is working correctly on the real deployed service exactly as designed, which is
+good, but it also surfaces something urgent and real: **`picksportplus-live`, the paid service
+this repository's own README and `render.yaml` history identify as the one meant for real
+players, is currently still running on ephemeral SQLite, not a persistent database.** This is
+not a code defect this remediation could fix by editing a file: it is a deployment
+configuration step (pasting a real `DATABASE_URL` into the Render dashboard) that has to happen
+on the live service itself, outside this repository, and it had not happened as of this
+deploy. Flagged to the user directly in this session and carried as launch risk 1 below. See
+`DECISIONS.md` for the full account.
+
 ## Ambiguity decisions
 
 See `DECISIONS.md`, `## Remediation, August 2026`, for every judgment call and its reasoning.
@@ -365,12 +409,95 @@ See `DECISIONS.md`, `## Remediation, August 2026`, for every judgment call and i
   item 10 above (span guard `MAX_SLATE_SPAN_DAYS = 8`, team dedup, both unit tested).
 - Slate build wall-clock duration: **6.41 seconds** for a 16-candidate build against the live
   ESPN API (see Phase 6 notes).
-- Live deploy status: filled in during Phase 12.
+- Live deploy status: **live and verified on both deployed services** as of this merge
+  (`b56e68c`). `picksportplus-live.onrender.com` (the real, paid service): `/health` 200,
+  `/league` and `/site` both render/redirect correctly, `/admin` and `/admin/leagues` 301
+  correctly, boot log shows the ephemeral storage warning correctly firing (see Phase 12 notes,
+  and the launch risk below: this service still needs a real `DATABASE_URL` pasted in before
+  real players join). `picksportplus.onrender.com` (the free demo blueprint): same checks, all
+  passed, ephemeral storage is expected and correct here since the demo is designed to reset.
 
 ## Setup guides
 
-Commissioner and site admin guides are appended once Phase 12 completes.
+### For the commissioner (plain English, no code)
+
+1. **Get your league.** The site admin creates it and either attaches your account by email or
+   sends you a one-time commissioner invite link. Opening that link creates your commissioner
+   login directly, nothing else to install.
+2. **Check the anchor date.** Every league needs a "week 1 anchor date," a Saturday the app uses
+   to line up NFL and college week numbers (they do not match). It is set when your league is
+   created and defaults to the second Saturday of September; change it from your settings page
+   if your season starts a different Saturday.
+3. **Build and publish your first week.** Open the Slate page, type a week number, and click
+   "Build the slate." It reads the schedule and can take up to a minute; you land on a summary
+   of what it built. Look over the games (swap or remove anything that looks off), then click
+   Publish so your players can start picking. Want to try it before the real season starts?
+   "Create a test week" builds one from preseason games; it works exactly like a real week but
+   never counts toward standings or money.
+4. **Invite your players.** Open the Members page and share the join code, or use "Email the
+   invite" to send it straight from the app if the site has email turned on.
+5. **Set up payouts.** Open the Payouts page, enter an entry fee (and your own payment handle if
+   you are collecting money yourself), then fill in each payout category, or click "Load preset"
+   to start from a known ladder and adjust it from there.
+
+### For the site admin (plain English, no code)
+
+1. **API keys and spend live on the Providers page** (`/site/providers`), reached from the site
+   admin dashboard. It shows whether each key is present, roughly how much has been spent, and
+   the last time each provider was called. A single "ESPN only" switch there stops every league
+   on the site from spending an outside credit at once, if you ever need to pause spend.
+2. **Creating a league and minting a commissioner** both happen from the Leagues page
+   (`/site/leagues`): click "Create league," fill in the basics, then either type an existing
+   player's email to make them commissioner or copy the one-time commissioner invite link and
+   send it yourself.
+3. **Confirming the database is persistent:** open the site admin dashboard. A brick-colored
+   banner appears on every page you view if the deployment is still running on temporary
+   storage, and disappears the moment it is not. From a terminal on the server you can also run
+   `python -m app.cli doctor`, which prints the same check as plain text alongside row counts
+   and the age of the oldest row, so you can see at a glance whether the last restart actually
+   kept the data.
 
 ## Not built / risks
 
-Filled in at the end.
+### Deliberately not built in this remediation
+
+- **Literal inbox delivery testing for commissioner/player invite emails** (Phase 10 items
+  19-20): proven against the same code path production traffic uses, stubbed only at the one
+  real network call, since this environment has no production Resend account. The gap is stated
+  plainly rather than hidden; see Phase 10 notes and `DECISIONS.md`.
+- **A genuine 360px browser viewport for automated live testing** (Phase 10 item 27): a tooling
+  limitation (`resize_window` did not actually move `window.innerWidth` below about 500px in
+  this session's browser automation), not a product defect. The responsive behavior itself
+  (table-to-dropdown reflow, card stacking) was confirmed at ~500px, well below the medium
+  breakpoint, and nothing about the CSS is width-specific enough to expect a different result at
+  360px specifically.
+- **Cron wiring on either live Render service.** Both `picksportplus` (free) and
+  `picksportplus-live` (paid Starter) currently have no scheduled `run-cron` job attached; a
+  commissioner must run `fetch-results`/`score-week`/`sync-week` by hand, or a paid Render cron
+  service (or any external scheduler) needs to be wired up per the README's "Deploying the full
+  app to Render" section. This was true before this remediation and remains true after it;
+  fixing it is an infrastructure step outside this codebase, not a code change.
+- **Public mode, season playoff/bowl support beyond what already exists, and a configurable
+  tiebreaker rule** remain out of scope, per SPEC.md Section 19, unchanged by this remediation.
+
+### Top three risks to a clean September 12 launch
+
+1. **`picksportplus-live` is still running on ephemeral SQLite.** Confirmed live in this
+   phase's own boot log (see Phase 12 notes above). Every account, league, pick, payout rule and
+   award on that service will be lost the next time it sleeps or redeploys, which will happen
+   before September 12 without action. **Mitigation:** paste a real Postgres `DATABASE_URL`
+   (Neon's free tier is enough) into that service's environment in the Render dashboard now, not
+   later; the app needs no code change, only a real connection string, and `python -m app.cli
+   doctor` confirms it stuck.
+2. **No cron is wired up on either live service.** Without it, slate builds, score updates and
+   payout freezes only happen when someone remembers to run them by hand. **Mitigation:** wire a
+   paid Render cron service (README, "Deploying the full app to Render") or point any external
+   hourly scheduler at `python -m app.cli run-cron` against the real `DATABASE_URL` before the
+   season starts; `run-cron` is idempotent, so an early test run risks nothing.
+3. **Real invite emails have never been proven against a real inbox.** The code path is proven
+   correct end to end against a stubbed network call (Phase 10, Phase 7), but nobody has clicked
+   a real "Email the invite" button against a live Resend account and watched a real message
+   land. **Mitigation:** before relying on it for the group's actual season, set `MAIL_ENABLED`,
+   `RESEND_API_KEY` and `MAIL_FROM_ADDRESS` on the live service and send one real test invite
+   from `/site/mail` to an inbox you control, confirming both the email and its link work, before
+   trusting it for a real player.

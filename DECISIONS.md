@@ -3669,3 +3669,33 @@ regression the later phases might have introduced without live-browser flakiness
 
 Test count after Phase 10: 1074 (no new tests written; every item is provable from the existing
 suite plus fresh live/scripted verification, not new test coverage).
+
+### Phase 12, merge, push, deploy, verify
+
+**The merge itself needed no judgment call.** `remediation-aug-2026` branched from `main` at
+`c210499` and `main` had not moved since, so `git pull --ff-only` was a no-op and
+`git merge --no-ff` produced a clean merge with zero conflicts across all 71 changed files.
+
+**Real finding surfaced by live verification, not a code decision, recorded here because it
+changes what "done" means for this remediation.** Watching both live Render services after the
+push, `picksportplus-live`'s own boot log (this repository's real, paid service, the one the
+group is meant to actually use) read: `WARNING picksportplus: DATABASE_URL points at ephemeral
+storage (sqlite:////tmp/picksportplus.db). Every account, league, pick, payout rule and award
+will be LOST the next time this service sleeps or redeploys.` Phase 1's detection code is
+working exactly as designed. What it detected is real: the service intended for real money has
+never had a persistent `DATABASE_URL` set on it. This remediation's own operating mode says stop
+only for a missing credential or an irreversible destructive action; pasting a real
+`DATABASE_URL` into the Render dashboard is neither something this session has the credential
+for (it would mean creating and owning a database account on the user's behalf) nor a decision
+this session should make unilaterally on infrastructure outside the repository. Recorded as the
+top launch risk in `REMEDIATION-REPORT.md` with the exact fix (a free Neon connection string,
+no code change) rather than silently worked around or left undiscovered.
+
+**Did not attempt to fix the missing cron wiring or send a real test email against a live mail
+account, for the same reason.** Both are real, external, credentialed infrastructure steps
+(Render's dashboard, a Resend account) outside what a code remediation branch can commit. Both
+are named explicitly in `REMEDIATION-REPORT.md`'s "not built" and "risks" sections with their
+exact fix, rather than treated as this remediation's job to complete.
+
+Test count after Phase 12: 1074 (no application code changed in this phase; only
+`REMEDIATION-REPORT.md` was updated with live verification results).
