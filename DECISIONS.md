@@ -3747,3 +3747,43 @@ explicit ask to make sure testing covered the real live domain, not only the onr
 
 Test count after this follow-up: 1074 (no application code changed; this was live
 infrastructure configuration and verification only).
+
+### Phase 12 follow-up, wiring up the cron job
+
+The user asked what cron was for and what it would cost before authorizing it, rather than
+approving blind. Answered both plainly (what `run-cron` actually does: pull ESPN finals, score
+the week, freeze payouts, build the next slate; and an honest correction once the first attempt
+revealed the free-tier assumption was wrong) before creating anything, matching this session's
+general rule of not guessing at cost for the user's money.
+
+**Corrected a wrong assumption about pricing out loud rather than quietly working around it.**
+Assumed Render cron jobs would offer the same free tier `create_postgres` had for Risk 1's
+database; `create_cron_job` rejected `plan: "free"` outright (400, "invalid plan: free. valid
+PaidPlans are [starter, standard, pro, ...]"). Told the user directly that the free assumption
+was wrong rather than silently picking a paid plan, and asked before creating it on `starter`,
+since a recurring charge without saying so first would break the trust this whole engagement
+depends on.
+
+**Diagnosed two real, self-inflicted build failures rather than assuming Render's platform was
+broken.** The first triggered run failed with `build_failed`; read the actual build log instead
+of guessing, and found the cron job had defaulted to Python 3.14 (no `PYTHON_VERSION` set,
+unlike the web service or `render.yaml`'s own pin), and `pydantic-core==2.27.2` (a pinned
+`requirements.txt` version, not something this session chose) has no prebuilt wheel for 3.14, so
+pip fell back to compiling it from source via maturin/Rust, which failed outright in Render's
+build sandbox (`Read-only file system` on the cargo cache directory). Fixed by setting
+`PYTHON_VERSION=3.13.5` directly via the API to match the already-working pin in `render.yaml`,
+since a Python version number is not a secret and setting it does not require the user's own
+action the way `DATABASE_URL` did.
+
+**Learned that `trigger_deploy` on a cron job only builds, it does not run.** After the
+Python-version fix, `get_deploy` reported `status: live`, which reads like success but is only
+the build finishing; the dashboard's own "Runs" tab still read "No successful runs yet." Used
+the browser to click the dashboard's actual "Trigger Run" button (no equivalent MCP tool
+available) rather than reporting the build's own "live" status as if it were a working run. The
+resulting live log tail showed `run-cron` genuinely executing: real ESPN scoreboard/odds calls
+for the 2026 season, a real slate build (`pool 1 week 1, 6.07s elapsed, 20 selected`), and
+`Cron job run finished successfully`. This is the actual proof this risk is closed, not the
+build status alone.
+
+Test count after this follow-up: 1074 (no application code changed; this was live
+infrastructure configuration and verification only).

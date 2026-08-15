@@ -415,6 +415,29 @@ and default pool rather than carrying over whatever had been sitting in the now-
 ephemeral SQLite file (which would have been lost on the next sleep/redeploy regardless). Data
 written from this point forward on `picksportplus-live` is real and persistent.
 
+**Risk 2 resolved, same session, at the user's direct request.** Created a Render cron job
+(`picksportplus-live-cron`) via the API: `python -m app.cli run-cron`, hourly at `:17`, region
+Oregon to match the web service and database. Render's cron plans do not include a free tier
+for this account (`create_postgres`'s free-tier assumption from Risk 1 does not carry over to
+`create_cron_job`; confirmed by a 400 error naming `starter` as the cheapest valid plan), so the
+user was asked to choose and confirmed `starter` before it was created, rather than this session
+guessing at cost a second time. Two real, self-inflicted problems surfaced and were fixed before
+the job actually worked: (1) the cron job defaulted to Python 3.14 (no `PYTHON_VERSION` pin,
+unlike the web service and the free blueprint's own `render.yaml`), and `pydantic-core`'s pinned
+version has no prebuilt wheel for 3.14, so the first build failed trying to compile it from
+source with no Rust toolchain available; fixed by setting `PYTHON_VERSION=3.13.5` (matching
+`render.yaml`'s own pin) directly via the API, since a Python version is not a secret; (2) a
+Render `trigger_deploy` call on a cron job only builds the image, it does not execute the
+scheduled command, so the fix had to be confirmed with an explicit "Trigger Run" from the
+dashboard rather than by re-reading deploy status. The resulting run genuinely executed
+`run-cron` against the real, persistent database: pulled the live NFL and college ESPN
+schedules, resolved spreads for the real 2026 season (no `ODDS_API_KEY`/`CFBD_API_KEY`
+configured, exactly the ESPN-only fallback path Section 5e describes), and logged
+`picksportplus.ingest: slate build finished, pool 1 week 1, 6.07s elapsed, 20 selected` followed
+by `Cron job run finished successfully`. The free demo blueprint intentionally still has no
+cron; it exists to reset to a known-good state on its own, not to run a real season, so it does
+not need one.
+
 ## Ambiguity decisions
 
 See `DECISIONS.md`, `## Remediation, August 2026`, for every judgment call and its reasoning.
@@ -490,12 +513,11 @@ See `DECISIONS.md`, `## Remediation, August 2026`, for every judgment call and i
   (table-to-dropdown reflow, card stacking) was confirmed at ~500px, well below the medium
   breakpoint, and nothing about the CSS is width-specific enough to expect a different result at
   360px specifically.
-- **Cron wiring on either live Render service.** Both `picksportplus` (free) and
-  `picksportplus-live` (paid Starter) currently have no scheduled `run-cron` job attached; a
-  commissioner must run `fetch-results`/`score-week`/`sync-week` by hand, or a paid Render cron
-  service (or any external scheduler) needs to be wired up per the README's "Deploying the full
-  app to Render" section. This was true before this remediation and remains true after it;
-  fixing it is an infrastructure step outside this codebase, not a code change.
+~~Cron wiring on either live Render service.~~ **Resolved same session, at the user's
+request, after the remediation phases themselves finished.** See the "Risk 2 resolved" note
+above; `picksportplus-live-cron` now runs `run-cron` hourly against `picksportplus-live`'s real
+database. The free demo blueprint (`picksportplus`) still has none, deliberately, since it
+exists to reset on its own rather than run a real season.
 - **Public mode, season playoff/bowl support beyond what already exists, and a configurable
   tiebreaker rule** remain out of scope, per SPEC.md Section 19, unchanged by this remediation.
 
@@ -506,16 +528,19 @@ See `DECISIONS.md`, `## Remediation, August 2026`, for every judgment call and i
    (`picksportplus-live-db`) was provisioned and wired up as `DATABASE_URL`, and the redeploy's
    boot log now confirms `database dialect: postgresql` with no ephemeral warning. See the
    "Risk 1 resolved" note in the Phase 12 section above for the full account. No longer a risk.
-2. **No cron is wired up on either live service.** Without it, slate builds, score updates and
-   payout freezes only happen when someone remembers to run them by hand. **Mitigation:** wire a
-   paid Render cron service (README, "Deploying the full app to Render") or point any external
-   hourly scheduler at `python -m app.cli run-cron` against the real `DATABASE_URL` before the
-   season starts; `run-cron` is idempotent, so an early test run risks nothing. **Now the top
-   remaining risk.**
+2. ~~No cron is wired up on either live service.~~ **Resolved same session.** A Render cron job
+   (`picksportplus-live-cron`, `starter` plan, hourly at 17 minutes past) now runs
+   `python -m app.cli run-cron` against `picksportplus-live`'s real `DATABASE_URL`. A manually
+   triggered run finished successfully end to end: it built the real Week 1 slate (20 games,
+   NFL 8 / College 12, 6.07s) against live ESPN data with no metered provider keys configured,
+   and logged `Cron job run finished successfully`. See the "Risk 2 resolved" note in the
+   Phase 12 section above. No longer a risk. Note: the free demo blueprint
+   (`picksportplus.onrender.com`) still has no cron; it does not need one, since it exists to
+   reset to a known-good state, not to run a real season.
 3. **Real invite emails have never been proven against a real inbox.** The code path is proven
    correct end to end against a stubbed network call (Phase 10, Phase 7), but nobody has clicked
    a real "Email the invite" button against a live Resend account and watched a real message
    land. **Mitigation:** before relying on it for the group's actual season, set `MAIL_ENABLED`,
    `RESEND_API_KEY` and `MAIL_FROM_ADDRESS` on the live service and send one real test invite
    from `/site/mail` to an inbox you control, confirming both the email and its link work, before
-   trusting it for a real player.
+   trusting it for a real player. **Now the only remaining risk of the original three.**
