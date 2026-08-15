@@ -25,7 +25,7 @@ September 12, 2026.
 | 4 | Split site admin vs commissioner | Done | `5cb32c4` |
 | 5 | Move provider controls to site admin | Done | `957d718` |
 | 6 | Fix slate build interaction | Done | `e5bc767` (+ `e862eff` fix) |
-| 7 | Transactional email | Pending | |
+| 7 | Transactional email | Done | `c615887` |
 | 8 | First-run experience | Pending | |
 | 9 | Verify prior fixes against live data | Pending | |
 | 10 | Full sweep | Pending | |
@@ -160,6 +160,34 @@ September 12, 2026.
   this exact pool. Fixed in a separate commit `e862eff` (not folded into Phase 6's own commit,
   since it is a Phase 2 gap, not a Phase 6 defect), with a regression test. Test count after
   this fix: 1018.
+
+## Phase 7 notes
+
+- `app/services/mail.py`: Resend's REST API over `httpx`, no new dependency. `send()` returns
+  a `MailLog` row only on real success; every other outcome (`MailDisabled`, `MailRateLimited`,
+  `MailSendFailed`) raises, so a caller cannot mistake a failure for success.
+- Four emails, each next to its existing copy-and-paste path, never replacing it: commissioner
+  invite (site admin only), player invite (commissioner only, multiple addresses), password
+  reset (single use, one hour expiry, hashed token, anti-enumeration messaging), and an opt-in
+  week-published notification (off by default).
+- Rate limiting backed by `MailLog` (not memory, survives a restart), per actor per hour.
+  New `/site/mail` panel: configuration status, recent sends, a real test-send.
+- **Process note:** the first attempt at this phase stalled for hours with zero file changes
+  and was killed. A second attempt made correct progress but was itself killed mid-flight,
+  before writing tests or its own decisions, once the same stall pattern looked like it might
+  recur. The orchestrating session verified the surviving code directly (read every changed
+  file, ran the full gate, ran a real migration upgrade/downgrade/upgrade cycle), found it
+  well designed, fixed one real defect it found (a stray "admin" word reaching a commissioner's
+  screen), and wrote the missing test coverage itself. See DECISIONS.md, Phase 7, for the full
+  account, including why this phase's `git status` showed no progress for so long.
+- **Live-tested in a real browser against a throwaway seeded database:** the forgot-password
+  flow rendering and submitting correctly with the generic anti-enumeration message; `/site/mail`
+  showing "Off" configuration status; a real test-send correctly failing loudly ("Email is not
+  turned on for this deployment...") rather than silently, with both attempted sends correctly
+  logged and visible in the Recent sends table; the commissioner invite email form present and
+  wired next to the existing copy-link panel on `/site/leagues`. No defects found beyond the one
+  already fixed.
+- Test count after Phase 7: 1041 (+23 over Phase 6's 1018, +102 over the Phase 0 baseline).
 
 ## Ambiguity decisions
 
