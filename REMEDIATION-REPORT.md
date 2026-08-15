@@ -29,7 +29,7 @@ September 12, 2026.
 | 8 | First-run experience | Done | `cad907b` |
 | 9 | Verify prior fixes against live data | Done | `a8fe738` |
 | 10 | Full sweep | Done | `1e35dc0` |
-| 11 | Documentation | Done | pending |
+| 11 | Documentation | Done | `10516be` |
 | 12 | Merge, push, deploy, verify | Pending | |
 
 ## Phase 1 notes
