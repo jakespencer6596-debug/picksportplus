@@ -41,6 +41,7 @@ from app.auth import hash_password
 from app.models import Game, PayoutRule, Pick, Pool, PoolMember, User, Week, WeekEntry, utcnow
 from app.providers import cfbd, espn
 from app.services import payouts as payout_service
+from app.services.calendar import default_week1_anchor_date
 from app.services.ingest import apply_slate, set_void
 from app.services.results import score_week_for_pool
 
@@ -189,6 +190,15 @@ def seed_demo_pool(db: Session, reset: bool = False, scenario_week: bool = False
         open_registration=False,
         timezone="America/New_York",
         current_week=OPEN_WEEK_NUMBER,
+        # Required since Phase 2 remediation (see DECISIONS.md): build_slate refuses outright
+        # without one. The demo's own three weeks are seeded through apply_slate directly, not
+        # build_slate, so they never depended on this, but a commissioner clicking "Build the
+        # slate" for a new week on the demo pool would otherwise always hit that refusal. The
+        # exact date does not need to line up with the demo's replayed 2025 fixtures, since
+        # OFFLINE_MODE blocks any real ESPN call the button would make anyway; it only needs
+        # to be a real Saturday so the guard, and the Saturday-only validation on the settings
+        # form, both pass.
+        week1_anchor_date=default_week1_anchor_date(DEMO_YEAR),
         entry_fee=DEMO_ENTRY_FEE,
         venmo_handle=DEMO_VENMO_HANDLE,
         payment_note=DEMO_PAYMENT_NOTE,

@@ -47,6 +47,18 @@ def test_seed_demo_pool_builds_three_weeks(db):
     assert weeks[7].status == "open"
 
 
+def test_seed_demo_pool_has_a_week1_anchor_date(db):
+    """Found via live testing (not caught by the existing suite, since every other test's own
+    _pool()-style helper already set one by hand): without this, a real click on "Build the
+    slate" for the live demo pool hits Phase 2's build_slate refusal (see DECISIONS.md) every
+    time, even though the demo's own three weeks are seeded through apply_slate directly and
+    never depended on it themselves."""
+    seed_demo_pool(db, reset=True)
+    pool = _pool(db)
+    assert pool.week1_anchor_date is not None
+    assert pool.week1_anchor_date.weekday() == 5  # a Saturday
+
+
 def test_seed_demo_pool_has_eight_players_one_commissioner(db):
     seed_demo_pool(db, reset=True)
     pool = _pool(db)

@@ -3281,3 +3281,37 @@ header, which confirms the server sends exactly the header htmx's own documented
 handling expects. This is real evidence the wiring is correct, but it is not the same as
 watching a click happen in a browser; flagged explicitly per the brief's own instruction to say
 so rather than imply more than was actually verified.
+
+### Orchestrator follow-up: live browser verification of Phase 6, and a real bug found
+
+Since a browser was not available to the Phase 6 sub-agent, the orchestrating session did the
+live click test it flagged as missing, against a throwaway seeded database. Result: the real
+fix works. A precisely targeted, real mouse click on "Build the slate" does send `POST
+/league/slate/build` and land back on the built week, confirmed by reading the local server's
+own access log and the browser's network panel, not just a screenshot. Two false alarms during
+that testing, both self-inflicted, recorded here so a future session does not repeat them:
+first, `elementFromPoint` at a clicked coordinate landed on an unrelated `div.card-head`
+because the page had been scrolled between taking the reference screenshot and issuing the
+click; the fix was to always screenshot immediately before the click, never after an
+intervening scroll or navigation. Second, a synthetic `Element.click()` call and a real CDP
+mouse click are not perfectly interchangeable for diagnosing this class of bug and both need
+checking; the synthetic call worked even in the one case the real click's coordinate had gone
+stale, which is exactly why the original bug report ("posting via JavaScript worked, a real
+click did not") deserves a genuine live click test rather than a synthetic one, and why this
+follow up existed at all.
+
+**A real, separate bug was found and fixed in the process, not by Phase 6's own change.** The
+demo pool (`app/services/demo.py`) never set `Pool.week1_anchor_date`. Phase 2 remediation
+made `build_slate` refuse outright without one; the demo's own three weeks are seeded through
+`apply_slate` directly and never depended on it, so this was invisible until a real "Build the
+slate" click was tried against the demo pool specifically, which is exactly what happened
+during this verification pass. The refusal is harmless (it returns before touching any
+existing `Week`/`Game` rows, confirmed by re-reading the slate page afterward and finding all
+20 games untouched), but it is confusing, and since `render.yaml`'s start command reseeds this
+exact pool on every deploy, it would have shipped as a real, reproducible defect on the live
+demo. Fixed by giving the demo pool a real `week1_anchor_date`
+(`app.services.calendar.default_week1_anchor_date(DEMO_YEAR)`, the same helper Phase 2 already
+built), with a regression test (`test_seed_demo_pool_has_a_week1_anchor_date`,
+`tests/test_demo.py`) asserting it is set and falls on a Saturday. This fix is committed
+separately from Phase 6's own commit, since it is a Phase 2 gap surfaced while verifying
+Phase 6, not a Phase 6 defect.
