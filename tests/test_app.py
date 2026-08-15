@@ -2162,6 +2162,38 @@ def test_scenarios_panel_shows_pending_state_below_the_threshold(client, world, 
     assert "Scenarios open once 5 games are final" in response.text
 
 
+def test_scenarios_panel_pending_message_distinguishes_not_enough_remaining_games(
+    client, world, session_factory
+):
+    """Found via live testing (Phase 9 remediation, see DECISIONS.md): a fully scored week
+    (every game final, none remaining) already clears the final-games threshold, so the old
+    single "Scenarios open once N games are final" message was actively misleading, it read
+    as though the panel still needed MORE final games when the real, opposite reason is that
+    there are none left to build a scenario around. The pending copy must name the actual
+    blocker."""
+    db = session_factory()
+    pool = db.get(Pool, world["pool_id"])
+    pool.scenarios_min_final_games = 1
+    week = db.get(Week, world["week_id"])
+    week.lock_at = dt.datetime.now(UTC) - dt.timedelta(minutes=1)
+    week.status = "scored"
+    games = list(db.scalars(select(Game).where(Game.week_id == week.id)))
+    for game in games:
+        game.status = "final"
+        game.winner = "home"
+        game.home_score = 21
+        game.away_score = 17
+    db.commit()
+    db.close()
+
+    _login(client, "boss@example.com")
+    response = client.get("/results")
+    assert response.status_code == 200
+    assert "Scenarios open once" not in response.text
+    assert "still to be played" in response.text
+    assert "0 games still to play" in response.text
+
+
 def test_scenarios_panel_visible_shows_placement_percentages(client, world, session_factory):
     _login(client, "player@example.com")
     client.post("/picks", data=_valid_submission(world["game_ids"]))

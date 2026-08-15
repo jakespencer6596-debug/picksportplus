@@ -3538,3 +3538,88 @@ reasoning above; no attempt to make `doctor`'s preview check exit non-zero or fa
 since every other `doctor` check is informational only and this phase kept that same contract;
 no UI-facing "preview is stale" banner anywhere a visitor could see, since staleness is an
 operator concern surfaced by `doctor`, not something to expose to an anonymous visitor.
+
+### Phase 9, verifying prior fixes against live data
+
+Done directly by the orchestrating session, not delegated: this phase is fundamentally about
+hands-on verification with evidence, which is exactly what a real browser session against a
+seeded database is for, rather than something to hand to a fresh agent with no eyes on the
+running app. Set up a throwaway seeded database (`seed-admin` plus `seed-demo`, the real 2025
+weeks 5/6/7 fixtures), ran the live dev server, and drove it in an actual Chrome tab.
+
+**Inverse scoring:** confirmed directly on `/results?week=5` (fully scored). The leaderboard's
+own copy states "Low score wins," Dana Whitfield sits in first with the lowest points-against
+total (22) and is marked "WINNER," and the full ranking (22, 26, 35, 37, 40, 59, 63) is
+strictly ascending. A non-submitter (Casey Nolan) shows "No picks submitted" rather than a
+bare number, matching SPEC's own explicit UI rule; the underlying maximum-penalty arithmetic
+itself is unit tested exhaustively in `tests/test_scoring.py`, already passing, not re-derived
+here.
+
+**15 of 20:** confirmed a real, valid 15-pick submission renders correctly (Dana Whitfield's
+picks list has exactly 15 rows). Rejection of a 14 or 16 pick submission is not something a
+one-off browser click usefully re-proves beyond what `tests/test_app.py`/`tests/test_scoring.py`
+already assert with the exact boundary cases; relied on that existing, passing coverage rather
+than reproducing it by hand.
+
+**Two-step pick entry:** confirmed live at desktop width. Tapping a team fills it green with a
+check; typing a confidence number updates the chip and the "N of 15 winners chosen" progress
+bar live; a picked row moves out of the "NOT PICKED" group automatically. Exercised the
+up/down accessible fallback buttons directly (not a drag simulation, which is not practical to
+drive reliably through this session's automation tooling): clicking a row's up arrow moved it
+above its neighbor and both rows' confidence chips recalculated correctly, matching
+`app/static/app.js`'s `renumber()` (`pickedCount - index`, scoped to picked rows only, exactly
+as documented). One self-caught false alarm during this check is recorded here so a future
+session does not repeat the confusion: the first read of the resulting screenshot looked like
+a swap had not happened, until re-checking which row's button coordinate had actually been
+clicked confirmed the reorder and renumbering were both correct all along. Did not get a real
+360 pixel viewport confirmed: this session's `resize_window` call reported success and shrank
+the OS window, but `window.innerWidth` inside the page never actually changed from the desktop
+size, so a genuine mobile-width check could not be completed this way. Not treated as a defect
+in the app: this interaction predates this remediation entirely (part of the original,
+SPEC-driven build, already carrying its own 360/768/1280 responsive design requirement), and
+nothing in phases 0 through 8 touched `picks.html`'s markup or CSS in a way that would put its
+existing responsiveness at risk. Flagged here as a testing-tool limitation, not a product gap,
+for Phase 10's own manual sweep to pick up with better tooling if available.
+
+**Player-major results grid:** confirmed directly. The picks table's own header reads exactly
+"PLAYER 15 14 13 12 11 10 9 8 7 6 5 4 3 2 1," one row per player, columns descending from
+`picks_required` to 1, matching SPEC Section 9 precisely.
+
+**Payouts:** confirmed the known ladder via `python -m app.cli payouts-show --pool 2` directly
+against the seeded demo pool: weekly 2,775.00 (56.06% of pot), bowl 400.00 (8.08%), season
+points 1,155.00 (23.33%), season wins 620.00 (12.53%), grand total and pot both exactly
+4,950.00, unallocated 0.00, matching the phase's required figures exactly. Also confirmed live
+on `/standings`: the season wins award correctly splits a tie (Dana Whitfield and Marcus Reyes
+tied for first both show 255 dollars, half of the combined 325 plus 185 first-and-second pool),
+direct visual proof the tie-split rule from SPEC 10b is really running, not just unit tested.
+Did not re-derive "a snapshot does not move when the pot changes" live (a temporal check that
+does not fit a single browser pass); relied on `tests/test_payout_service.py`'s existing,
+passing frozen-snapshot coverage for that specific claim.
+
+**Scenarios: a real, live defect found and fixed.** Week 5 (fully scored, 20 of 20 games
+final, 0 remaining) rendered "Scenarios open once 5 games are final. 20 of 5 final so far." on
+`/results`, which is actively misleading: it names a threshold (final games) that is already
+exceeded, `20 >= 5`, giving no hint that the actual, opposite reason the panel is hidden is
+that there are zero games left to build a scenario around (`app/services/scenarios.py`'s
+`panel_thresholds_met` gates on `remaining_count >= scenarios_min_remaining_games` too, and a
+fully scored week always fails that half of the check). `app/templates/results.html`'s pending
+state now branches: once the final-games threshold is already met, it names the real blocker
+("Scenarios need at least N games still to be played" / "0 games still to play... every
+placement is already decided") instead of repeating the final-games message past the point it
+stopped being the true reason. New test:
+`test_scenarios_panel_pending_message_distinguishes_not_enough_remaining_games`
+(`tests/test_app.py`). This fix is folded into this phase's own verification work rather than a
+separate commit, since it was found and fixed in the same pass, unlike Phase 6's demo-pool
+anchor date fix which came from a genuinely separate, later session.
+
+**Season and weekly tabs:** confirmed directly. `/standings` shows only season-scoped content
+(season standings plus the two season award panels); `/results` shows only week-scoped content
+(that week's scoreboard, leaderboard, and picks grid); neither page repeats the other's data.
+Every table's column headers are real `<th>` elements with the "click a column heading to
+sort" convention already stated in each table's own caption text, matching SPEC's requirement;
+did not click through every single column of every table by hand, since the sort behavior
+itself is a generic, shared piece of JS (`app/static/app.js`'s `sortTableRows`) already
+exercised by this codebase's existing test suite rather than a per-page concern worth
+re-deriving column by column.
+
+Test count after Phase 9: 1074 (+1 over Phase 8's 1073, +135 over the Phase 0 baseline).
