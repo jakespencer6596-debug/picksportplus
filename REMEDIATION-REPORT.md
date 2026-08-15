@@ -24,7 +24,7 @@ September 12, 2026.
 | 3 | Preseason / test week support | Done | `1a6c199` |
 | 4 | Split site admin vs commissioner | Done | `5cb32c4` |
 | 5 | Move provider controls to site admin | Done | `957d718` |
-| 6 | Fix slate build interaction | Pending | |
+| 6 | Fix slate build interaction | Done | `e5bc767` (+ `e862eff` fix) |
 | 7 | Transactional email | Pending | |
 | 8 | First-run experience | Pending | |
 | 9 | Verify prior fixes against live data | Pending | |
@@ -146,6 +146,20 @@ September 12, 2026.
   timings rather than a guess. Log line and script output not committed (a one-off throwaway
   script against a scratch database, not part of the app or the test suite).
 - Test count after Phase 6: 1017 (+9 over Phase 5's 1008, +78 over the Phase 0 baseline).
+- **Live-tested a real click in a real browser** (the sub-agent had no browser tool available
+  and flagged this explicitly, see DECISIONS.md): confirmed a precisely targeted mouse click on
+  "Build the slate" sends `POST /league/slate/build` and lands back on the built week, verified
+  against both the local server's access log and the browser's own network panel, not a
+  screenshot alone. Two false negatives during that testing were self-inflicted (a stale click
+  coordinate after scrolling landed on the wrong element), recorded in DECISIONS.md so they are
+  not mistaken for a real defect by a future session.
+- **Found and fixed a real, separate bug while doing that testing:** the demo pool
+  (`app/services/demo.py`) never set `Pool.week1_anchor_date`, so a real "Build the slate"
+  click against it always hit Phase 2's refusal. Harmless (confirmed no existing data was
+  touched) but confusing, and would have shipped on every deploy since `render.yaml` reseeds
+  this exact pool. Fixed in a separate commit `e862eff` (not folded into Phase 6's own commit,
+  since it is a Phase 2 gap, not a Phase 6 defect), with a regression test. Test count after
+  this fix: 1018.
 
 ## Ambiguity decisions
 
