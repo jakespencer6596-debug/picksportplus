@@ -3834,3 +3834,46 @@ new link format and opening line. Full gate re-run clean: `ruff check .`, `black
 emoji scans clean.
 
 Test count after this follow-up: 1083 (+9).
+
+### Phase 12 follow-up, seed-admin no longer creates a duplicate pool after a join code rotation
+
+Found live on the real production pool, while checking whether the real "PickSportPlus" league
+was fully working end to end (the user's own ask). Two pools both named "PickSportPlus" existed
+on `picksportplus-live`'s real database: the real one (join code rotated away from the
+`DEFAULT_JOIN_CODE` env value at some point, real commissioner attached, a real test player,
+a real built Week 1 slate) and a second, completely empty one still holding the original
+`DEFAULT_JOIN_CODE` value, with zero members and zero picks.
+
+**Root cause.** `seed_admin` (`app/cli.py`, runs on every boot in production, chained into the
+start command between the migration and the server) decided whether its default pool already
+existed by looking up a `Pool` row whose `join_code` matched `DEFAULT_JOIN_CODE` exactly. A
+commissioner rotating or hand-setting their own join code from `/league/members` is an
+ordinary, expected, explicitly supported action (Section 10, the Join code panel). The moment
+that happened, the *next* redeploy's `seed_admin` run could no longer find the pool it had
+already seeded, and silently created a second one instead, since nothing else about the check
+distinguished "no pool exists yet" from "the pool that exists no longer matches this one
+mutable field." This would keep recurring on every future redeploy that happened to follow a
+join code rotation, for as long as the deployment lives.
+
+**Fix.** Match on "does any real (non-preview) pool already exist" instead, ordered by `id` so
+the oldest one wins if this is ever run against data that predates the fix (never true again
+going forward, but a fresh migration/redeploy of an existing older environment could hit this
+once). `is_preview` pools are excluded, since that hidden fixture is never the seeded default
+and must never satisfy this check on its own; a real pool must still be created if only the
+preview pool exists. The rotation itself is left completely alone, exactly as `auto_publish`
+already was (see `test_seed_admin_is_idempotent_and_leaves_auto_publish_alone_on_a_rerun`,
+Phase 5): `seed_admin`'s job is to guarantee a pool exists once, never to keep re-asserting
+anything about it afterward.
+
+**Cleanup on production**, done directly against the real database via Render's web shell
+after explicit confirmation from the user (the same pattern as the earlier `DATABASE_URL` and
+commissioner-attachment fixes in this file): verified the orphaned pool held zero members and
+zero picks across every week before deleting it, so nothing of value was at risk. The real pool
+(commissioner attached, real test player, real slate) was never touched.
+
+New tests: rotating a pool's join code between two `seed_admin` runs must never produce a
+second pool, and the hidden preview pool must never be mistaken for the real seeded default
+when it is the only pool present. Full gate clean: `ruff check .`, `black --check .`,
+`pytest -q` 1085 passed (+2 over 1083), em dash and emoji scans clean.
+
+Test count after this follow-up: 1085 (+2).

@@ -122,7 +122,15 @@ def seed_admin() -> None:
                 user.role = "admin"
             _echo(f"Admin user {email} already exists.")
 
-        pool = db.scalar(select(Pool).where(func.upper(Pool.join_code) == code))
+        # Matched on "does any real pool already exist", never on the current join code:
+        # a commissioner rotating or hand-setting their join code (an ordinary, expected
+        # action from /league/members) is not this command's business to react to. Matching
+        # by join_code used to mean that the very next redeploy after a rotation could not
+        # find the pool it already seeded, and silently created a second, empty, orphaned
+        # "PickSportPlus" pool instead of recognizing the real one. is_preview is excluded
+        # since that pool is a separate, hidden fixture, never the seeded default. See
+        # DECISIONS.md.
+        pool = db.scalar(select(Pool).where(Pool.is_preview.is_(False)).order_by(Pool.id).limit(1))
         if pool is None:
             pool = Pool(
                 name=settings.default_pool_name,

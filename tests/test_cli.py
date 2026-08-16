@@ -229,6 +229,78 @@ def test_seed_admin_is_idempotent_and_leaves_auto_publish_alone_on_a_rerun(
         session.close()
 
 
+def test_seed_admin_recognizes_its_pool_even_after_the_join_code_rotates(isolated_db, monkeypatch):
+    """Real bug, found live in production: a commissioner rotating their own join code from
+    /league/members (an ordinary, expected action) used to mean the next redeploy's
+    seed_admin, matching on the current join code, could no longer find the pool it already
+    seeded and silently created a second, empty, orphaned "PickSportPlus" pool instead. Fixed
+    by matching on "does any real pool already exist" rather than the mutable join code. See
+    DECISIONS.md."""
+    _configure_admin_credentials(monkeypatch)
+
+    from app.cli import seed_admin
+
+    seed_admin()
+
+    session = isolated_db()
+    try:
+        pool = session.scalar(select(Pool))
+        pool.join_code = "ROTATED1"
+        session.commit()
+        original_pool_id = pool.id
+    finally:
+        session.close()
+
+    seed_admin()
+
+    session = isolated_db()
+    try:
+        pools = session.scalars(select(Pool)).all()
+        assert len(pools) == 1, "a second pool must never be created for an existing deployment"
+        assert pools[0].id == original_pool_id
+        assert pools[0].join_code == "ROTATED1"  # the rotation itself is left alone
+    finally:
+        session.close()
+
+
+def test_seed_admin_ignores_the_preview_pool_when_looking_for_its_own(isolated_db, monkeypatch):
+    """The hidden is_preview pool must never be mistaken for the real seeded default: if it
+    were the only pool present, seed_admin still needs to create a real one."""
+    _configure_admin_credentials(monkeypatch)
+
+    session = isolated_db()
+    try:
+        session.add(
+            Pool(
+                name="PickSportPlus Preview",
+                join_code="PREVIEWX",
+                season_year=2025,
+                num_games_per_week=20,
+                target_nfl=8,
+                target_ncaaf=12,
+                sports=["nfl", "ncaaf"],
+                timezone="America/New_York",
+                current_week=1,
+                is_preview=True,
+            )
+        )
+        session.commit()
+    finally:
+        session.close()
+
+    from app.cli import seed_admin
+
+    seed_admin()
+
+    session = isolated_db()
+    try:
+        real_pools = session.scalars(select(Pool).where(Pool.is_preview.is_(False))).all()
+        assert len(real_pools) == 1
+        assert real_pools[0].join_code == "TESTCODE"
+    finally:
+        session.close()
+
+
 def test_ensure_preview_pool_creates_a_hidden_pool_with_seed_admin_defaults(isolated_db):
     """seed-preview's own build step needs the network (ESPN), which this offline test suite
     never touches (tests/conftest.py's force_offline_mode). ensure_preview_pool itself is
