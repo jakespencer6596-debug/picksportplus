@@ -3787,3 +3787,50 @@ build status alone.
 
 Test count after this follow-up: 1074 (no application code changed; this was live
 infrastructure configuration and verification only).
+
+### Phase 12 follow-up, the commissioner invite link now works for an existing account
+
+Found live, by hand: the user's own real site admin account needed attaching as commissioner
+of the real "PickSportPlus" pool, and the app had no way to do it. `POST /site/leagues/new`'s
+"attach an existing user by email" only runs at league creation time; the commissioner invite
+link (`/register?commissioner_code=...`) only ever created a brand new account, and
+`register_submit`'s own existing-email check ("An account already uses that email. Sign in
+instead.") was a dead end: signing in did not do anything with the commissioner code, since
+nothing carried it through. Fixed directly for this one account with a one-off script run in
+Render's web shell (see the Phase 12 follow-up entry above this one), which is exactly the kind
+of manual workaround this fix removes the need for going forward.
+
+**The user asked for the underlying flow fixed properly, not just worked around again.** New
+`GET`/`POST /accept-commissioner?code=...` (`app/routers/auth.py`): signed out, offers sign in
+or create an account, both carrying the code through; signed in, shows a one-click accept that
+attaches a `PoolMember` (creating one at `role_in_pool="commissioner"`, or promoting an existing
+membership in place, idempotently, if already a member or already the commissioner). A site
+admin is refused with an explanation rather than silently ignored, since they structurally can
+never hold a `PoolMember` row. `register_submit`'s existing-email-plus-commissioner-code case
+now redirects straight to `/login?next=/accept-commissioner?code=...` instead of dead-ending in
+place, so the exact scenario that needed a manual fix now completes on its own.
+
+**Copy rewritten to the user's own wording**, verbatim intent: the commissioner invite email
+and the `/accept-commissioner` page both now read as thanking the recipient for joining
+PickSportPlus and registering to create a league, with the link taking them to sign in or
+create an account, replacing the older "you have been invited, create your commissioner
+account" phrasing that only ever described the new-account path. Every place the invite link
+itself was generated or displayed (the email body in `app/routers/leagues.py`, the copy-link
+panel on `/site/leagues` in `app/templates/admin/leagues.html`) was updated together, so there
+is no longer a second, stale copy of the old `/register?commissioner_code=...` URL anywhere.
+
+**Why promote in place rather than refuse a pre-existing membership.** An invited address that
+already happens to be a plain member (or even a co-commissioner) of the same pool has an
+unambiguous invite in hand; refusing it or silently no-opping would just reproduce the same
+dead end this fix exists to close. Promoting is a one-line, reversible change to
+`role_in_pool`, not a destructive action.
+
+New tests in `tests/test_app.py`: the existing-email-plus-commissioner-code redirect, the
+signed-out choice page, an invalid code, attaching a brand new member, promoting an existing
+member, idempotency for an already-commissioner, refusing a site admin on both the GET and the
+POST, and requiring sign-in on the POST. Plus one test locking the invite email's body to the
+new link format and opening line. Full gate re-run clean: `ruff check .`, `black --check .`
+(after reformatting the two touched files), `pytest -q` 1083 passed (+9 over 1074), em dash and
+emoji scans clean.
+
+Test count after this follow-up: 1083 (+9).

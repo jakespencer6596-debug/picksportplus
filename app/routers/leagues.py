@@ -354,12 +354,17 @@ def email_commissioner_invite(
         pool.commissioner_invite_code = _fresh_commissioner_invite_code(db, exclude_pool_id=pool.id)
         db.flush()
 
-    link = f"{settings.base_url}/register?commissioner_code={pool.commissioner_invite_code}"
-    subject = f"You're invited to commission {pool.name} on PickSportPlus"
+    # /accept-commissioner, not straight to /register: that route works for a brand new
+    # account and an already-registered address alike (sign in, then get attached), where
+    # /register?commissioner_code=... alone only ever handled the brand new case. See
+    # DECISIONS.md.
+    link = f"{settings.base_url}/accept-commissioner?code={pool.commissioner_invite_code}"
+    subject = f"Thanks for joining PickSportPlus, {pool.name} is ready for you"
     body = (
         "Hey,\n\n"
-        f"You have been invited to become the commissioner of {pool.name} on PickSportPlus. "
-        f"Create your commissioner account with this link:\n\n{link}\n\n"
+        f"Thanks for joining PickSportPlus and registering to create a league. {pool.name} is "
+        "ready for you to set up and run as commissioner.\n\n"
+        f"Sign in if you already have an account, or create one here:\n\n{link}\n\n"
         "See you on the leaderboard."
     )
     try:

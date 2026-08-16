@@ -2895,6 +2895,181 @@ def test_register_with_no_commissioner_code_is_unchanged_from_todays_behavior(cl
     assert joined.headers["location"] == "/picks"
 
 
+def test_register_with_an_existing_email_and_commissioner_code_redirects_to_accept_flow(
+    client, world, session_factory
+):
+    """The dead end this closes: an invited address that already has an account used to get
+    a plain "sign in instead" error with no way to actually finish becoming commissioner.
+    Now it redirects straight to sign-in with the commissioner code carried through."""
+    db = session_factory()
+    pool = db.get(Pool, world["pool_id"])
+    pool.commissioner_invite_code = "COMMISH1"
+    db.commit()
+    db.close()
+
+    response = client.post(
+        "/register",
+        data={
+            "display_name": "Whoever",
+            "email": "player@example.com",  # already exists, world fixture
+            "password": "hunter2hunter2!",
+            "commissioner_code": "commish1",
+        },
+    )
+    assert response.status_code == 303
+    assert response.headers["location"] == "/login?next=%2Faccept-commissioner%3Fcode%3DCOMMISH1"
+
+
+def test_accept_commissioner_form_signed_out_shows_sign_in_and_create_account(
+    client, world, session_factory
+):
+    db = session_factory()
+    pool = db.get(Pool, world["pool_id"])
+    pool.commissioner_invite_code = "COMMISH1"
+    db.commit()
+    db.close()
+
+    response = client.get("/accept-commissioner?code=COMMISH1")
+    assert response.status_code == 200
+    assert "Sign in" in response.text
+    assert "Create an account" in response.text
+    assert "Test Pool" in response.text
+
+
+def test_accept_commissioner_form_invalid_code_redirects_to_login(client, world):
+    response = client.get("/accept-commissioner?code=NOTREAL1")
+    assert response.status_code == 303
+    assert response.headers["location"] == "/login"
+
+
+def test_accept_commissioner_submit_attaches_a_user_with_no_prior_membership(
+    client, world, session_factory
+):
+    db = session_factory()
+    pool = db.get(Pool, world["pool_id"])
+    pool.commissioner_invite_code = "COMMISH1"
+    outsider = _make_user(db, "outsider@example.com", "Outsider")
+    db.commit()
+    db.close()
+
+    _login(client, "outsider@example.com")
+    response = client.post("/accept-commissioner", data={"code": "commish1"})
+    assert response.status_code == 303
+    assert response.headers["location"] == "/league"
+
+    db = session_factory()
+    member = db.scalar(
+        select(PoolMember).where(
+            PoolMember.pool_id == world["pool_id"], PoolMember.user_id == outsider.id
+        )
+    )
+    assert member is not None
+    assert member.role_in_pool == "commissioner"
+    db.close()
+
+
+def test_accept_commissioner_submit_promotes_an_existing_member(client, world, session_factory):
+    """player@example.com is already a plain member of the world pool; accepting the
+    commissioner invite promotes the existing row rather than erroring or duplicating it."""
+    db = session_factory()
+    pool = db.get(Pool, world["pool_id"])
+    pool.commissioner_invite_code = "COMMISH1"
+    db.commit()
+    db.close()
+
+    _login(client, "player@example.com")
+    response = client.post("/accept-commissioner", data={"code": "commish1"})
+    assert response.status_code == 303
+
+    db = session_factory()
+    member = db.scalar(
+        select(PoolMember).where(
+            PoolMember.pool_id == world["pool_id"], PoolMember.user_id == world["player_id"]
+        )
+    )
+    assert member.role_in_pool == "commissioner"
+    db.close()
+
+
+def test_accept_commissioner_submit_is_a_no_op_for_an_existing_commissioner(
+    client, world, session_factory
+):
+    db = session_factory()
+    pool = db.get(Pool, world["pool_id"])
+    pool.commissioner_invite_code = "COMMISH1"
+    db.commit()
+    db.close()
+
+    _login(client, "boss@example.com")  # world fixture's commissioner, but also is_admin
+
+    db = session_factory()
+    non_admin_commish = _make_user(db, "commish2@example.com", "Second Commish")
+    db.add(
+        PoolMember(
+            pool_id=world["pool_id"], user_id=non_admin_commish.id, role_in_pool="commissioner"
+        )
+    )
+    db.commit()
+    db.close()
+
+    _login(client, "commish2@example.com")
+    response = client.post("/accept-commissioner", data={"code": "commish1"})
+    assert response.status_code == 303
+
+    db = session_factory()
+    member = db.scalar(
+        select(PoolMember).where(
+            PoolMember.pool_id == world["pool_id"], PoolMember.user_id == non_admin_commish.id
+        )
+    )
+    assert member.role_in_pool == "commissioner"
+    db.close()
+
+
+def test_accept_commissioner_refuses_the_site_admin(client, world, session_factory):
+    """A site admin can never hold a PoolMember row (Post-launch fixes, see DECISIONS.md):
+    both the GET and the POST redirect them to /site/leagues instead of attaching one. Uses a
+    fresh admin, not the world fixture's boss@example.com, which already carries its own
+    PoolMember row set up for unrelated tests."""
+    db = session_factory()
+    pool = db.get(Pool, world["pool_id"])
+    pool.commissioner_invite_code = "COMMISH1"
+    fresh_admin = _make_user(db, "otheradmin@example.com", "Other Admin", role="admin")
+    db.commit()
+    db.close()
+
+    _login(client, "otheradmin@example.com")
+
+    get_response = client.get("/accept-commissioner?code=COMMISH1")
+    assert get_response.status_code == 303
+    assert get_response.headers["location"] == "/site/leagues"
+
+    post_response = client.post("/accept-commissioner", data={"code": "commish1"})
+    assert post_response.status_code == 303
+    assert post_response.headers["location"] == "/site/leagues"
+
+    db = session_factory()
+    member = db.scalar(
+        select(PoolMember).where(
+            PoolMember.pool_id == world["pool_id"], PoolMember.user_id == fresh_admin.id
+        )
+    )
+    assert member is None
+    db.close()
+
+
+def test_accept_commissioner_submit_requires_sign_in(client, world, session_factory):
+    db = session_factory()
+    pool = db.get(Pool, world["pool_id"])
+    pool.commissioner_invite_code = "COMMISH1"
+    db.commit()
+    db.close()
+
+    response = client.post("/accept-commissioner", data={"code": "commish1"})
+    assert response.status_code == 303
+    assert response.headers["location"].startswith("/login")
+
+
 def test_rotating_commissioner_invite_code_never_touches_join_code_and_vice_versa(
     client, world, session_factory
 ):
@@ -3912,6 +4087,27 @@ def test_commissioner_invite_email_sends_for_the_site_admin(client, world, monke
     )
     assert response.status_code == 303
     assert "commissioner-code/email" not in response.headers["location"]
+
+
+def test_commissioner_invite_email_links_to_accept_commissioner_not_register(
+    client, world, session_factory, monkeypatch
+):
+    """The invite link must work for an already-registered address, not only a brand new
+    one: /accept-commissioner (sign in or register) rather than /register?commissioner_code=
+    alone. See DECISIONS.md."""
+    _enable_mail(monkeypatch)
+    captured = {}
+    monkeypatch.setattr(
+        mail, "_call_resend_api", lambda **kwargs: captured.setdefault("text", kwargs["text"])
+    )
+    _login(client, "boss@example.com")
+    client.post(
+        f"/site/leagues/{world['pool_id']}/commissioner-code/email",
+        data={"email": "newcommish@example.com"},
+    )
+    assert "/accept-commissioner?code=" in captured["text"]
+    assert "/register?commissioner_code=" not in captured["text"]
+    assert "Thanks for joining PickSportPlus" in captured["text"]
 
 
 def test_player_invite_email_is_commissioner_only(client, world):

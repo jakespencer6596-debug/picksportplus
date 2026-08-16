@@ -6,6 +6,7 @@ import datetime as dt
 import hashlib
 import re
 import secrets
+from urllib.parse import urlencode
 
 from fastapi import APIRouter, Depends, Form, Request
 from fastapi.responses import RedirectResponse
@@ -252,8 +253,27 @@ def register_submit(
     # created at all without a code; now that a codeless account is always a safe, poolless
     # preview rather than membership in anything, there is nothing left for it to block here.
 
-    if not errors and db.scalar(select(User).where(User.email == address)) is not None:
-        errors.append("An account already uses that email. Sign in instead.")
+    if not errors:
+        existing = db.scalar(select(User).where(User.email == address))
+        if existing is not None:
+            if commissioner_pool is not None:
+                # A real account already exists for this address: the plain "sign in
+                # instead" error would otherwise be a dead end, since register_submit
+                # never attaches a commissioner PoolMember to an account it does not
+                # itself create. Send them to sign in with the commissioner code carried
+                # through, so /accept-commissioner can finish the job once they are
+                # authenticated. See DECISIONS.md.
+                flash(
+                    request,
+                    f"An account already uses {address}. Sign in to accept the "
+                    f"commissioner invite for {commissioner_pool.name}.",
+                    "info",
+                )
+                next_path = (
+                    f"/accept-commissioner?code={commissioner_pool.commissioner_invite_code}"
+                )
+                return RedirectResponse(f"/login?{urlencode({'next': next_path})}", status_code=303)
+            errors.append("An account already uses that email. Sign in instead.")
 
     if errors:
         return render(
@@ -304,6 +324,86 @@ def register_submit(
         return RedirectResponse("/picks", status_code=303)
     flash(request, "Account created. Look around, then join a league whenever you're ready.")
     return RedirectResponse("/picks", status_code=303)
+
+
+# Accepting a commissioner invite as an existing account ---------------------
+
+
+@router.get("/accept-commissioner")
+def accept_commissioner_form(
+    request: Request,
+    db: Session = Depends(get_db),
+    user: User | None = Depends(get_current_user),
+):
+    """The other half of the commissioner invite link (register_form/register_submit above
+    handle the brand new account case). Reached either directly from the invite email, or
+    via /login?next=... once register_submit redirects an already-registered address here.
+    Public (no require_user): a signed out visitor sees a sign-in-or-register choice rather
+    than being forced through one path. See DECISIONS.md."""
+    code = request.query_params.get("code", "")
+    pool = _find_pool_by_commissioner_code(db, code)
+    if pool is None:
+        flash(
+            request, "That commissioner link is not valid. Check it with the site admin.", "error"
+        )
+        return RedirectResponse("/login", status_code=303)
+    if user is not None and user.is_admin:
+        # Structurally can never hold a PoolMember row (Post-launch fixes, see
+        # DECISIONS.md): a site admin already reaches every league as commissioner from
+        # /site/leagues, so this link has nothing left to do for them.
+        flash(
+            request,
+            "Site admins already act as commissioner for every league from /site/leagues; "
+            "this invite link is for a regular player account.",
+            "info",
+        )
+        return RedirectResponse("/site/leagues", status_code=303)
+    return render(
+        request,
+        "auth/accept_commissioner.html",
+        {"pool": pool, "code": code},
+        current_user=user,
+    )
+
+
+@router.post("/accept-commissioner")
+def accept_commissioner_submit(
+    request: Request,
+    code: str = Form(""),
+    db: Session = Depends(get_db),
+    user: User = Depends(require_user),
+):
+    pool = _find_pool_by_commissioner_code(db, code)
+    if pool is None:
+        flash(
+            request, "That commissioner link is not valid. Check it with the site admin.", "error"
+        )
+        return RedirectResponse("/login", status_code=303)
+    if user.is_admin:
+        flash(
+            request,
+            "Site admins already act as commissioner for every league from /site/leagues.",
+            "info",
+        )
+        return RedirectResponse("/site/leagues", status_code=303)
+
+    member = db.scalar(
+        select(PoolMember).where(PoolMember.pool_id == pool.id, PoolMember.user_id == user.id)
+    )
+    if member is None:
+        db.add(PoolMember(pool_id=pool.id, user_id=user.id, role_in_pool="commissioner"))
+        db.commit()
+        flash(request, f"You are the commissioner of {pool.name}. Let's get your league set up.")
+    elif member.role_in_pool == "commissioner":
+        flash(request, f"You are already commissioner of {pool.name}.")
+    else:
+        # A pre-existing membership (player or co-commissioner) is promoted in place rather
+        # than rejected: the invite is unambiguous about the intended role, and there is
+        # nothing to lose by honoring it.
+        member.role_in_pool = "commissioner"
+        db.commit()
+        flash(request, f"You are now commissioner of {pool.name}.")
+    return RedirectResponse("/league", status_code=303)
 
 
 # Joining an additional pool -------------------------------------------------

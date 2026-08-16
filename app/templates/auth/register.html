@@ -66,7 +66,14 @@
         <button class="btn btn-primary" type="submit">Create account</button>
       </form>
 
-      <p class="auth-alt muted">Already a member? <a href="/login">Sign in</a>.</p>
+      <p class="auth-alt muted">
+        Already a member?
+        {% if commissioner_pool %}
+          <a href="/login?next={{ ('/accept-commissioner?code=' + commissioner_code) | urlencode }}">Sign in</a>.
+        {% else %}
+          <a href="/login">Sign in</a>.
+        {% endif %}
+      </p>
     </div>
   </div>
 </div>

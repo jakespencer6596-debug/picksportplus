@@ -1,0 +1,41 @@
+{% extends "base.html" %}
+{% block title %}Commissioner invite. {{ APP_NAME }}{% endblock %}
+{% block body_class %}page-auth{% endblock %}
+
+{% block content %}
+<div class="auth-wrap">
+  <div class="card auth-card">
+    <div class="card-body">
+      <p class="eyebrow">Become a commissioner</p>
+      <h1 class="page-title">Thanks for joining PickSportPlus</h1>
+
+      {% if current_user %}
+        <p class="muted auth-intro">
+          You are signed in as {{ current_user.display_name }}. Accept this invite to become
+          commissioner of {{ pool.name }} and get your league set up.
+        </p>
+        <form method="post" action="/accept-commissioner" class="stack">
+          <input type="hidden" name="code" value="{{ code }}">
+          <button class="btn btn-primary" type="submit">
+            Accept and commission {{ pool.name }}
+          </button>
+        </form>
+      {% else %}
+        <p class="muted auth-intro">
+          You have been invited to register and create a league on PickSportPlus, as
+          commissioner of {{ pool.name }}. Sign in if you already have an account, or create
+          one to get started.
+        </p>
+        <div class="stack">
+          <a class="btn btn-primary" href="/login?next={{ ('/accept-commissioner?code=' + code) | urlencode }}">
+            Sign in
+          </a>
+          <a class="btn btn-secondary" href="/register?commissioner_code={{ code }}">
+            Create an account
+          </a>
+        </div>
+      {% endif %}
+    </div>
+  </div>
+</div>
+{% endblock %}

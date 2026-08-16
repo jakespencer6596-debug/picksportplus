@@ -61,7 +61,7 @@
                         Link for a new commissioner<span class="visually-hidden">, {{ pool.name }}</span>
                       </label>
                       <input class="input" type="text" id="commish-link-{{ pool.id }}" readonly
-                             value="{{ base_url }}/register?commissioner_code={{ pool.commissioner_invite_code }}">
+                             value="{{ base_url }}/accept-commissioner?code={{ pool.commissioner_invite_code }}">
                       <div class="row">
                         <button type="button" class="btn btn-secondary btn-sm"
                                 data-copy="#commish-link-{{ pool.id }}">Copy link</button>
@@ -72,10 +72,11 @@
                         </form>
                       </div>
                       <p class="form-hint">
-                        Anyone who opens this link can create a commissioner account for
-                        {{ pool.name }}. It works for more than one person and stays open until
-                        you generate a new one, which retires this link straight away. Separate
-                        from the join code above, that one only ever adds a regular player.
+                        Anyone who opens this link becomes commissioner of {{ pool.name }},
+                        creating a new account or signing in to an existing one first. It works
+                        for more than one person and stays open until you generate a new one,
+                        which retires this link straight away. Separate from the join code
+                        above, that one only ever adds a regular player.
                       </p>
                       <form method="post" action="/site/leagues/{{ pool.id }}/commissioner-code/email"
                             class="inline-form">
