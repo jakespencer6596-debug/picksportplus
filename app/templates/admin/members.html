@@ -124,7 +124,7 @@ See you on the leaderboard.
           Link for a new commissioner<span class="visually-hidden">, {{ pool.name }}</span>
         </label>
         <input class="input" type="text" id="commissioner-link" readonly
-               value="{{ base_url }}/register?commissioner_code={{ pool.commissioner_invite_code }}">
+               value="{{ base_url }}/accept-commissioner?code={{ pool.commissioner_invite_code }}">
         <div class="row">
           <button type="button" class="btn btn-secondary btn-sm" data-copy="#commissioner-link">
             Copy link
@@ -134,11 +134,12 @@ See you on the leaderboard.
           </form>
         </div>
         <p class="form-hint">
-          Anyone who opens this link creates their own commissioner account for {{ pool.name }},
-          with the same full powers you have. No approval step here, since making their own
-          account is itself the confirmation. For someone who should help you run this pool
-          with narrower power instead, invite them as a co-commissioner from the roster below:
-          that needs their acceptance first, and they can never manage another commissioner.
+          Anyone who opens this link becomes commissioner of {{ pool.name }}, with the same
+          full powers you have, creating a new account or signing in to an existing one first.
+          No approval step here, since making or signing in to their own account is itself the
+          confirmation. For someone who should help you run this pool with narrower power
+          instead, invite them as a co-commissioner from the roster below: that needs their
+          acceptance first, and they can never manage another commissioner.
         </p>
       {% else %}
         <form method="post" action="/league/commissioner-code" class="inline-form">

@@ -435,6 +435,41 @@ def test_monte_carlo_never_exceeds_the_hard_cap():
     assert report.elapsed_seconds < 2.0
 
 
+def test_monte_carlo_after_an_aborted_exhaustive_attempt_still_respects_the_hard_cap():
+    """Regression test for a real bug: when R <= MAX_EXHAUSTIVE_REMAINING but too slow to
+    finish exhaustively (a large pool at R around 20, a very plausible mid-week shape), the
+    Monte Carlo fallback used to size its own sample budget off a fixed fraction of the
+    ORIGINAL time_budget_seconds, oblivious to how much the exhaustive attempt above it had
+    already spent before aborting. Since the exhaustive abort fraction and the Monte Carlo
+    stop fraction were both 0.75 of that same original total, the fallback routinely
+    committed to more samples than the time actually left could finish, overshooting the
+    hard cap (reproduced directly on real hardware: 2.0-2.1s against a 2.0s budget, every
+    run, not a rare timing fluke). 40 players at R = 20, the largest R exhaustive is ever
+    attempted for, reliably makes the exhaustive attempt too slow to finish inside the
+    default 2 second budget, forcing this exact fallback path rather than the R = 24 tests
+    above, which skip the exhaustive attempt entirely and never exercise it.
+    """
+    final_outcomes = [final(g, "home") for g in range(1, 3)]
+    remaining = [RemainingGame(game_id=g, spread_home=1.5, league="nfl") for g in range(3, 23)]
+    picks = {
+        p: [pick(g, "home" if (g + p) % 2 == 0 else "away", 22 - g) for g in range(1, 23)]
+        for p in range(1, 41)
+    }
+
+    start = time.perf_counter()
+    report = compute_scenario_report(
+        picks, final_outcomes, remaining, mode="inverse", picks_required=20
+    )
+    elapsed = time.perf_counter() - start
+
+    assert report.method == "monte_carlo"
+    assert report.is_estimate
+    # A small margin over the 2.0s hard cap covers ordinary measurement/scheduling jitter,
+    # not the ~100ms+ overshoot the bug produced every single run.
+    assert elapsed < 2.15
+    assert report.elapsed_seconds < 2.15
+
+
 def test_monte_carlo_sample_count_respects_the_requested_target():
     picks, remaining = _decoy_picks_and_games(23)
     report = compute_scenario_report(

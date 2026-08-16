@@ -712,6 +712,29 @@ def test_upsert_games_with_no_rivalries_configured_never_pins(db):
     assert rows[0].pinned is False
 
 
+def test_upsert_games_handles_a_repeated_event_id_within_one_payload(db):
+    """Defensive regression test: existing was built once from the DB before the loop and
+    never updated as new Game rows were added inside it, so if a single provider payload
+    ever repeated the same event_id twice (never observed in a real capture, but nothing
+    about the payload shape rules it out), the second occurrence would attempt a second
+    insert against the DB's own UniqueConstraint("week_id", "espn_event_id") instead of
+    updating the row the first occurrence just created, raising an unhandled IntegrityError
+    that aborts the whole slate build for real games alongside the duplicate."""
+    pool = _pool(db, rivalries=[])
+    week = _week_row(db, pool)
+    first = _rivalry_game("evt1", "Duke", "Wake Forest")
+    second = _rivalry_game("evt1", "Duke", "Wake Forest")
+
+    rows = ingest.upsert_games(db, week, [first, second], {}, pool)
+
+    # No crash, and both occurrences resolve to the one real row (upsert_games appends once
+    # per input game, deliberately not deduplicating its own return value, so what matters is
+    # that they are the SAME row, not two): the DB itself only ever ends up with one Game.
+    assert rows[0] is rows[1]
+    saved = db.query(Game).filter(Game.week_id == week.id, Game.espn_event_id == "evt1").all()
+    assert len(saved) == 1
+
+
 def test_a_commissioners_manual_unpin_of_a_rivalry_game_survives_a_rebuild(db):
     """Decision (DECISIONS.md, Phase 5): auto-pin only fires the first time a game row is
     created. A commissioner who deliberately un-pins a rivalry game while reviewing the

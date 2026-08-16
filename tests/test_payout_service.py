@@ -345,6 +345,69 @@ def test_rerunning_score_week_for_pool_creates_no_duplicates_and_no_amount_drift
     assert awards_after[0].amount == amount_after_first == Decimal("50.00")
 
 
+def test_score_week_for_pool_leaves_a_frozen_award_stale_without_an_actor(db):
+    """Regression test for a real bug: a commissioner correcting a result after a week
+    already scored (voiding a game, fixing a bad final, then re-running results) recomputed
+    standings correctly but left the frozen PayoutAward rows from the first pass showing the
+    pre-correction winner and amount forever, with no in-product way to fix them, because the
+    freeze block only ever ran on the very first "open/locked -> scored" transition. Flipping
+    both games' winners here simulates exactly that correction: Alice, who swept both games
+    on the first pass, now sweeps neither, and Bob, who missed both, now sweeps both.
+    """
+    pool, week, alice, bob = _build_and_score_week(db)
+    commissioner = _user(db, "Commissioner")
+    _member(db, pool, commissioner, role="commissioner")
+
+    [original_award] = list(
+        db.query(PayoutAward).filter(PayoutAward.pool_id == pool.id, PayoutAward.week_id == week.id)
+    )
+    assert original_award.user_id == alice.id
+    marked = mark_paid(db, original_award.id, commissioner)
+    original_paid_at = marked.paid_at
+    assert original_paid_at is not None
+
+    # The correction: both games' results are reversed, exactly what set_void + a corrected
+    # final followed by "Refresh results" produces. Bob now sweeps both games Alice used to.
+    games = list(db.query(Game).filter(Game.week_id == week.id))
+    for game in games:
+        game.winner = "away" if game.winner == "home" else "home"
+    db.flush()
+
+    # Without an actor (a stray or overlapping call, never a real path today but the safe
+    # default this wiring must preserve): standings recompute, but the frozen award is left
+    # exactly as it was, still crediting Alice.
+    unattributed = score_week_for_pool(db, pool, week)
+    db.flush()
+    assert unattributed.payouts_recalculated is False
+    awards_after_unattributed = list(
+        db.query(PayoutAward).filter(PayoutAward.pool_id == pool.id, PayoutAward.week_id == week.id)
+    )
+    assert len(awards_after_unattributed) == 1
+    assert awards_after_unattributed[0].amount == Decimal("50.00")
+    assert awards_after_unattributed[0].user_id == alice.id
+    assert awards_after_unattributed[0].recalculated_at is None
+
+    # With the commissioner's own "Refresh results" action (the only real caller that ever
+    # passes an actor), the frozen figures are brought back in line with the correction: a
+    # new award for Bob appears, and Alice's paid_at is preserved rather than silently reset
+    # or duplicated, matching recalculate_awards's own money-safety guarantee.
+    attributed = score_week_for_pool(db, pool, week, actor=commissioner)
+    db.flush()
+    assert attributed.payouts_recalculated is True
+    assert "recalculated" in attributed.summary().lower()
+
+    awards_after = list(
+        db.query(PayoutAward).filter(PayoutAward.pool_id == pool.id, PayoutAward.week_id == week.id)
+    )
+    assert len(awards_after) == 2
+    by_user = {a.user_id: a for a in awards_after}
+    assert by_user[bob.id].amount == Decimal("50.00")
+    assert by_user[bob.id].recalculated_by_user_id == commissioner.id
+    assert by_user[alice.id].id == original_award.id
+    assert by_user[alice.id].amount == Decimal("50.00")
+    assert by_user[alice.id].paid_at == original_paid_at
+
+
 def test_bowl_week_snapshots_under_bowl_scope_not_weekly(db):
     pool, week, alice, bob = _build_and_score_week(db, is_bowl_week=True)
 

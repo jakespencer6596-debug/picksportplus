@@ -3877,3 +3877,129 @@ when it is the only pool present. Full gate clean: `ruff check .`, `black --chec
 `pytest -q` 1085 passed (+2 over 1083), em dash and emoji scans clean.
 
 Test count after this follow-up: 1085 (+2).
+
+### Phase 13, four-agent adversarial bug sweep before real-money launch
+
+The user asked, in their own words, for a genuinely thorough scan before treating this build as
+ready to run for real money starting the season: not a reflexive "yes it's ready," but an actual
+hunt, fixes for anything real, and an honest verdict either way. Four independent review passes
+ran in parallel, one per subsystem (scoring/slate/scenarios, payouts, auth/permissions/mail,
+ingest/providers/CLI/cron), each told to read the real implementation rather than trust its own
+tests, and to report confidence level per finding rather than pad the list. Four real, confirmed
+issues came back; a fifth item (`SECRET_KEY`) needed live verification rather than a code fix.
+Everything below was fixed, tested, and gated before this entry was written.
+
+**A commissioner correcting a result after a week already finished scoring could never fix the
+payout figures that had already been frozen.** `set_void` and the "Refresh results" button
+(`/league/slate`) were both always allowed to run after a week reached `status="scored"`, and
+`score_week_for_pool` (`app/services/results.py`) correctly recomputed every player's
+`WeekEntry` on a repeat call, so the live leaderboard always showed the correction. But the
+payout freeze block was gated on `week.status != "scored"`, which is only ever true once, so a
+second call silently skipped `snapshot_awards` entirely. `recalculate_awards`
+(`app/services/payouts.py`) already existed as the one deliberate, attributed overwrite path
+(it preserves `paid_at` so a commissioner never loses payment tracking) but nothing in the app
+ever called it: no router, no CLI command, no button, exactly as `app/routers/payouts.py`'s own
+docstring already said ("POST /league/payouts/recalculate is still not built here"). A
+commissioner who voided a bad result and re-ran results would see standings update correctly
+and the payout summary, the thing they actually use to Venmo people, keep showing the
+pre-correction winner and amount forever, with no in-product way to fix it.
+
+Fix: `score_week_for_pool` now takes an optional `actor: User | None = None`. When it runs
+against a week whose status was already `"scored"` *before* this call, and an actor was passed,
+it calls `recalculate_awards` for that week's scope (plus both season scopes on a bowl week)
+instead of doing nothing. When no actor is passed, exactly the prior behavior: a stray or
+overlapping call touches nothing, which is what keeps this from firing off the unattended cron
+path (`_cron_pass` in `app/cli.py` never passes one, and never hands an already-scored week to
+`score_week_for_pool` in the first place). `/league/run/results` (`app/routers/admin.py`), the
+only real trigger for this today, now passes the signed-in commissioner as `actor`. A new
+`ScoreReport.payouts_recalculated` flag surfaces in the flashed summary line ("Payout amounts
+were recalculated to match this correction.") so the commissioner sees it happened, not just
+infers it from a changed dollar figure days later.
+
+New test: `test_score_week_for_pool_leaves_a_frozen_award_stale_without_an_actor`
+(`tests/test_payout_service.py`) reverses both games' winners after an initial scoring pass
+(the same shape a void-then-refetch correction produces), confirms an unattributed rerun leaves
+the original award exactly as it was, then confirms an attributed rerun creates the new
+winner's award, preserves the original award's `paid_at`, and sets
+`payouts_recalculated`/`recalculated_by_user_id` correctly.
+
+**A commissioner's own self-service invite link on `/league/members` still pointed at the old,
+already-fixed-everywhere-else `/register?commissioner_code=...` URL.** The Phase 12 follow-up
+above this one fixed the emailed invite and the site-admin leagues panel to link to
+`/accept-commissioner?code=...`, but missed this third call site, the "Add another
+commissioner" panel commissioners see and copy-link from directly on their own roster page. A
+recipient already signed in when they open this link hits `/register`, which immediately
+redirects a signed-in user to `/picks` (`app/routers/auth.py`), silently dropping the invite
+with no error and nothing to click. Fixed in `app/templates/admin/members.html`: the href and
+its help text now match `app/templates/admin/leagues.html`'s already-corrected copy. New test,
+`test_members_page_commissioner_invite_link_uses_accept_commissioner_not_register`
+(`tests/test_app.py`), and the existing
+`test_co_commissioner_cannot_see_the_commissioner_invite_link` updated to assert against the
+new URL shape instead of the stale one.
+
+**The Monte Carlo scenario engine's 2 second hard cap did not reliably hold on the fallback
+path from an aborted exhaustive attempt.** `app/scenarios.py`'s exhaustive placement-odds sweep
+(attempted whenever the number of remaining games is at or under `MAX_EXHAUSTIVE_REMAINING`,
+20) aborts and falls back to Monte Carlo sampling if it is still running at 75% of the total
+time budget. The fallback then sized its own sample budget as 75% of that *same original*
+total, with no regard for how much of it the aborted exhaustive attempt had already spent.
+Reproduced directly on real hardware at R = 20 with 40 players (a large pool with a lot of the
+season still ahead, an entirely ordinary shape): the exhaustive attempt burned about 1.6 of the
+2.0 second budget before aborting, leaving roughly 0.4 seconds actually free, while the
+fallback sized itself for 1.5 seconds regardless, consistently overshooting the hard cap to
+2.0-2.1 seconds on every run, not a rare flake. No existing test forced this specific
+abort-then-fallback path (the R = 24 tests skip the exhaustive attempt entirely). Fixed by
+sizing the fallback's sample budget off the time actually remaining
+(`hard_deadline - time.monotonic()`) at the moment it starts, not a fixed fraction of the
+original total. New test,
+`test_monte_carlo_after_an_aborted_exhaustive_attempt_still_respects_the_hard_cap`
+(`tests/test_scenarios.py`), reproduces the same R = 20 / 40 player shape and asserts both wall
+clock and `report.elapsed_seconds` stay within a small margin of the 2 second cap.
+
+**`run-cron` always exited 0, even when every provider call failed for every pool.** ESPN
+timeouts and similar failures were already caught and turned into a `ResultsReport.warning`
+inside `fetch_results`, but `app/cli.py`'s `_cron_pass` never even echoed those warnings for
+the per-week live loop (only `sync_week`'s warnings were printed), and nothing anywhere made
+the process exit non-zero regardless. An extended provider outage would show as an unbroken
+string of green "successful" runs on Render's own cron dashboard while nothing was actually
+being ingested for as long as the outage lasted, the same class of silent, unattended failure
+as the `seed_admin` duplicate-pool bug fixed in the entry above this one, just surfaced as "no
+failure signal" instead of "wrong record matched." Fixed: `_cron_pass` now echoes every
+`fetch_results` warning (it already echoed `sync_week`'s) and returns whether the pool it just
+ran completed warning-free; `run_cron` aggregates that across every real pool plus the preview
+pool and raises `typer.Exit(code=1)` at the end if any warning fired anywhere, so Render's own
+"Runs" tab reflects it. New test,
+`test_run_cron_exits_non_zero_when_a_provider_warning_is_raised` (`tests/test_cli.py`), fakes a
+`fetch_results` warning and asserts `run_cron` raises `typer.Exit` with `exit_code == 1`.
+
+**Defensive fix, not a confirmed live bug: `upsert_games` could raise an unhandled
+`IntegrityError` on a provider payload that repeated the same `event_id` twice.**
+`app/services/ingest.py`'s `existing` lookup dict was built once from the database before the
+loop and never updated as new `Game` rows were added inside it, so a second occurrence of the
+same `espn_event_id` in one response would attempt a second insert against the DB's own
+`UniqueConstraint("week_id", "espn_event_id")` instead of updating the row the first occurrence
+just created, aborting the whole slate build. Never observed in a real ESPN capture and every
+existing fixture is well-formed, so this was left as low-probability rather than confirmed, but
+the fix (record the new row into `existing` immediately after creating it) is a one-line,
+zero-risk hardening against a payload shape nothing rules out. New test,
+`test_upsert_games_handles_a_repeated_event_id_within_one_payload` (`tests/test_ingest.py`).
+
+**`SECRET_KEY` verified, not a code bug.** One review flagged that `app/config.py`'s
+`SECRET_KEY` default (`"dev-only-insecure-key-change-me"`) has no production enforcement the
+way `has_admin_credentials` explicitly rejects placeholder admin credentials, and that
+Starlette's session cookie signing is only as safe as this value: if it were ever left at the
+default in production, any session cookie, including an admin's, could be forged. Checked
+directly against `picksportplus-live` via Render's web shell, printing only a boolean and a
+length, never the value itself: `SECRET_KEY set: True`, `length: 32`, `is insecure default:
+False`. No code or infrastructure change needed; noted here since the question was real and is
+now answered, not just assumed.
+
+**Not fixed, a known and accepted gap for a friends-group pool.** No rate limiting or
+brute-force protection on `/login`. Bcrypt's own per-attempt cost is the only friction today.
+Worth knowing about, not worth building for the season's actual size and threat model without
+being asked.
+
+Full gate clean after all of the above: `ruff check .`, `black --check .`, `pytest -q` 1090
+passed (+5 over 1085), em dash and emoji scans clean.
+
+Test count after this follow-up: 1090 (+5).

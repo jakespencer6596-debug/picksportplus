@@ -13,7 +13,7 @@ from dataclasses import dataclass, field
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.models import Game, Pick, Pool, PoolMember, Week, WeekEntry, utcnow
+from app.models import Game, Pick, Pool, PoolMember, User, Week, WeekEntry, utcnow
 from app.providers import espn
 from app.providers.http import ProviderError
 from app.scoring import GameOutcome, PickInput, score_week, weekly_winner_ids
@@ -45,6 +45,7 @@ class ScoreReport:
     scored_games: int = 0
     winners: list[str] = field(default_factory=list)
     week_complete: bool = False
+    payouts_recalculated: bool = False
 
     def summary(self) -> str:
         text = (
@@ -55,6 +56,8 @@ class ScoreReport:
             text += " Week winner: " + ", ".join(self.winners) + "."
         if self.week_complete:
             text += " The week is complete."
+        if self.payouts_recalculated:
+            text += " Payout amounts were recalculated to match this correction."
         return text
 
 
@@ -142,8 +145,16 @@ def fetch_results(db: Session, pool: Pool, week: Week) -> ResultsReport:
 # Scoring --------------------------------------------------------------------
 
 
-def score_week_for_pool(db: Session, pool: Pool, week: Week) -> ScoreReport:
-    """Recompute every week_entry for the week. Safe to run repeatedly."""
+def score_week_for_pool(
+    db: Session, pool: Pool, week: Week, actor: User | None = None
+) -> ScoreReport:
+    """Recompute every week_entry for the week. Safe to run repeatedly.
+
+    actor identifies who is triggering this specific call and is only ever used for one
+    thing: deciding whether a call that lands on a week that was ALREADY "scored" before
+    this call started is allowed to recalculate that week's frozen PayoutAward rows (see
+    the freeze block below). It has no effect on the first pass that scores a week.
+    """
     report = ScoreReport(week_number=week.week_number)
 
     slate = list(db.scalars(select(Game).where(Game.week_id == week.id, Game.in_slate.is_(True))))
@@ -216,7 +227,8 @@ def score_week_for_pool(db: Session, pool: Pool, week: Week) -> ScoreReport:
     playable = [g for g in slate if g.status not in ("final", "void")]
     if slate and not playable:
         report.week_complete = True
-        if week.status != "scored":
+        already_scored = week.status == "scored"
+        if not already_scored:
             week.status = "scored"
             week.scored_at = utcnow()
 
@@ -245,6 +257,22 @@ def score_week_for_pool(db: Session, pool: Pool, week: Week) -> ScoreReport:
             if week.is_bowl_week:
                 payout_service.snapshot_awards(db, pool, "season_points", week=None)
                 payout_service.snapshot_awards(db, pool, "season_wins", week=None)
+        elif actor is not None and not week.is_test_week:
+            # A correction landing after this week already finished scoring once (a game
+            # voided or a bad final fixed via /league/slate's "Refresh results" button, which
+            # is the only caller that ever passes an actor here): standings above were just
+            # recomputed to reflect it, but the PayoutAward rows frozen on the first pass are
+            # still holding the pre-correction figures and would otherwise stay wrong forever,
+            # with no in-product way to fix them. recalculate_awards is this codebase's one
+            # deliberate, attributed overwrite path (see its own docstring); requiring a real
+            # actor here, rather than recalculating on every repeat call, is what keeps this
+            # from firing off the unattended cron path, which never passes one.
+            scope = "bowl" if week.is_bowl_week else "weekly"
+            payout_service.recalculate_awards(db, pool, scope, week, actor)
+            if week.is_bowl_week:
+                payout_service.recalculate_awards(db, pool, "season_points", None, actor)
+                payout_service.recalculate_awards(db, pool, "season_wins", None, actor)
+            report.payouts_recalculated = True
     db.flush()
 
     return report

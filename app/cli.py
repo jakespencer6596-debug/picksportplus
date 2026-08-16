@@ -378,14 +378,21 @@ def score_week_cmd(
     _echo(report.summary())
 
 
-def _cron_pass(db, pool: Pool) -> None:
+def _cron_pass(db, pool: Pool) -> bool:
     """Sync, refresh and score one pool. The one block of work run-cron does per pool,
     factored out so the preview pool (below) goes through the exact same steps, with the
     exact same metered-budget carefulness, as every real pool.
+
+    Returns False if any provider warning was raised along the way, True otherwise.
+    run-cron aggregates this across every pool and exits non-zero on any False, so an
+    ESPN/odds/CFBD outage (or, previously, one that only ever showed up as an unlogged
+    warning on the per-week fetch_results call below) makes Render's own "Runs" dashboard
+    show a failed run instead of looking identical to a clean hour. See DECISIONS.md.
     """
     from app.services.ingest import sync_week
     from app.services.results import fetch_results, score_week_for_pool
 
+    ok = True
     _echo(f"[{pool.name}]")
     report = sync_week(db, pool)
     if report is not None:
@@ -394,6 +401,7 @@ def _cron_pass(db, pool: Pool) -> None:
             _echo(f"  note: {note}")
         for warning in report.warnings:
             typer.secho(f"  warning: {warning}", fg=typer.colors.YELLOW)
+            ok = False
 
     # Refresh and score every week that is still live. Cheap, ESPN only.
     live = list(
@@ -410,8 +418,13 @@ def _cron_pass(db, pool: Pool) -> None:
     for row in live:
         results = fetch_results(db, pool, row)
         _echo(f"  {results.summary()}")
+        for warning in results.warnings:
+            typer.secho(f"  warning: {warning}", fg=typer.colors.YELLOW)
+            ok = False
         score = score_week_for_pool(db, pool, row)
         _echo(f"  {score.summary()}")
+
+    return ok
 
 
 @app.command("run-cron")
@@ -426,6 +439,7 @@ def run_cron(
     from app.services.preview import get_preview_pool
 
     started = dt.datetime.now(dt.UTC)
+    all_ok = True
     with session_scope() as db:
         # is_preview excluded from the real-pool query: an operator command run without an
         # explicit --pool must never silently land on the hidden preview pool, matching
@@ -439,7 +453,7 @@ def run_cron(
             return
 
         for pool in pools:
-            _cron_pass(db, pool)
+            all_ok = _cron_pass(db, pool) and all_ok
 
         # The preview pool (Phase 8 remediation, see DECISIONS.md and app/services/preview.py):
         # refreshed on this same operator-scheduled cadence, once it exists, so it does not go
@@ -450,10 +464,16 @@ def run_cron(
         if pool_id is None:
             preview_pool = get_preview_pool(db)
             if preview_pool is not None:
-                _cron_pass(db, preview_pool)
+                all_ok = _cron_pass(db, preview_pool) and all_ok
 
     elapsed = (dt.datetime.now(dt.UTC) - started).total_seconds()
     _echo(f"Done in {elapsed:.1f}s.")
+    if not all_ok:
+        # A provider warning anywhere above means at least one pool did not get fresh data
+        # this hour. Exiting non-zero is the only thing that makes Render's cron dashboard
+        # show that, rather than a long unbroken string of green "successful" runs while a
+        # real outage sits unnoticed through the season. See _cron_pass's own docstring.
+        raise typer.Exit(code=1)
 
 
 @app.command("usage")

@@ -425,6 +425,17 @@ and there is no separate stored "season complete" flag). All display of a past p
 this frozen table; only the current, still unfinished week may show a live, unsaved
 projection, and it is always labelled "Projected" wherever it renders.
 
+**Recalculation after a correction.** A frozen snapshot never drifts on its own, but a
+commissioner fixing a real mistake (voiding a game, correcting a bad final) after a week has
+already scored needs a way to bring the frozen figures back in line. Clicking "Refresh
+results" (`/league/slate`) on a week that is already `status="scored"` does exactly that: it
+recomputes standings as always, and additionally recalculates that week's payout awards (plus
+both season scopes, on a bowl week) against the corrected standings, in place, preserving any
+`paid_at` already set so a commissioner never loses payment tracking just because a correction
+ran. A rerun that is not attributed to a signed-in commissioner (the unattended cron path, or
+any other caller) never recalculates, only ever freezes on the very first pass, exactly the
+prior behavior; recalculation only ever fires from this one explicit, attributed action.
+
 **Over-allocation warns, never blocks.** The Set Payouts screen (`/admin/payouts`) shows a
 banner naming the exact difference and direction whenever the grand total does not equal the
 pot, but always lets the commissioner save anyway: he may deliberately hold a reserve, or write

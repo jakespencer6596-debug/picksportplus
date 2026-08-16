@@ -1161,7 +1161,7 @@ def run_results(
 
     row = _week_for_action(db, pool, week_id)
     results = fetch_results(db, pool, row)
-    score = score_week_for_pool(db, pool, row)
+    score = score_week_for_pool(db, pool, row, actor=user)
     db.commit()
     flash(request, results.summary())
     flash(request, score.summary())

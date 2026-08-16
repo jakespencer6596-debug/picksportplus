@@ -930,13 +930,21 @@ def compute_scenario_report(
     if players is None:
         method = "monte_carlo"
         is_estimate = True
-        # The Monte Carlo sample count is sized against this fraction of the ORIGINAL
-        # budget regardless of how much the exhaustive attempt above already spent (it
-        # always aborts, if it aborts at all, at _EXHAUSTIVE_ABORT_FRACTION, leaving
-        # meaningfully more than this behind), so the target is a fixed function of the
-        # inputs alone, not of how long the doomed attempt happened to run. See
-        # _run_monte_carlo's docstring for why that determinism matters.
-        mc_budget_seconds = time_budget_seconds * _MONTE_CARLO_STOP_FRACTION
+        # The Monte Carlo sample count must be sized against the time actually left at
+        # this point, not a fixed fraction of the ORIGINAL budget: the exhaustive attempt
+        # above can burn up to _EXHAUSTIVE_ABORT_FRACTION of the whole budget before it
+        # aborts, and _EXHAUSTIVE_ABORT_FRACTION and _MONTE_CARLO_STOP_FRACTION are both
+        # 0.75 of that same total, so sizing this pass off the original total regardless
+        # of what the exhaustive attempt already spent let this routinely commit to more
+        # samples than the real remaining time could finish, overshooting hard_deadline
+        # below (reproduced directly: consistently 2.0-2.1s against a 2.0s budget). Sizing
+        # off the real remaining time keeps the eventual sample count a deterministic
+        # function of the inputs plus how long the (also deterministic, given fixed
+        # inputs) exhaustive attempt took, which is the only thing _run_monte_carlo's own
+        # reproducibility guarantee actually needs.
+        hard_deadline = start + time_budget_seconds
+        remaining_seconds = max(0.0, hard_deadline - time.monotonic())
+        mc_budget_seconds = remaining_seconds * _MONTE_CARLO_STOP_FRACTION
         players, drawn = _run_monte_carlo(
             linear_by_player,
             p_home,
@@ -947,7 +955,7 @@ def compute_scenario_report(
             seed,
             monte_carlo_samples,
             mc_budget_seconds,
-            start + time_budget_seconds,
+            hard_deadline,
         )
         scenario_count = drawn
         total_weight = float(drawn)

@@ -624,6 +624,65 @@ def _bare_pool(session_factory, *, join_code: str) -> int:
         session.close()
 
 
+def test_run_cron_exits_non_zero_when_a_provider_warning_is_raised(isolated_db, monkeypatch):
+    """Regression test for a real bug: run-cron always exited 0, even when every provider
+    call failed for every pool, so an extended ESPN outage would show as an unbroken string
+    of green "successful" runs on Render's own cron dashboard while nothing was actually
+    being ingested all season, the same class of silent, unattended failure as the
+    seed_admin duplicate pool bug fixed earlier this session. fetch_results' own warning
+    (e.g. "Could not refresh NFL scores: ...") is the real signal this was already computing
+    and simply never surfacing past a log line.
+    """
+    import app.services.ingest as ingest_module
+    import app.services.results as results_module
+    from app.cli import run_cron
+    from app.services.results import ResultsReport, ScoreReport
+
+    session = isolated_db()
+    try:
+        pool = Pool(
+            name="Real Pool",
+            join_code="REALPOOL",
+            season_year=2026,
+            sports=["nfl"],
+            timezone="America/New_York",
+            current_week=1,
+        )
+        session.add(pool)
+        session.flush()
+        week = Week(
+            pool_id=pool.id,
+            season_year=2026,
+            week_number=1,
+            label="Week 1",
+            status="open",
+        )
+        session.add(week)
+        session.commit()
+    finally:
+        session.close()
+
+    monkeypatch.setattr(ingest_module, "sync_week", lambda db, pool, *a, **k: None)
+
+    def _fake_fetch_results(db, pool, week):
+        report = ResultsReport(week_number=week.week_number)
+        report.warnings.append(
+            "Could not refresh NFL scores: timeout. The last known results are still shown."
+        )
+        return report
+
+    monkeypatch.setattr(results_module, "fetch_results", _fake_fetch_results)
+    monkeypatch.setattr(
+        results_module,
+        "score_week_for_pool",
+        lambda db, pool, week, actor=None: ScoreReport(week_number=week.week_number),
+    )
+
+    with pytest.raises(typer.Exit) as exc_info:
+        run_cron(pool_id=None)
+    assert exc_info.value.exit_code == 1
+
+
 def test_payouts_preset_seeds_the_known_ladder_and_is_idempotent(isolated_db):
     from app.cli import payouts_preset_cmd
 

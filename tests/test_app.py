@@ -3170,6 +3170,30 @@ def test_members_page_shows_the_invite_link_and_a_working_mailto(client, world):
     assert "—" not in response.text
 
 
+def test_members_page_commissioner_invite_link_uses_accept_commissioner_not_register(
+    client, world, session_factory
+):
+    """Regression test for a real bug: this self-service "Add another commissioner" panel
+    on /league/members still linked to /register?commissioner_code=..., a stale copy of the
+    href this session already fixed on the site-admin leagues panel and the emailed invite
+    (app/routers/leagues.py). A signed-in recipient hitting /register while already
+    authenticated is bounced straight to /picks with the invite silently dropped, no error,
+    nothing to click, so this specific href is worth its own direct assertion rather than
+    trusting the other two call sites to imply this one was updated too.
+    """
+    db = session_factory()
+    pool = db.get(Pool, world["pool_id"])
+    pool.commissioner_invite_code = "COMMCODE1"
+    db.commit()
+    db.close()
+
+    _login(client, "boss@example.com")
+    response = client.get("/league/members")
+    assert response.status_code == 200
+    assert "/accept-commissioner?code=COMMCODE1" in response.text
+    assert "/register?commissioner_code=" not in response.text
+
+
 # Co-commissioner self-service invites with confirmation (post-launch) --------
 #
 # "world"'s only commissioner (boss@example.com) is deliberately also the site admin, which is
@@ -3339,14 +3363,14 @@ def test_co_commissioner_cannot_see_the_commissioner_invite_link(client, session
     _login(client, "coco@example.com")
     response = client.get("/league/members")
     assert response.status_code == 200
-    assert "commissioner_code=COCOCODE" not in response.text
+    assert "/accept-commissioner?code=COCOCODE" not in response.text
     assert "Commissioner invite link" not in response.text
     client.post("/logout")
 
     _login(client, "commish@example.com")
     response = client.get("/league/members")
     assert response.status_code == 200
-    assert "commissioner_code=COCOCODE" in response.text
+    assert "/accept-commissioner?code=COCOCODE" in response.text
     assert "Commissioner invite link" in response.text
 
 

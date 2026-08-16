@@ -635,6 +635,13 @@ def upsert_games(
         if is_new:
             row = Game(week_id=week.id, espn_event_id=game.event_id, league=game.league)
             db.add(row)
+            # Recorded immediately, not just left for the next call: a provider response
+            # that (never observed in practice, but not something the DB's own
+            # UniqueConstraint("week_id", "espn_event_id") can save us from mid-loop)
+            # repeats the same event_id twice in one payload would otherwise attempt a
+            # second insert here instead of updating the row just created, raising an
+            # unhandled IntegrityError that aborts the whole slate build.
+            existing[game.event_id] = row
 
         row.league = game.league
         row.start_time = game.kickoff
