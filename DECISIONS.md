@@ -4033,3 +4033,69 @@ the browser fall through to whatever is next in normal document order. The spec'
 list only exercises this with a complete, valid set of picks, so this distinction never
 changes the tested behavior, it only avoids a worse failure mode (focus silently going
 nowhere) in the incomplete case the spec does not otherwise cover.
+
+**Phase 2, the Season Wins ladder's points tiebreak direction.** The spec's own wording is
+ambiguous between two readings: a hard coded "fewer points always finishes higher," or "points
+break the tie in whichever direction the pool's own scoring mode already treats as better"
+(mirroring the points ladder's own primary direction). Chosen: the pool's own direction
+(`app/services/standings.py._season_components`, `points=_points_sort_key(pool) * row.points`,
+reused unmodified for both ladders). Reasoning: the spec's own worked example ("two players
+tied on wins, different points, fewer points finishes higher") is written against this pool's
+real, default `scoring_mode` ("inverse"), where fewer points genuinely is better, so the
+example itself cannot distinguish the two readings. A hard coded "fewer always wins" would
+silently invert under a `standard`-mode pool (where more points is the good outcome
+everywhere else in the app), which reads as clearly wrong: a Season Wins tiebreak that
+rewards a lower point total in a pool where higher points win every other leaderboard, table,
+and payout in the app would confuse a commissioner immediately. The direction-agnostic
+reading also mirrors what `app/payouts.py`'s own module docstring already insists on for
+`rank_standings`: never bake a direction in, always pass it explicit, sourced from the pool.
+`test_season_wins_ranking_ties_break_on_points_in_the_pools_own_direction` and
+`test_season_wins_ranking_sorts_wins_descending_even_under_inverse_scoring`
+(`tests/test_standings.py`) both exercise this.
+
+**Phase 2, the season tie rule statement only renders under `season_tiebreak_mode == "wins"`.**
+The spec's literal text ("Add a one-line rule statement under the season tables: 'Season ties
+are broken by total weekly wins, then by total points, then by submission time.'") does not
+condition it on the pool's setting, but showing that sentence unconditionally would be false,
+copy-level, for a pool switched to `"split"`, where a season tie still splits the payout
+exactly like a weekly or bowl tie. `app/templates/leaderboard.html` gates the sentence on
+`pool.season_tiebreak_mode == "wins"`, and the "Season awards" panel's own tie note picks up
+the mirror image: "A season place never splits under this pool's tiebreak setting" only when
+`"wins"` is active. A pool copy the app states as fact must be true for that pool, so accuracy
+won over matching the spec's example text byte for byte in the one mode where it would lie.
+
+## Phase 3, season submission time
+
+The rule implemented: a player's submission timestamp for the pool's **final scored week of
+the season** (`app/services/standings.py._season_final_week`: highest `week_number` with
+`status == "scored"` and `is_test_week` false, for the pool's `season_year`; a bowl week
+counts, since this codebase's real season structure is weeks 1-15 plus a week 16 bowl week and
+there is no separate "season complete" flag anywhere else in the schema either, matching how
+`app/services/payouts.py` already treats a bowl week's scoring as the season-scope freeze
+trigger). A player with no `WeekEntry` for that week (never played it, or the week itself does
+not exist yet) sorts last within their tied group, never first and never raising; the season's
+`user_id` tiebreak is the final, always-present fallback so a group where nobody submitted the
+final week still resolves deterministically.
+
+Two alternatives considered and rejected, exactly so a future commissioner (or a future
+change) can swap the rule without re-deriving the tradeoff from scratch:
+
+- **Mean submission time across the season.** Rewards someone who is early most weeks but late
+  once, over someone who is early every single week but happens to submit the final week a few
+  minutes after the first player did on that one occasion. Also needs a defined value for a
+  week a player skipped entirely (average excluding it? counting it as maximally late?), which
+  is its own small ambiguity this rule avoids by only ever looking at one well defined week.
+- **Count of weeks submitted first.** Requires comparing every player against every other
+  player, every week, to determine who was "first" that week, an O(players × weeks) computation
+  for a signal that answers a different question (consistency of being early) than what a
+  tiebreak actually needs (who should be trusted with a razor-thin final placement right now).
+  Also degenerates for a two-week-old season or a mid-season pool with no history yet.
+
+The final-week rule was chosen because it is the cheapest to explain to a group ("last week
+decided it") and the cheapest to compute (one query against one week, not a season-wide scan),
+and because a tiebreak that only matters at all when every earlier level of the chain already
+tied is, by construction, a rare, high-stakes edge case worth a simple, defensible rule over a
+statistically fancier one nobody in the group will intuitively trust anyway. See
+`app/services/standings.py._season_submission_times` for the implementation and
+`tests/test_standings.py`'s `test_season_submission_time_*` tests for the empty cases (a
+non-submitter, an all-non-submitter group, a season with zero scored weeks) required by Phase 3.

@@ -37,7 +37,12 @@ from app.payouts import (
     rank_standings,
     resolve_rule,
 )
-from app.services.standings import season_standings, weekly_leaderboard
+from app.services.standings import (
+    season_points_ranking,
+    season_standings,
+    season_wins_ranking,
+    weekly_leaderboard,
+)
 
 __all__ = [
     "PlayerPayoutRow",
@@ -162,6 +167,18 @@ def _weekly_or_bowl_standings(
 
 
 def _season_points_standings(db: Session, pool: Pool) -> list[Standing]:
+    if pool.season_tiebreak_mode == "wins":
+        # The season ladder already broke every tie outright (weekly wins, then submission
+        # time, then user id, see app/services/standings.py.season_points_ranking): reuse its
+        # rank directly rather than re-deriving one from rank_standings, which only knows
+        # about points and would let a tie reach allocate()'s own splitting logic again.
+        ranked = season_points_ranking(db, pool)
+        return [
+            Standing(
+                user_id=row.user_id, rank=row.rank, metric=Decimal(row.points), submitted_at=None
+            )
+            for row in ranked
+        ]
     rows = season_standings(db, pool)
     # No single instant in this codebase represents "the season started" (there is no stored
     # season-start timestamp anywhere), so every player gets submitted_at=None here, on
@@ -176,6 +193,21 @@ def _season_points_standings(db: Session, pool: Pool) -> list[Standing]:
 
 
 def _season_wins_standings(db: Session, pool: Pool) -> list[Standing]:
+    if pool.season_tiebreak_mode == "wins":
+        # Same reasoning as _season_points_standings above, mirrored for the wins ladder
+        # (season points, then submission time, then user id): reuse the already-broken rank
+        # rather than calling rank_standings ourselves, which would let two players tied on
+        # weekly wins alone reach allocate()'s tie-splitting again.
+        ranked = season_wins_ranking(db, pool)
+        return [
+            Standing(
+                user_id=row.user_id,
+                rank=row.rank,
+                metric=Decimal(row.weekly_wins),
+                submitted_at=None,
+            )
+            for row in ranked
+        ]
     rows = season_standings(db, pool)
     # season_wins ranks by weekly win count, ALWAYS descending, regardless of pool.scoring_mode.
     # StandingRow.rank cannot be reused here: it is always assigned in the pool's points

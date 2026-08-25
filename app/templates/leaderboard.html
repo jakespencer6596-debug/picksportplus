@@ -118,6 +118,12 @@
                 {% if row.possible %}{{ row.accuracy }}{% else %}<span class="no-entry">{{ row.accuracy }}</span>{% endif %}
               </td>
             </tr>
+            {% if row.tiebreak_reason %}
+              <tr class="lb-row lb-tiebreak-row">
+                <td></td>
+                <td colspan="5"><p class="muted lb-tiebreak-note">{{ row.tiebreak_reason }}</p></td>
+              </tr>
+            {% endif %}
           {% endfor %}
         </tbody>
       </table>
@@ -139,6 +145,74 @@
     </div>
   {% endif %}
 </section>
+
+{% if has_scores %}
+  <section class="section" aria-labelledby="season-wins-heading">
+    <div class="section-head">
+      <h2 class="section-title" id="season-wins-heading">Season standings: wins</h2>
+    </div>
+
+    <div class="table-wrap">
+      <table class="table" id="season-wins-table" data-sortable
+             data-default-sort-col="2" data-default-sort-dir="desc">
+        <caption class="visually-hidden">
+          Season standings ranked by total weekly wins{% if pool %}, {{ pool.season_year }} season{% endif %}.
+          Click a column heading to sort.
+        </caption>
+        <thead>
+          <tr>
+            <th scope="col" data-sortable-col data-sort-default-dir="asc" aria-sort="none">Rank</th>
+            <th scope="col" data-sortable-col data-sort-default-dir="asc" aria-sort="none">Player</th>
+            <th scope="col" class="num" data-sortable-col data-sort-default-dir="desc" aria-sort="descending">Weekly wins</th>
+            <th scope="col" class="num" data-sortable-col data-sort-default-dir="{{ points_dir }}" aria-sort="none">
+              {{ "Points against" if pool.scoring_mode == "inverse" else "Points" }}
+            </th>
+            <th scope="col" class="num" data-sortable-col data-sort-default-dir="desc" aria-sort="none">Correct</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for row in season_by_wins %}
+            {% set you = row.is_you or (me is not none and row.user_id == me) %}
+            {% set played = row.weeks_played > 0 %}
+            <tr class="lb-row{{ ' lb-leader' if row.rank == 1 }}{{ ' is-you' if you }}">
+              <td data-label="Rank" data-sort-value="{{ row.rank }}">
+                <span class="rank-badge num{% if row.rank <= 3 %} is-{{ row.rank }}{% endif %}">{{ row.rank }}</span>
+              </td>
+              <td data-label="Player">
+                <span class="lb-name">
+                  <span class="lb-player">{{ row.display_name }}</span>
+                  {% if you %}<span class="pill pill-you">You</span>{% endif %}
+                </span>
+              </td>
+              <td class="num" data-label="Weekly wins" data-sort-value="{{ row.weekly_wins }}">
+                {% if played %}{{ row.weekly_wins }}{% else %}<span class="no-entry">.</span>{% endif %}
+              </td>
+              <td class="num" data-label="Points" data-sort-value="{{ row.points }}">
+                {% if played %}{{ row.points }}{% else %}<span class="no-entry">No entry</span>{% endif %}
+              </td>
+              <td class="num" data-label="Correct" data-sort-value="{{ row.correct }}">
+                {% if played %}{{ row.correct }} of {{ row.possible }}{% else %}<span class="no-entry">.</span>{% endif %}
+              </td>
+            </tr>
+            {% if row.tiebreak_reason %}
+              <tr class="lb-row lb-tiebreak-row">
+                <td></td>
+                <td colspan="4"><p class="muted lb-tiebreak-note">{{ row.tiebreak_reason }}</p></td>
+              </tr>
+            {% endif %}
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  {% if pool.season_tiebreak_mode == "wins" %}
+    <p class="muted lb-note">
+      Season ties are broken by total weekly wins, then by total points, then by submission
+      time.
+    </p>
+  {% endif %}
+{% endif %}
 
 {% if show_season_awards %}
   <section class="section" aria-labelledby="season-awards-title">
@@ -190,14 +264,14 @@
         </div>
       {% endif %}
 
-      {% if season_wins_awards_ordered %}
+      {% if season_wins_awards %}
         <div class="card">
           <div class="card-head"><h3>Season: Wins</h3></div>
           <div class="card-body">
             <div class="table-wrap">
               <table class="table">
                 <caption class="visually-hidden">
-                  Season wins award amounts, ordered by place.
+                  Season wins award amounts, matched against the final season wins rank.
                 </caption>
                 <thead>
                   <tr>
@@ -207,26 +281,23 @@
                   </tr>
                 </thead>
                 <tbody>
-                  {# This page has no wins-ranked StandingRow list to iterate (season is ranked
-                     by points), so display order here comes straight from each frozen award's
-                     own place field: Phase 2's allocation engine already ranked these players
-                     by weekly win count when it resolved the amounts, so re-deriving that
-                     ranking a second time here would be redundant. Only the ORDER on screen
-                     is decided this way, never the amount. #}
-                  {% for amount in season_wins_awards_ordered %}
-                    {% set you = me is not none and amount.user_id == me %}
-                    <tr class="lb-row{{ ' is-you' if you }}">
-                      <td data-label="Rank">
-                        <span class="rank-badge num{% if amount.place <= 3 %} is-{{ amount.place }}{% endif %}">{{ amount.place }}</span>
-                      </td>
-                      <td data-label="Player">
-                        <span class="lb-name">
-                          <span class="lb-player">{{ member_names.get(amount.user_id, "Former member") }}</span>
-                          {% if you %}<span class="pill pill-you">You</span>{% endif %}
-                        </span>
-                      </td>
-                      <td class="num" data-label="Award">{{ amount.amount | money }} dollars</td>
-                    </tr>
+                  {% for row in season_by_wins %}
+                    {% set amount = season_wins_awards.get(row.user_id) %}
+                    {% if amount %}
+                      {% set you = row.is_you or (me is not none and row.user_id == me) %}
+                      <tr class="lb-row{{ ' is-you' if you }}">
+                        <td data-label="Rank">
+                          <span class="rank-badge num{% if amount.place <= 3 %} is-{{ amount.place }}{% endif %}">{{ amount.place }}</span>
+                        </td>
+                        <td data-label="Player">
+                          <span class="lb-name">
+                            <span class="lb-player">{{ row.display_name }}</span>
+                            {% if you %}<span class="pill pill-you">You</span>{% endif %}
+                          </span>
+                        </td>
+                        <td class="num" data-label="Award">{{ amount.amount | money }} dollars</td>
+                      </tr>
+                    {% endif %}
                   {% endfor %}
                 </tbody>
               </table>
@@ -236,8 +307,11 @@
       {% endif %}
     </div>
     <p class="muted lb-note">
-      A tie splits the combined amount for those places evenly, to the cent; any leftover cent
-      goes to whoever submitted their picks earliest.
+      A tie splits the combined amount for those places evenly, to the cent, with any leftover
+      cent going to whoever submitted their picks earliest.
+      {%- if pool.season_tiebreak_mode == "wins" %}
+        A season place never splits under this pool's tiebreak setting: see the rule above.
+      {%- endif %}
     </p>
   </section>
 {% endif %}

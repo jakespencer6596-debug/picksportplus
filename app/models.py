@@ -63,6 +63,11 @@ PAYOUT_ROUNDINGS = ("cent", "dollar", "five")
 # named, stored setting rather than a hard coded constant so a future tiebreak rule needs no
 # migration to switch a pool onto it.
 PAYOUT_TIEBREAKS = ("earliest_submit",)
+# How the two season ladders (season_points, season_wins) settle a tie. "wins": both ladders
+# break a tie outright through the full chain in app/services/standings.py, a season place
+# never splits. "split": the old behavior, tied players share a rank and app/payouts.py's
+# own tie-splitting runs for season scopes exactly as it always has for weekly and bowl.
+SEASON_TIEBREAK_MODES = ("wins", "split")
 
 # The rivalry pairs (Phase 5) that auto-pin themselves onto every rebuilt slate no matter
 # how wide the spread runs: the two the commissioner group named directly (Ohio State vs
@@ -211,6 +216,14 @@ class Pool(Base):
     payout_tiebreak: Mapped[str] = mapped_column(
         String(16), default="earliest_submit", nullable=False
     )
+    # "wins" (default): both season ladders (season_points, season_wins) break a tie outright
+    # through the full chain in app/services/standings.py (weekly wins, then points, then
+    # final-week submission time, then user id), so a season place never splits between two
+    # players any more. "split": the old behavior, tied players share a rank and the payout
+    # engine's own tie-splitting in app/payouts.py.allocate runs for season scopes exactly as
+    # it always has for weekly and bowl. See SPEC.md Section 10b and DECISIONS.md, "Tab entry
+    # and season tiebreak".
+    season_tiebreak_mode: Mapped[str] = mapped_column(String(8), default="wins", nullable=False)
     # The single collector's Venmo handle (no @), "1 person to pay, no multiple accounts" per
     # the group. PoolMember.member_venmo_handle (below) is a different thing: an optional note
     # for the commissioner's own reconciliation, never a second place to pay.
