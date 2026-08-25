@@ -430,3 +430,42 @@ def test_season_ranking_with_zero_scored_weeks_does_not_raise(db):
 
     assert [r.points for r in points_rows] == [0, 0]
     assert len(wins_rows) == 2
+
+
+def test_a_test_weeks_win_never_decides_the_season_wins_tiebreak(db):
+    """Phase 4 regression sweep, item 11: test weeks already score zero toward season points
+    and weekly_wins (test_season_standings_excludes_a_test_weeks_entries, above); this proves
+    that quarantine reaches the new tiebreak-aware ranking too, not just the older
+    season_standings path, since a test week win must never decide real money."""
+    pool = _pool(db)
+    alice, bob = _user(db, "Alice"), _user(db, "Bob")
+    _member(db, pool, alice)
+    _member(db, pool, bob)
+    real_week = _week(db, pool, week_number=1)
+    test_week = Week(
+        pool_id=pool.id,
+        season_year=pool.season_year,
+        week_number=0,
+        label="Test week",
+        status="scored",
+        is_test_week=True,
+    )
+    db.add(test_week)
+    db.flush()
+
+    # Tied on real season points, real weekly wins (both zero real wins), and submission time.
+    # Bob's test week win is the only thing that would separate them if it leaked into the
+    # tiebreak.
+    same_instant = dt.datetime(2026, 12, 1, tzinfo=UTC)
+    _entry(db, pool, real_week, alice, points=10, is_winner=False, submitted_at=same_instant)
+    _entry(db, pool, real_week, bob, points=10, is_winner=False, submitted_at=same_instant)
+    _entry(db, pool, test_week, bob, points=1, is_winner=True)
+
+    wins_rows = season_wins_ranking(db, pool)
+
+    assert {r.display_name for r in wins_rows} == {"Alice", "Bob"}
+    assert all(r.weekly_wins == 0 for r in wins_rows)
+    # Both still fully tied on wins (0) and points (10): the tiebreak falls all the way
+    # through to user id, not to Bob's test week win.
+    assert [r.rank for r in wins_rows] == [1, 2]
+    assert wins_rows[0].tiebreak_reason == "Tiebreak: entry order."
