@@ -4003,3 +4003,33 @@ Full gate clean after all of the above: `ruff check .`, `black --check .`, `pyte
 passed (+5 over 1085), em dash and emoji scans clean.
 
 Test count after this follow-up: 1090 (+5).
+
+## Tab entry and season tiebreak
+
+**Phase 1, front end test harness.** The repo had no front end tests at all before this
+phase. Rather than pull in a full browser automation stack (Playwright) for one behavior
+(keyboard focus movement between plain DOM elements, no real rendering, no animation, no
+network), this adds the minimum: `package.json` declares one dev dependency, `jsdom`, and
+`node --test` (Node's own built in runner, no separate test framework) runs
+`tests/js/pick_navigation.test.js` against it. `node_modules/` is gitignored. This keeps the
+project's own "no bundler" stance (SPEC.md Section 4) intact on the JS side too: nothing here
+is bundled, transpiled, or built, it is still the exact same `app/static/app.js` a browser
+loads, run inside a synthetic DOM instead of a real one. The one real gotcha, worth recording
+so a future test in this file does not silently race: jsdom's `document.readyState` is still
+`"loading"` immediately after constructing a `JSDOM` instance, and `DOMContentLoaded` fires
+asynchronously, not synchronously, exactly like a real browser. `app/static/app.js`'s own
+`init()` is registered on that event, so a test has to wait for it (`setup()` in the test file
+returns a promise that resolves only once `DOMContentLoaded` has actually fired) before
+injecting the script and dispatching any keyboard event, or the event listeners app.js
+registers inside `init()` simply are not attached yet and every assertion fails for a reason
+that has nothing to do with the code under test.
+
+**Phase 1, Tab off the last confidence input.** The spec says "Tab from the last confidence
+input goes to the Lock picks button." `data-lock-open` starts `disabled` until every pick is
+complete and valid (`updateSummary()`), and a disabled element cannot receive focus. Rather
+than intercept Tab and strand focus on a button the player cannot use yet, `onConfInputKeydown`
+only redirects to Lock picks when it is not disabled; otherwise it leaves Tab alone and lets
+the browser fall through to whatever is next in normal document order. The spec's own test
+list only exercises this with a complete, valid set of picks, so this distinction never
+changes the tested behavior, it only avoids a worse failure mode (focus silently going
+nowhere) in the incomplete case the spec does not otherwise cover.
