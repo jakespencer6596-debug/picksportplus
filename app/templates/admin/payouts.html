@@ -226,6 +226,24 @@
           </div>
         </div>
 
+        <div class="form-row">
+          <div class="field">
+            <label class="field-label" for="season_tiebreak_mode">Season tiebreak</label>
+            <select class="select" id="season_tiebreak_mode" name="season_tiebreak_mode">
+              {% for m in SEASON_TIEBREAK_MODES %}
+                <option value="{{ m }}" {% if m == pool.season_tiebreak_mode %}selected{% endif %}>
+                  {{ "Break outright (weekly wins, then points, then submission time)" if m == "wins" else "Split, like a weekly or bowl tie" }}
+                </option>
+              {% endfor %}
+            </select>
+            <p class="form-hint">
+              How a tie on Season: Points or Season: Wins settles. "Break outright" is the
+              default: the tiebreak chain always finds a single winner, so a season place
+              never splits. "Split" restores the old behavior, sharing the combined payout.
+            </p>
+          </div>
+        </div>
+
         <div class="form-actions">
           <button class="btn btn-primary" type="submit">Save pot settings</button>
         </div>

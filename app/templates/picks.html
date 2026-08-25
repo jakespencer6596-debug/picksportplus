@@ -459,6 +459,8 @@
 
     <div class="picks-status" data-save-target aria-live="polite"></div>
 
+    <p class="muted">Tab moves to the next confidence value. Arrow keys pick the winner.</p>
+
     <ol class="game-list" data-sortable data-picks-required="{{ n }}"
         aria-label="{{ week.label }} slate, most confident first">
       {% for game in games %}
@@ -480,7 +482,7 @@
             <span class="game-kick">{{ game.start_time | kickoff(tz) }}</span>
             <div class="conf-controls">
               <label class="conf-field">
-                <span class="visually-hidden">Confidence for {{ game.matchup }}, 1 to {{ n }}</span>
+                <span class="visually-hidden">Confidence for {{ game.away_team }} at {{ game.home_team }}, 1 to {{ n }}</span>
                 <input type="number" inputmode="numeric" class="input conf-input" data-conf-input
                        min="1" max="{{ n }}" step="1" placeholder="-"
                        value="{{ pick.confidence if pick else '' }}">

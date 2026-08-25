@@ -27,9 +27,13 @@ def standings_page(
     user: User = Depends(require_user),
     pool: Pool = Depends(get_active_pool),
 ):
-    from app.services.standings import season_standings
+    from app.services.standings import season_points_ranking, season_wins_ranking
 
-    season = season_standings(db, pool, viewer_id=user.id)
+    season = season_points_ranking(db, pool, viewer_id=user.id)
+    # The Season: Wins ladder (SPEC.md Section 10b), shown as its own ranked table so the
+    # tiebreak note on Section 2's spec (Phase 2, "Tab entry and season tiebreak") has
+    # somewhere to render independent of whether any payout scope has ever been snapshotted.
+    season_by_wins = season_wins_ranking(db, pool, viewer_id=user.id)
 
     # Season award panels (season points and season wins), rebuilt on the new payout engine
     # in app/services/payouts.py (Payout system rebuild, Phase 5). Both panels read only
@@ -41,28 +45,15 @@ def standings_page(
     season_points_awards = {award.user_id: award for award in frozen_season_awards["season_points"]}
     season_wins_awards = {award.user_id: award for award in frozen_season_awards["season_wins"]}
     show_season_awards = bool(season_points_awards) or bool(season_wins_awards)
-    # season is already every pool member (season_standings never drops anyone), so it is a
-    # complete user_id -> display_name lookup for both panels, including the season_wins
-    # panel, whose own display order below is not season's points-ranked order.
-    member_names = {row.user_id: row.display_name for row in season}
-    # The season_wins panel has no pre-ranked-by-wins StandingRow list available on this page
-    # (season is ranked by points). Rather than build a fresh wins ranking from scratch, this
-    # reuses the frozen PayoutAward's own place field, already correctly computed by Phase 2's
-    # allocation engine, purely to decide the panel's on screen ORDER. This never touches or
-    # recomputes any amount, only which row is listed first.
-    season_wins_awards_ordered = sorted(
-        frozen_season_awards["season_wins"], key=lambda award: award.place
-    )
 
     return render(
         request,
         "leaderboard.html",
         {
             "season": season,
+            "season_by_wins": season_by_wins,
             "season_points_awards": season_points_awards,
             "season_wins_awards": season_wins_awards,
-            "season_wins_awards_ordered": season_wins_awards_ordered,
-            "member_names": member_names,
             "show_season_awards": show_season_awards,
         },
         current_user=user,

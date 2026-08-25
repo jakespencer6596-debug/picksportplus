@@ -330,12 +330,53 @@ def test_weekly_payout_weeks_out_of_range_is_rejected(client, world, session_fac
             "weekly_payout_weeks": "31",
             "payout_rounding": "dollar",
             "payout_tiebreak": "earliest_submit",
+            "season_tiebreak_mode": "wins",
         },
     )
     assert response.status_code == 303
     db = session_factory()
     pool = db.get(Pool, world["pool_id"])
     assert pool.weekly_payout_weeks == 15  # unchanged, the model default
+    db.close()
+
+
+def test_season_tiebreak_mode_is_saved(client, world, session_factory):
+    _login(client, "boss@example.com")
+    response = client.post(
+        "/league/payouts/pot",
+        data={
+            "entry_fee": "",
+            "pot_override": "",
+            "weekly_payout_weeks": "15",
+            "payout_rounding": "dollar",
+            "payout_tiebreak": "earliest_submit",
+            "season_tiebreak_mode": "split",
+        },
+    )
+    assert response.status_code == 303
+    db = session_factory()
+    pool = db.get(Pool, world["pool_id"])
+    assert pool.season_tiebreak_mode == "split"
+    db.close()
+
+
+def test_unknown_season_tiebreak_mode_is_rejected(client, world, session_factory):
+    _login(client, "boss@example.com")
+    response = client.post(
+        "/league/payouts/pot",
+        data={
+            "entry_fee": "",
+            "pot_override": "",
+            "weekly_payout_weeks": "15",
+            "payout_rounding": "dollar",
+            "payout_tiebreak": "earliest_submit",
+            "season_tiebreak_mode": "coin-flip",
+        },
+    )
+    assert response.status_code == 303
+    db = session_factory()
+    pool = db.get(Pool, world["pool_id"])
+    assert pool.season_tiebreak_mode == "wins"  # unchanged, the model default
     db.close()
 
 

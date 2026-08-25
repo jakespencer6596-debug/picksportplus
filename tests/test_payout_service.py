@@ -676,3 +676,152 @@ def test_payout_summary_totals_across_scopes_and_reconciles_paid_and_unpaid(db):
     bob_after = {row.user_id: row for row in rows_after}[bob.id]
     assert bob_after.paid_total == Decimal("0")
     assert bob_after.unpaid_total == bob_after.grand_total
+
+
+# Season tiebreak (Phase 2, "Tab entry and season tiebreak") ---------------------------
+
+
+def test_season_points_tie_broken_by_wins_pays_the_full_place_not_a_split(db):
+    """Two players tied on season points used to split 1st and 2nd. Under the pool's default
+    season_tiebreak_mode ("wins"), the one with more weekly wins takes 1st in full and the
+    other takes 2nd in full instead."""
+    pool = _pool(db, scoring_mode="standard")
+    alice = _user(db, "Alice")
+    bob = _user(db, "Bob")
+    _member(db, pool, alice)
+    _member(db, pool, bob)
+
+    week = _week(db, pool)
+    _entry(db, pool, week, alice, points=10, is_winner=True)
+    _entry(db, pool, week, bob, points=10, is_winner=False)
+
+    _rule(db, pool, "season_points", 1, value=Decimal("600"))
+    _rule(db, pool, "season_points", 2, value=Decimal("400"))
+
+    awards = project_awards(db, pool, "season_points")
+    by_user = {a.user_id: a for a in awards}
+
+    assert by_user[alice.id].place == 1
+    assert by_user[alice.id].tied_with == 1
+    assert by_user[alice.id].amount == Decimal("600")
+    assert by_user[bob.id].place == 2
+    assert by_user[bob.id].tied_with == 1
+    assert by_user[bob.id].amount == Decimal("400")
+
+
+def test_season_wins_tie_broken_by_points_pays_the_full_place(db):
+    pool = _pool(db, scoring_mode="inverse")
+    alice = _user(db, "Alice")
+    bob = _user(db, "Bob")
+    _member(db, pool, alice)
+    _member(db, pool, bob)
+
+    week = _week(db, pool)
+    # Both win once, tied on wins; Bob's fewer points (inverse: lower is better) settles it.
+    _entry(db, pool, week, alice, points=20, is_winner=True)
+    _entry(db, pool, week, bob, points=5, is_winner=True)
+
+    _rule(db, pool, "season_wins", 1, value=Decimal("325"))
+    _rule(db, pool, "season_wins", 2, value=Decimal("185"))
+
+    awards = project_awards(db, pool, "season_wins")
+    by_user = {a.user_id: a for a in awards}
+
+    assert by_user[bob.id].place == 1
+    assert by_user[bob.id].amount == Decimal("325")
+    assert by_user[alice.id].place == 2
+    assert by_user[alice.id].amount == Decimal("185")
+
+
+def test_season_tiebreak_mode_split_restores_the_old_splitting_behavior_end_to_end(db):
+    pool = _pool(db, scoring_mode="standard", season_tiebreak_mode="split")
+    alice = _user(db, "Alice")
+    bob = _user(db, "Bob")
+    _member(db, pool, alice)
+    _member(db, pool, bob)
+
+    week = _week(db, pool)
+    _entry(db, pool, week, alice, points=10, is_winner=True)
+    _entry(db, pool, week, bob, points=10, is_winner=False)
+
+    _rule(db, pool, "season_points", 1, value=Decimal("600"))
+    _rule(db, pool, "season_points", 2, value=Decimal("400"))
+
+    awards = project_awards(db, pool, "season_points")
+    by_user = {a.user_id: a for a in awards}
+
+    # Split evenly: (600 + 400) / 2 = 500 each, both at place 1, tied_with 2, exactly the
+    # pre-Phase-2 behavior.
+    assert by_user[alice.id].place == 1
+    assert by_user[alice.id].tied_with == 2
+    assert by_user[alice.id].amount == Decimal("500")
+    assert by_user[bob.id].place == 1
+    assert by_user[bob.id].tied_with == 2
+    assert by_user[bob.id].amount == Decimal("500")
+
+
+def test_weekly_ties_still_split_under_the_default_season_tiebreak_mode(db):
+    """The season tiebreak change must never reach the weekly/bowl scopes: a weekly tie still
+    splits exactly as before, a regression guard for Phase 2."""
+    pool = _pool(db, scoring_mode="standard")
+    alice = _user(db, "Alice")
+    bob = _user(db, "Bob")
+    _member(db, pool, alice)
+    _member(db, pool, bob)
+
+    week = _week(db, pool)
+    _entry(db, pool, week, alice, points=10)
+    _entry(db, pool, week, bob, points=10)
+
+    _rule(db, pool, "weekly", 1, value=Decimal("100"))
+    _rule(db, pool, "weekly", 2, value=Decimal("50"))
+
+    awards = project_awards(db, pool, "weekly", week=week)
+    by_user = {a.user_id: a for a in awards}
+    assert by_user[alice.id].tied_with == 2
+    assert by_user[alice.id].amount == Decimal("75")
+    assert by_user[bob.id].amount == Decimal("75")
+
+
+def test_a_player_who_wins_both_season_ladders_collects_from_both(db):
+    pool = _pool(db, scoring_mode="standard")
+    alice = _user(db, "Alice")
+    bob = _user(db, "Bob")
+    _member(db, pool, alice)
+    _member(db, pool, bob)
+
+    week = _week(db, pool)
+    _entry(db, pool, week, alice, points=10, is_winner=True)
+    _entry(db, pool, week, bob, points=5, is_winner=False)
+
+    _rule(db, pool, "season_points", 1, value=Decimal("600"))
+    _rule(db, pool, "season_wins", 1, value=Decimal("325"))
+
+    points_awards = {a.user_id: a for a in project_awards(db, pool, "season_points")}
+    wins_awards = {a.user_id: a for a in project_awards(db, pool, "season_wins")}
+
+    assert points_awards[alice.id].amount == Decimal("600")
+    assert wins_awards[alice.id].amount == Decimal("325")
+
+
+def test_season_wins_payout_ranking_sorts_descending_under_inverse_scoring(db):
+    """Guards the exact wiring mistake app/payouts.py's own module docstring calls out:
+    season_wins must never inherit the pool's scoring direction, even through the new
+    tiebreak-aware standings path (app/services/standings.py.season_wins_ranking)."""
+    pool = _pool(db, scoring_mode="inverse")
+    alice = _user(db, "Alice")
+    bob = _user(db, "Bob")
+    _member(db, pool, alice)
+    _member(db, pool, bob)
+
+    w1, w2, w3, w4 = (_week(db, pool, week_number=n) for n in (1, 2, 3, 4))
+    _entry(db, pool, w1, alice, points=5, is_winner=True)
+    _entry(db, pool, w1, bob, points=50, is_winner=False)
+    _entry(db, pool, w2, bob, points=50, is_winner=True)
+    _entry(db, pool, w3, bob, points=50, is_winner=True)
+    _entry(db, pool, w4, bob, points=50, is_winner=True)
+
+    _rule(db, pool, "season_wins", 1, value=Decimal("325"))
+
+    awards = project_awards(db, pool, "season_wins")
+    assert awards[0].user_id == bob.id

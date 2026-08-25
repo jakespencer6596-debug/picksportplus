@@ -12,7 +12,12 @@ from __future__ import annotations
 import datetime as dt
 
 from app.models import Pool, PoolMember, User, Week, WeekEntry
-from app.services.standings import season_standings, weekly_leaderboard
+from app.services.standings import (
+    season_points_ranking,
+    season_standings,
+    season_wins_ranking,
+    weekly_leaderboard,
+)
 
 UTC = dt.UTC
 
@@ -75,7 +80,10 @@ def _entry(
     possible: int = 14,
     is_winner: bool = False,
     did_not_submit: bool = False,
+    submitted_at: dt.datetime | None = None,
 ) -> WeekEntry:
+    if submitted_at is None and not did_not_submit:
+        submitted_at = dt.datetime.now(UTC)
     entry = WeekEntry(
         pool_id=pool.id,
         week_id=week.id,
@@ -85,7 +93,7 @@ def _entry(
         possible=possible,
         is_winner=is_winner,
         did_not_submit=did_not_submit,
-        submitted_at=None if did_not_submit else dt.datetime.now(UTC),
+        submitted_at=submitted_at,
     )
     db.add(entry)
     db.flush()
@@ -250,3 +258,353 @@ def test_season_standings_excludes_a_test_weeks_entries(db):
     assert alice_row.possible == 14
     assert alice_row.weeks_played == 1
     assert alice_row.weekly_wins == 1  # the test week's win does not count a second time
+
+
+# Season tiebreak (Phase 2/3, "Tab entry and season tiebreak") -----------------
+
+
+def _weeks(db, pool: Pool, count: int) -> list[Week]:
+    return [_week(db, pool, week_number=n) for n in range(1, count + 1)]
+
+
+def test_season_points_ranking_breaks_a_tie_on_weekly_wins(db):
+    pool = _pool(db)  # default scoring_mode "inverse", default season_tiebreak_mode "wins"
+    alice, bob, carol = _three_players(db, pool)
+    week = _week(db, pool)
+    _entry(db, pool, week, alice, points=10, is_winner=True)
+    _entry(db, pool, week, bob, points=10, is_winner=False)
+    _entry(db, pool, week, carol, points=50)
+
+    rows = season_points_ranking(db, pool)
+    by_name = {r.display_name: r for r in rows}
+
+    assert [r.display_name for r in rows] == ["Alice", "Bob", "Carol"]
+    assert [r.rank for r in rows] == [1, 2, 3]
+    assert by_name["Alice"].tiebreak_reason == "Tiebreak: 1 weekly wins to 0."
+    assert by_name["Bob"].tiebreak_reason == "Tiebreak: 0 weekly wins to 1."
+    assert by_name["Carol"].tiebreak_reason is None
+
+
+def test_season_points_ranking_three_way_tie_orders_by_distinct_win_counts(db):
+    pool = _pool(db)
+    alice, bob, carol = _three_players(db, pool)
+    tie_week, w2, w3, w4 = _weeks(db, pool, 4)
+    for user in (alice, bob, carol):
+        _entry(db, pool, tie_week, user, points=10)
+    # Alice: 3 wins, Carol: 2, Bob: 1, all with zero extra points so the season point total
+    # stays tied at 10 for everyone.
+    for week in (w2, w3, w4):
+        _entry(db, pool, week, alice, points=0, is_winner=True)
+    for week in (w2, w3):
+        _entry(db, pool, week, carol, points=0, is_winner=True)
+    _entry(db, pool, w2, bob, points=0, is_winner=True)
+
+    rows = season_points_ranking(db, pool)
+
+    assert [r.display_name for r in rows] == ["Alice", "Carol", "Bob"]
+    assert [r.rank for r in rows] == [1, 2, 3]
+    assert [r.weekly_wins for r in rows] == [3, 2, 1]
+
+
+def test_season_wins_ranking_ties_break_on_points_in_the_pools_own_direction(db):
+    """Season Wins ladder, two tied on wins, different points. Under the pool's default
+    inverse scoring, fewer points finishes higher, mirroring the points ladder's own
+    direction rather than a hard coded "fewer always wins.\" """
+    pool = _pool(db, scoring_mode="inverse")
+    alice, bob = _user(db, "Alice"), _user(db, "Bob")
+    _member(db, pool, alice)
+    _member(db, pool, bob)
+    week = _week(db, pool)
+    _entry(db, pool, week, alice, points=20, is_winner=True)
+    _entry(db, pool, week, bob, points=5, is_winner=True)
+
+    rows = season_wins_ranking(db, pool)
+    by_name = {r.display_name: r for r in rows}
+
+    assert [r.display_name for r in rows] == ["Bob", "Alice"]
+    assert by_name["Bob"].tiebreak_reason == "Tiebreak: 5 points to 20."
+    assert by_name["Alice"].tiebreak_reason == "Tiebreak: 20 points to 5."
+
+
+def test_season_wins_ranking_sorts_wins_descending_even_under_inverse_scoring(db):
+    """The single easiest wiring mistake here (see app/payouts.py's own module docstring):
+    proves the PRIMARY sort is weekly wins, never the pool's scoring direction, by giving the
+    player with more wins the far worse (higher) inverse points total."""
+    pool = _pool(db, scoring_mode="inverse")
+    alice, bob = _user(db, "Alice"), _user(db, "Bob")
+    _member(db, pool, alice)
+    _member(db, pool, bob)
+    w1, w2, w3, w4 = _weeks(db, pool, 4)
+    _entry(db, pool, w1, alice, points=5, is_winner=True)
+    _entry(db, pool, w1, bob, points=50, is_winner=False)
+    _entry(db, pool, w2, bob, points=50, is_winner=True)
+    _entry(db, pool, w3, bob, points=50, is_winner=True)
+    _entry(db, pool, w4, bob, points=50, is_winner=True)
+
+    rows = season_wins_ranking(db, pool)
+
+    assert rows[0].display_name == "Bob"
+    assert rows[0].rank == 1
+    assert rows[1].display_name == "Alice"
+
+
+def test_season_ranking_split_mode_restores_the_old_shared_rank_behavior(db):
+    pool = _pool(db, season_tiebreak_mode="split")
+    alice, bob, carol = _three_players(db, pool)
+    week = _week(db, pool)
+    _entry(db, pool, week, alice, points=10, is_winner=True)
+    _entry(db, pool, week, bob, points=10, is_winner=False)
+    _entry(db, pool, week, carol, points=50)
+
+    points_rows = season_points_ranking(db, pool)
+    by_name = {r.display_name: r for r in points_rows}
+    assert by_name["Alice"].rank == 1
+    assert by_name["Bob"].rank == 1
+    assert by_name["Carol"].rank == 3
+    assert all(r.tiebreak_reason is None for r in points_rows)
+
+    wins_rows = season_wins_ranking(db, pool)
+    by_name_w = {r.display_name: r for r in wins_rows}
+    assert by_name_w["Alice"].rank == 1
+    assert by_name_w["Bob"].rank == 2
+    assert by_name_w["Carol"].rank == 2
+    assert all(r.tiebreak_reason is None for r in wins_rows)
+
+
+def test_season_submission_time_orders_a_tied_pair_by_the_final_week(db):
+    pool = _pool(db)
+    alice, bob = _user(db, "Alice"), _user(db, "Bob")
+    _member(db, pool, alice)
+    _member(db, pool, bob)
+    week = _week(db, pool)  # week_number=1, status="scored": the season's final week too
+    early = dt.datetime(2026, 12, 1, 10, 0, tzinfo=UTC)
+    late = dt.datetime(2026, 12, 1, 12, 0, tzinfo=UTC)
+    _entry(db, pool, week, alice, points=10, submitted_at=early)
+    _entry(db, pool, week, bob, points=10, submitted_at=late)
+
+    rows = season_points_ranking(db, pool)
+
+    assert [r.display_name for r in rows] == ["Alice", "Bob"]
+    assert rows[0].tiebreak_reason == "Tiebreak: submitted week 1 first."
+    assert rows[1].tiebreak_reason == "Tiebreak: the other player submitted week 1 first."
+
+
+def test_season_submission_time_non_submitter_sorts_last(db):
+    pool = _pool(db)
+    alice, bob = _user(db, "Alice"), _user(db, "Bob")
+    _member(db, pool, alice)
+    _member(db, pool, bob)
+    week = _week(db, pool)
+    _entry(db, pool, week, alice, points=10)
+    _entry(db, pool, week, bob, points=10, did_not_submit=True)
+
+    rows = season_points_ranking(db, pool)
+
+    assert [r.display_name for r in rows] == ["Alice", "Bob"]
+    assert rows[1].tiebreak_reason == "Tiebreak: did not submit week 1."
+
+
+def test_season_submission_time_all_non_submitters_fall_through_to_user_id(db):
+    pool = _pool(db)
+    alice, bob = _user(db, "Alice"), _user(db, "Bob")
+    _member(db, pool, alice)
+    _member(db, pool, bob)
+    week = _week(db, pool)
+    _entry(db, pool, week, alice, points=10, did_not_submit=True)
+    _entry(db, pool, week, bob, points=10, did_not_submit=True)
+
+    rows = season_points_ranking(db, pool)  # must not raise
+
+    assert [r.user_id for r in rows] == sorted(r.user_id for r in rows)
+    assert rows[0].tiebreak_reason == "Tiebreak: entry order."
+
+
+def test_season_ranking_with_zero_scored_weeks_does_not_raise(db):
+    pool = _pool(db)
+    alice, bob = _user(db, "Alice"), _user(db, "Bob")
+    _member(db, pool, alice)
+    _member(db, pool, bob)
+
+    points_rows = season_points_ranking(db, pool)
+    wins_rows = season_wins_ranking(db, pool)
+
+    assert [r.points for r in points_rows] == [0, 0]
+    assert len(wins_rows) == 2
+
+
+def test_a_test_weeks_win_never_decides_the_season_wins_tiebreak(db):
+    """Phase 4 regression sweep, item 11: test weeks already score zero toward season points
+    and weekly_wins (test_season_standings_excludes_a_test_weeks_entries, above); this proves
+    that quarantine reaches the new tiebreak-aware ranking too, not just the older
+    season_standings path, since a test week win must never decide real money."""
+    pool = _pool(db)
+    alice, bob = _user(db, "Alice"), _user(db, "Bob")
+    _member(db, pool, alice)
+    _member(db, pool, bob)
+    real_week = _week(db, pool, week_number=1)
+    test_week = Week(
+        pool_id=pool.id,
+        season_year=pool.season_year,
+        week_number=0,
+        label="Test week",
+        status="scored",
+        is_test_week=True,
+    )
+    db.add(test_week)
+    db.flush()
+
+    # Tied on real season points, real weekly wins (both zero real wins), and submission time.
+    # Bob's test week win is the only thing that would separate them if it leaked into the
+    # tiebreak.
+    same_instant = dt.datetime(2026, 12, 1, tzinfo=UTC)
+    _entry(db, pool, real_week, alice, points=10, is_winner=False, submitted_at=same_instant)
+    _entry(db, pool, real_week, bob, points=10, is_winner=False, submitted_at=same_instant)
+    _entry(db, pool, test_week, bob, points=1, is_winner=True)
+
+    wins_rows = season_wins_ranking(db, pool)
+
+    assert {r.display_name for r in wins_rows} == {"Alice", "Bob"}
+    assert all(r.weekly_wins == 0 for r in wins_rows)
+    # Both still fully tied on wins (0) and points (10): the tiebreak falls all the way
+    # through to user id, not to Bob's test week win.
+    assert [r.rank for r in wins_rows] == [1, 2]
+    assert wins_rows[0].tiebreak_reason == "Tiebreak: entry order."
+
+
+# Phase 5: additional coverage, the mirror image of the inverse-mode cases above ---------
+
+
+def test_season_points_ranking_breaks_a_tie_on_weekly_wins_under_standard_scoring(db):
+    """The mirror of test_season_points_ranking_breaks_a_tie_on_weekly_wins: the tiebreak
+    itself (wins, then points, then submission, then user id) does not depend on scoring
+    mode at all, only the primary points sort does, so the same shape holds under
+    "standard" too."""
+    pool = _pool(db, scoring_mode="standard")
+    alice, bob, carol = _three_players(db, pool)
+    week = _week(db, pool)
+    _entry(db, pool, week, alice, points=10, is_winner=True)
+    _entry(db, pool, week, bob, points=10, is_winner=False)
+    _entry(db, pool, week, carol, points=1)
+
+    rows = season_points_ranking(db, pool)
+    by_name = {r.display_name: r for r in rows}
+
+    assert [r.display_name for r in rows] == ["Alice", "Bob", "Carol"]
+    assert by_name["Alice"].tiebreak_reason == "Tiebreak: 1 weekly wins to 0."
+
+
+def test_season_wins_ranking_ties_break_on_points_under_standard_scoring(db):
+    """The mirror of test_season_wins_ranking_ties_break_on_points_in_the_pools_own_direction:
+    under "standard" scoring, more points is the pool's own "better" direction everywhere
+    else in the app, so more points should finish higher here too, the opposite of the
+    inverse-mode case."""
+    pool = _pool(db, scoring_mode="standard")
+    alice, bob = _user(db, "Alice"), _user(db, "Bob")
+    _member(db, pool, alice)
+    _member(db, pool, bob)
+    week = _week(db, pool)
+    _entry(db, pool, week, alice, points=20, is_winner=True)
+    _entry(db, pool, week, bob, points=5, is_winner=True)
+
+    rows = season_wins_ranking(db, pool)
+    by_name = {r.display_name: r for r in rows}
+
+    assert [r.display_name for r in rows] == ["Alice", "Bob"]
+    assert by_name["Alice"].tiebreak_reason == "Tiebreak: 20 points to 5."
+
+
+def test_season_wins_ranking_three_way_tie_orders_by_distinct_point_totals(db):
+    """The wins ladder's mirror of test_season_points_ranking_three_way_tie_orders_by_
+    distinct_win_counts: three players tied on wins, three different point totals, ordered
+    correctly by the pool's own point direction (inverse: lowest first)."""
+    pool = _pool(db, scoring_mode="inverse")
+    alice, bob, carol = _three_players(db, pool)
+    week = _week(db, pool)
+    _entry(db, pool, week, alice, points=5, is_winner=True)
+    _entry(db, pool, week, bob, points=30, is_winner=True)
+    _entry(db, pool, week, carol, points=15, is_winner=True)
+
+    rows = season_wins_ranking(db, pool)
+
+    assert [r.display_name for r in rows] == ["Alice", "Carol", "Bob"]
+    assert [r.rank for r in rows] == [1, 2, 3]
+
+
+def test_season_final_week_is_the_bowl_week_when_it_is_the_latest_scored_week(db):
+    """Season week structure is weeks 1-15 plus a week 16 bowl week (SPEC.md Section 10b);
+    the submission tiebreak's "final scored week" must resolve to the bowl week once it is
+    the most recently scored real week, not stop at the last regular week."""
+    pool = _pool(db)
+    alice, bob = _user(db, "Alice"), _user(db, "Bob")
+    _member(db, pool, alice)
+    _member(db, pool, bob)
+    regular_week = _week(db, pool, week_number=15)
+    bowl_week = Week(
+        pool_id=pool.id,
+        season_year=pool.season_year,
+        week_number=16,
+        label="Bowl week",
+        status="scored",
+        is_bowl_week=True,
+    )
+    db.add(bowl_week)
+    db.flush()
+
+    early = dt.datetime(2026, 12, 1, 9, 0, tzinfo=UTC)
+    late = dt.datetime(2026, 12, 1, 11, 0, tzinfo=UTC)
+    # Tied on regular season points/wins from week 15; the bowl week decides via submission.
+    _entry(db, pool, regular_week, alice, points=10, submitted_at=early)
+    _entry(db, pool, regular_week, bob, points=10, submitted_at=early)
+    _entry(db, pool, bowl_week, alice, points=0, submitted_at=early)
+    _entry(db, pool, bowl_week, bob, points=0, submitted_at=late)
+
+    rows = season_points_ranking(db, pool)
+
+    assert [r.display_name for r in rows] == ["Alice", "Bob"]
+    assert rows[0].tiebreak_reason == "Tiebreak: submitted week 16 first."
+
+
+def test_season_points_ranking_wins_mode_orders_correctly_with_no_tie_at_all(db):
+    """The tiebreak-aware path must be a no-op, ordering-wise, when nothing is actually
+    tied: a defensive check that switching on season_tiebreak_mode never changes the result
+    for a season with no ties to break."""
+    pool = _pool(db, scoring_mode="inverse")
+    alice, bob, carol = _three_players(db, pool)
+    week = _week(db, pool)
+    _entry(db, pool, week, alice, points=10, is_winner=True)
+    _entry(db, pool, week, bob, points=40)
+    _entry(db, pool, week, carol, points=70)
+
+    rows = season_points_ranking(db, pool)
+
+    assert [r.display_name for r in rows] == ["Alice", "Bob", "Carol"]
+    assert [r.rank for r in rows] == [1, 2, 3]
+    assert all(r.tiebreak_reason is None for r in rows)
+
+
+def test_pool_season_tiebreak_mode_defaults_to_wins(db):
+    """The default this whole feature hinges on: a pool created without setting
+    season_tiebreak_mode explicitly (every pool created before this migration, and every
+    plain `Pool(...)` construction anywhere else in the app) gets outright tiebreaks, never
+    the old splitting behavior, unless a commissioner opts back into "split" by hand."""
+    pool = _pool(db)
+    assert pool.season_tiebreak_mode == "wins"
+
+
+def test_season_wins_ranking_split_mode_three_way_tie_uses_competition_ranking(db):
+    """The split-mode wins ladder's own tie detection (the bug this fixed: _assign_ranks was
+    comparing row.points even when sorting by weekly_wins) with a genuine three-way tie, to
+    prove the skip-ahead rule (competition ranking) still applies on the metric actually
+    sorted by."""
+    pool = _pool(db, season_tiebreak_mode="split")
+    alice, bob, carol = _three_players(db, pool)
+    week = _week(db, pool)
+    # All three tied on wins (1 each), with different points so a points-based tie check
+    # (the bug) would have wrongly kept them all separate instead of sharing rank 1.
+    _entry(db, pool, week, alice, points=5, is_winner=True)
+    _entry(db, pool, week, bob, points=50, is_winner=True)
+    _entry(db, pool, week, carol, points=25, is_winner=True)
+
+    rows = season_wins_ranking(db, pool)
+
+    assert all(r.rank == 1 for r in rows)

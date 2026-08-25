@@ -4003,3 +4003,117 @@ Full gate clean after all of the above: `ruff check .`, `black --check .`, `pyte
 passed (+5 over 1085), em dash and emoji scans clean.
 
 Test count after this follow-up: 1090 (+5).
+
+## Tab entry and season tiebreak
+
+**Phase 1, front end test harness.** The repo had no front end tests at all before this
+phase. Rather than pull in a full browser automation stack (Playwright) for one behavior
+(keyboard focus movement between plain DOM elements, no real rendering, no animation, no
+network), this adds the minimum: `package.json` declares one dev dependency, `jsdom`, and
+`node --test` (Node's own built in runner, no separate test framework) runs
+`tests/js/pick_navigation.test.js` against it. `node_modules/` is gitignored. This keeps the
+project's own "no bundler" stance (SPEC.md Section 4) intact on the JS side too: nothing here
+is bundled, transpiled, or built, it is still the exact same `app/static/app.js` a browser
+loads, run inside a synthetic DOM instead of a real one. The one real gotcha, worth recording
+so a future test in this file does not silently race: jsdom's `document.readyState` is still
+`"loading"` immediately after constructing a `JSDOM` instance, and `DOMContentLoaded` fires
+asynchronously, not synchronously, exactly like a real browser. `app/static/app.js`'s own
+`init()` is registered on that event, so a test has to wait for it (`setup()` in the test file
+returns a promise that resolves only once `DOMContentLoaded` has actually fired) before
+injecting the script and dispatching any keyboard event, or the event listeners app.js
+registers inside `init()` simply are not attached yet and every assertion fails for a reason
+that has nothing to do with the code under test.
+
+**Phase 1, Tab off the last confidence input.** The spec says "Tab from the last confidence
+input goes to the Lock picks button." `data-lock-open` starts `disabled` until every pick is
+complete and valid (`updateSummary()`), and a disabled element cannot receive focus. Rather
+than intercept Tab and strand focus on a button the player cannot use yet, `onConfInputKeydown`
+only redirects to Lock picks when it is not disabled; otherwise it leaves Tab alone and lets
+the browser fall through to whatever is next in normal document order. The spec's own test
+list only exercises this with a complete, valid set of picks, so this distinction never
+changes the tested behavior, it only avoids a worse failure mode (focus silently going
+nowhere) in the incomplete case the spec does not otherwise cover.
+
+**Phase 2, the Season Wins ladder's points tiebreak direction.** The spec's own wording is
+ambiguous between two readings: a hard coded "fewer points always finishes higher," or "points
+break the tie in whichever direction the pool's own scoring mode already treats as better"
+(mirroring the points ladder's own primary direction). Chosen: the pool's own direction
+(`app/services/standings.py._season_components`, `points=_points_sort_key(pool) * row.points`,
+reused unmodified for both ladders). Reasoning: the spec's own worked example ("two players
+tied on wins, different points, fewer points finishes higher") is written against this pool's
+real, default `scoring_mode` ("inverse"), where fewer points genuinely is better, so the
+example itself cannot distinguish the two readings. A hard coded "fewer always wins" would
+silently invert under a `standard`-mode pool (where more points is the good outcome
+everywhere else in the app), which reads as clearly wrong: a Season Wins tiebreak that
+rewards a lower point total in a pool where higher points win every other leaderboard, table,
+and payout in the app would confuse a commissioner immediately. The direction-agnostic
+reading also mirrors what `app/payouts.py`'s own module docstring already insists on for
+`rank_standings`: never bake a direction in, always pass it explicit, sourced from the pool.
+`test_season_wins_ranking_ties_break_on_points_in_the_pools_own_direction` and
+`test_season_wins_ranking_sorts_wins_descending_even_under_inverse_scoring`
+(`tests/test_standings.py`) both exercise this.
+
+**Phase 2, the season tie rule statement only renders under `season_tiebreak_mode == "wins"`.**
+The spec's literal text ("Add a one-line rule statement under the season tables: 'Season ties
+are broken by total weekly wins, then by total points, then by submission time.'") does not
+condition it on the pool's setting, but showing that sentence unconditionally would be false,
+copy-level, for a pool switched to `"split"`, where a season tie still splits the payout
+exactly like a weekly or bowl tie. `app/templates/leaderboard.html` gates the sentence on
+`pool.season_tiebreak_mode == "wins"`, and the "Season awards" panel's own tie note picks up
+the mirror image: "A season place never splits under this pool's tiebreak setting" only when
+`"wins"` is active. A pool copy the app states as fact must be true for that pool, so accuracy
+won over matching the spec's example text byte for byte in the one mode where it would lie.
+
+## Phase 3, season submission time
+
+The rule implemented: a player's submission timestamp for the pool's **final scored week of
+the season** (`app/services/standings.py._season_final_week`: highest `week_number` with
+`status == "scored"` and `is_test_week` false, for the pool's `season_year`; a bowl week
+counts, since this codebase's real season structure is weeks 1-15 plus a week 16 bowl week and
+there is no separate "season complete" flag anywhere else in the schema either, matching how
+`app/services/payouts.py` already treats a bowl week's scoring as the season-scope freeze
+trigger). A player with no `WeekEntry` for that week (never played it, or the week itself does
+not exist yet) sorts last within their tied group, never first and never raising; the season's
+`user_id` tiebreak is the final, always-present fallback so a group where nobody submitted the
+final week still resolves deterministically.
+
+Two alternatives considered and rejected, exactly so a future commissioner (or a future
+change) can swap the rule without re-deriving the tradeoff from scratch:
+
+- **Mean submission time across the season.** Rewards someone who is early most weeks but late
+  once, over someone who is early every single week but happens to submit the final week a few
+  minutes after the first player did on that one occasion. Also needs a defined value for a
+  week a player skipped entirely (average excluding it? counting it as maximally late?), which
+  is its own small ambiguity this rule avoids by only ever looking at one well defined week.
+- **Count of weeks submitted first.** Requires comparing every player against every other
+  player, every week, to determine who was "first" that week, an O(players × weeks) computation
+  for a signal that answers a different question (consistency of being early) than what a
+  tiebreak actually needs (who should be trusted with a razor-thin final placement right now).
+  Also degenerates for a two-week-old season or a mid-season pool with no history yet.
+
+The final-week rule was chosen because it is the cheapest to explain to a group ("last week
+decided it") and the cheapest to compute (one query against one week, not a season-wide scan),
+and because a tiebreak that only matters at all when every earlier level of the chain already
+tied is, by construction, a rare, high-stakes edge case worth a simple, defensible rule over a
+statistically fancier one nobody in the group will intuitively trust anyway. See
+`app/services/standings.py._season_submission_times` for the implementation and
+`tests/test_standings.py`'s `test_season_submission_time_*` tests for the empty cases (a
+non-submitter, an all-non-submitter group, a season with zero scored weeks) required by Phase 3.
+
+## Phase 6, a real settings control for `season_tiebreak_mode`
+
+The spec's own Phase 2 text only asked for the column and its default ("without a code
+change"), not a UI. Left as DB-only, a commissioner who wanted `"split"` would need direct
+database or CLI access, which does not match how every other payout setting on this pool
+works (`payout_rounding`, `payout_tiebreak`, `weekly_payout_weeks` are all real dropdowns
+and inputs on `/league/payouts`'s pot panel, saved by the same `POST /league/payouts/pot`
+route). Added `season_tiebreak_mode` to that same panel and route
+(`app/routers/payouts.py`, `app/templates/admin/payouts.html`) rather than leave a
+documented-but-inaccessible setting: the README now correctly describes something a
+commissioner can actually do from the app. `Form(...)` (required) matches the pattern the
+other three pot-panel fields already use, so the existing
+`test_weekly_payout_weeks_out_of_range_is_rejected` test needed the new field added to its
+POST body to keep reaching its own in-route validation rather than 422ing on FastAPI's own
+missing-field check first; `test_season_tiebreak_mode_is_saved` and
+`test_unknown_season_tiebreak_mode_is_rejected` (`tests/test_payout_routes.py`) cover the
+new field itself.

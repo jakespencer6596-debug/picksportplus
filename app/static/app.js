@@ -485,16 +485,113 @@
 
   /* Keyboard ranking without the buttons: alt plus arrow on a focused row. */
   function onKeydown(e) {
-    if (!e.altKey) return;
-    var row = e.target.closest(".game-row");
-    if (!row) return;
-    if (e.key === "ArrowUp") {
-      e.preventDefault();
-      move(row, "up");
-    } else if (e.key === "ArrowDown") {
-      e.preventDefault();
-      move(row, "down");
+    if (e.altKey) {
+      var row = e.target.closest(".game-row");
+      if (!row) return;
+      if (e.key === "ArrowUp") {
+        e.preventDefault();
+        move(row, "up");
+      } else if (e.key === "ArrowDown") {
+        e.preventDefault();
+        move(row, "down");
+      }
+      return;
     }
+
+    var confInput = e.target.closest("[data-conf-input]");
+    if (confInput) {
+      onConfInputKeydown(e, confInput);
+      return;
+    }
+
+    var teamBtn = e.target.closest(".team-btn");
+    if (teamBtn) {
+      onTeamBtnKeydown(e, teamBtn);
+    }
+  }
+
+  /* Every confidence input in the list, in DOM order. That order IS visual order at every
+     moment a player can press a key: move(), reorderToInputs() and the Sortable drag handlers
+     above all physically reorder these same .game-row nodes rather than just relabeling them,
+     so there is nothing to cache or recompute here, reading the live DOM already reflects
+     whatever reorder just happened (Phase 1: "Recompute the sequence after every reorder
+     rather than caching it once on load"). */
+  function confInputsInOrder(list) {
+    return Array.prototype.slice.call(list.querySelectorAll(".game-row .conf-input"));
+  }
+
+  function focusAndReveal(el) {
+    el.focus();
+    el.scrollIntoView({ behavior: reduceMotion ? "auto" : "smooth", block: "nearest" });
+  }
+
+  /* Tab/Shift+Tab and Arrow Down/Up all move between confidence inputs the same way (Phase 1:
+     "Arrow Up and Arrow Down do the same thing"). The typed value under the cursor is already
+     committed by the time this fires: the delegated "input" listener (onInput, below) syncs
+     the hidden field and chip on every keystroke, so there is nothing extra to flush here.
+
+     Tab from the last input hands off to Lock picks, but only once it is actually usable
+     (all picks_required assigned): while it is still disabled a disabled button cannot take
+     focus, so this leaves Tab alone and lets the browser fall through to normal document
+     order instead of stranding focus on a control nobody can act on yet. Shift+Tab from the
+     first input is also left alone, on purpose, so it leaves the list for whatever precedes
+     it rather than wrapping to the last row (Phase 1: "Do not wrap around from last to
+     first, that traps the user."). Arrow Up/Down at either end still gets preventDefault so
+     the number input's own spin-button behavior never silently bumps the value. */
+  function onConfInputKeydown(e, input) {
+    var isTab = e.key === "Tab";
+    var isArrow = e.key === "ArrowUp" || e.key === "ArrowDown";
+    if (!isTab && !isArrow) return;
+
+    var row = input.closest(".game-row");
+    var list = row && row.closest(".game-list");
+    if (!list) return;
+
+    var inputs = confInputsInOrder(list);
+    var index = inputs.indexOf(input);
+    if (index === -1) return;
+
+    var forward = (isTab && !e.shiftKey) || e.key === "ArrowDown";
+
+    if (forward) {
+      if (index < inputs.length - 1) {
+        e.preventDefault();
+        focusAndReveal(inputs[index + 1]);
+      } else if (isTab) {
+        var lockBtn = document.querySelector("[data-lock-open]");
+        if (lockBtn && !lockBtn.disabled) {
+          e.preventDefault();
+          focusAndReveal(lockBtn);
+        }
+      } else {
+        e.preventDefault();
+      }
+      return;
+    }
+
+    if (index > 0) {
+      e.preventDefault();
+      focusAndReveal(inputs[index - 1]);
+    } else if (isArrow) {
+      e.preventDefault();
+    }
+  }
+
+  /* Team pick controls stay in the ordinary tab order (never tabindex="-1", which would
+     make picking a winner impossible without a mouse), so Left/Right is the only new
+     behavior needed here: move between the two team buttons on the same row, the keyboard
+     equivalent of "pick the other side". */
+  function onTeamBtnKeydown(e, btn) {
+    if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
+    var row = btn.closest(".game-row");
+    if (!row) return;
+    var buttons = Array.prototype.slice.call(row.querySelectorAll(".team-btn"));
+    var index = buttons.indexOf(btn);
+    if (index === -1) return;
+    var nextIndex = e.key === "ArrowRight" ? index + 1 : index - 1;
+    if (nextIndex < 0 || nextIndex >= buttons.length) return;
+    e.preventDefault();
+    buttons[nextIndex].focus();
   }
 
   /* ----------------------------------------------------------- sortable tables */
