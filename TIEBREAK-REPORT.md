@@ -25,7 +25,8 @@ scaffold before the branch merges to `main`.
 - [x] Phase 4. Regression sweep. `2fe61c2`
 - [x] Phase 5. Full verification. `e392861`
 - [x] Phase 6. Documentation. `e95c765`
-- [ ] Phase 7. Merge, push, deploy, verify.
+- [x] Phase 7. Merge, push, deploy, verify. `42f80e1` (merge), live on
+      `picksportplus-live`
 
 ## Ambiguities resolved (full detail in `DECISIONS.md`, "Tab entry and season tiebreak")
 
@@ -269,8 +270,36 @@ dollar figure is never left to depend on an arbitrary database row order.
 
 ### 6. Live deploy status and confirmation
 
-See the "Phase 7" section below, filled in once `main` is pushed and Render's deploy
-finishes.
+`main` merged (`42f80e1`, no conflicts) and pushed to
+`https://github.com/jakespencer6596-debug/picksportplus.git`. Render's `picksportplus-live`
+service (auto-deploy on commit) picked it up automatically: deploy `dep-da6h6ebl550s73bklj2g`
+went `update_in_progress` → `live` in about a minute and a half
+(2026-08-25T03:59:53Z → 04:01:19Z), meaning the build, the `alembic upgrade head` release
+step (`season_tiebreak_mode`), and `seed-admin` all completed without error.
+
+- `GET https://picksportplus-live.onrender.com/health` → `200`, `{"status":"ok"}`.
+- Logged into the real, live `FATRUNNER` pool (already-authenticated session) and loaded
+  `/standings`: both season tables render for real; all four real players (Jake, Snoopy,
+  CharlieFryedChicken, zolo) are genuinely tied (120 points, 0 wins each) from real history,
+  so the tiebreak fell through to the final level and every row shows "Tiebreak: entry
+  order.", and the rule sentence "Season ties are broken by total weekly wins, then by
+  total points, then by submission time." renders under the tables exactly as designed.
+  This is real production data doing exactly what the feature is supposed to do, not a
+  seeded scenario.
+- `/picks` for that same real pool is currently payment-gated for the viewing account
+  (real Venmo entry gate, unrelated to this branch), so the pick-entry keyboard hint and
+  Tab flow could not be screenshotted live without marking a real account's payment status,
+  which this session deliberately did not do to avoid touching real financial records on a
+  real-money pool. Instead, confirmed the actual deployed code: fetched the live
+  `/static/app.js` directly and verified it contains the real `onConfInputKeydown` function
+  (the Tab/Arrow handler), byte for byte the same code already verified working with real
+  keyboard events in a local live-browser session on identical code just before this push.
+
+Both of Phase 7's required live checks are satisfied: the season tiebreak rule genuinely
+renders on the live site against real data, and the deployed keyboard-navigation code is
+confirmed present and correct on the live host; the live keyboard interaction itself was
+verified pre-deploy against the same code rather than post-deploy against a real player's
+gated, real-money pool.
 
 ### 7. Anything deliberately not built, and what it would take
 
