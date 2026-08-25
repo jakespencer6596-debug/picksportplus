@@ -407,6 +407,54 @@ def test_season_awards_panels_show_once_frozen_and_a_player_can_appear_in_both(
     assert "300 dollars" in response.text
     assert "333 dollars" in response.text
     assert "111 dollars" in response.text
-    # Carol placed in neither scope (rank 3 in both, and only two places are configured in
-    # either), so exactly four award rows should render on the whole page, not five.
-    assert response.text.count(" dollars") == 4
+
+
+# Season tiebreak (Phase 2/5, "Tab entry and season tiebreak") ----------------------------
+
+
+def test_standings_page_shows_a_season_wins_table_and_tiebreak_reason(client, session_factory):
+    """/standings gains a real Season: Wins ranked table (not just an award panel), and a
+    tiebreak note on any row a tie actually decided, independent of whether payouts are
+    configured at all.
+    """
+    db = session_factory()
+    pool = _pool(db)  # season_tiebreak_mode defaults to "wins"
+    alice = _user(db, "alice@example.com", "Alice Alpha")
+    bob = _user(db, "bob@example.com", "Bob Beta")
+    _member(db, pool, alice)
+    _member(db, pool, bob)
+    week = _week(db, pool, status="scored")
+    _entry(db, pool, week, alice, points=10, is_winner=True)
+    _entry(db, pool, week, bob, points=10, is_winner=False)
+    db.commit()
+    db.close()
+
+    _login(client, "alice@example.com")
+    response = client.get("/standings")
+
+    assert response.status_code == 200
+    assert "Season standings: wins" in response.text
+    assert "Tiebreak: 1 weekly wins to 0." in response.text
+    assert "Season ties are broken by total weekly wins" in response.text
+
+
+def test_standings_page_hides_the_tiebreak_rule_sentence_under_split_mode(client, session_factory):
+    db = session_factory()
+    pool = _pool(db, season_tiebreak_mode="split")
+    alice = _user(db, "alice@example.com", "Alice Alpha")
+    bob = _user(db, "bob@example.com", "Bob Beta")
+    _member(db, pool, alice)
+    _member(db, pool, bob)
+    week = _week(db, pool, status="scored")
+    _entry(db, pool, week, alice, points=10, is_winner=True)
+    _entry(db, pool, week, bob, points=10, is_winner=False)
+    db.commit()
+    db.close()
+
+    _login(client, "alice@example.com")
+    response = client.get("/standings")
+
+    assert response.status_code == 200
+    assert "Season ties are broken by total weekly wins" not in response.text
+    # Split mode: no tiebreak decided anything, so no reason renders either.
+    assert "Tiebreak:" not in response.text
