@@ -250,6 +250,7 @@ For a week that is open and before `lock_at`:
   1. **Type confidence, tap winners.** Every row carries a small typed number input (1 to `picks_required`) next to the team buttons, live validated as the player types: a value that collides with another row is flagged in `--brick` and the summary line calls it out ("12 of 15 assigned, values 4 and 9 used twice"), without blocking the intermediate, still-invalid state. A row with no team picked never carries a confidence chip or a submitted confidence value, whatever was typed into it.
   2. **Reorder to inputs.** A button snaps the list so picked rows with a valid typed value sort to the top by that value, descending, and any row with no team picked or no value typed drops into a visually separate "Not picked" group below a hairline divider. Confidence is then reassigned cleanly, 1 to `picks_required`, from the new order.
   3. **Drag to refine.** Dragging a row by its grip, or using the up and down buttons (the accessible, keyboard reachable fallback, alt plus an arrow key also works), recalculates every picked row's point value live, `picks_required` at the top down to 1, scoped to the picked rows only, never the whole slate. Confidence is always positional across exactly the picked rows.
+- **Keyboard confidence entry.** Tab from a confidence input moves focus to the next confidence input, skipping every other control, following live visual (DOM) order rather than a cached sequence, so it always matches whatever a drag or Reorder to inputs just produced; Shift+Tab moves to the previous one. Arrow Up and Arrow Down do the same thing, for players who expect grid navigation, without stepping the number input's own value. Neither wraps: Shift+Tab from the first confidence input leaves the list for whatever precedes it, and Tab from the last one moves to Lock picks once picks are complete (it is disabled, and therefore unreachable, otherwise). Team pick buttons stay in the ordinary tab order (never `tabindex="-1"`, which would make picking a winner impossible without a mouse); Arrow Left and Arrow Right move between a row's two team choices instead. A single muted line above the slate states this: "Tab moves to the next confidence value. Arrow keys pick the winner." A duplicate or out of range confidence value never blocks or interrupts this keyboard flow, matching the live validation rule below.
 - A summary bar shows progress against `picks_required`, for example "12 of 15 winners chosen", with a Save action over HTMX and a clear saved indicator. Validate on save: exactly `picks_required` picks submitted, every picked game on the slate, and confidence values are a permutation of 1 to `picks_required`. A slate game the player did not pick is not an error.
 - Never hard code the slate size or `picks_required` in copy or validation. Always read both from the pool.
 - **Player lock, distinct from the pool wide `lock_at`.** After ranking, a player may deliberately lock their own picks in early: "Lock picks" opens a confirmation panel summarizing the `picks_required` picks in confidence order before anything is submitted, a second, separate tap from Save so locking cannot happen by accident. Locking saves the entry (the same validation Save runs) and sets `WeekEntry.locked_at`. While `locked_at` is set and the week itself has not reached `lock_at`, the page renders a read only confirmation view for that player alone, with an "Unlock to edit" action. The moment the pool wide `lock_at` passes, the normal read only state takes over for everyone regardless of `locked_at`, and unlocking is refused from then on; a player lock never grants or costs any extra time against the real lock.
@@ -413,7 +414,37 @@ total for display; every other scope is a one-time payout.
 rather than raising. Each tied group's combined total is rounded down to `Pool.payout_rounding`
 (`cent`, `dollar`, or `five`) before splitting, and the leftover is handed out one unit at a
 time in `Pool.payout_tiebreak` order (today, `earliest_submit`: earliest `WeekEntry.submitted_at`
-first, a missing submission time sorts last, then `user_id` for full determinism).
+first, a missing submission time sorts last, then `user_id` for full determinism). This applies
+to `weekly` and `bowl` unconditionally, and to the two season scopes only when
+`Pool.season_tiebreak_mode` is `"split"` (below); under the default `"wins"`, a season place
+never reaches this splitting logic at all, because nothing ranked by
+`app/services/standings.py`'s season ranking functions is ever still tied by the time it gets
+here.
+
+**Season tiebreak chain, `Pool.season_tiebreak_mode` (`"wins"` default, or `"split"`).** Under
+`"wins"`, both season ladders break a tie outright, through a single shared sort key
+(`app/services/standings.py`, one function so the order is stated in one place and cannot
+drift between the two ladders):
+
+- **Season: Points.** 1. Total points, in the pool's own scoring direction. 2. Tie: more total
+  weekly wins finishes higher. 3. Still tied: earliest submission for the season's final scored
+  week (a bowl week counts; a player who did not submit that week sorts last within the tied
+  group, never raising even when nobody in the group submitted it or no week has scored yet).
+  4. Still tied: lower `user_id`, for a fully deterministic result.
+- **Season: Wins.** 1. Total weekly wins, always descending, regardless of scoring mode
+  (never inherited from the pool, the same rule the payout engine's own `season_wins` ranking
+  has always followed). 2. Tie: points, in the pool's own scoring direction, mirroring the
+  points ladder rather than a hard coded "fewer always wins". 3. Still tied: the same final
+  week submission rule. 4. Still tied: lower `user_id`.
+
+Season Standings shows why a tiebreak decided a place, a muted note on that row naming the
+level that actually separated it, for example "Tiebreak: 4 weekly wins to 3." or "Tiebreak:
+submitted week 15 first.", present only on a row a tiebreak actually decided. A one line rule
+statement renders under the season tables whenever `season_tiebreak_mode` is `"wins"`:
+"Season ties are broken by total weekly wins, then by total points, then by submission time."
+Switching a pool to `"split"` restores the pre-tiebreak behavior end to end: both season
+ladders share a rank on their own primary metric exactly as `weekly`/`bowl` already do, with no
+further breaking and no tiebreak note.
 
 **Frozen snapshots.** A percent-mode payout resolves against the pot, and the pot can grow
 after a week is already scored (a member pays their entry fee late). Re-resolving a past week
@@ -450,8 +481,10 @@ action seeding the known ladder (weekly 105/55/25, bowl 250/100/50, season point
 season wins 325/185/110).
 
 Weekly Results gains a Payout column once rules exist for the relevant scope, blank (never
-0) for anyone out of the money. Season Standings gains two award panels, Season: Points and
-Season: Wins, once the season scope has actually been snapshotted. `/admin/payouts/summary`
+0) for anyone out of the money. Season Standings shows both season ladders as real ranked
+tables regardless of whether payouts are configured (see the tiebreak chain above), plus two
+award panels, Season: Points and Season: Wins, once the corresponding scope has actually been
+snapshotted. `/admin/payouts/summary`
 is the commissioner's payout summary: one row per player, a running "Paid X of Y, N of M
 players settled" line, a Paid checkbox per player (marks or unmarks every one of their
 currently unpaid/paid awards in one action), an unpaid-only filter, a copy-as-text export, and

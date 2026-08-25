@@ -251,6 +251,13 @@ past week never quietly changes later just because more members pay their entry 
 fact. The Payouts summary page lists what every player is owed across all four scopes, with a
 running paid and unpaid total and a plain text or CSV export for bookkeeping outside the app.
 
+By default, a tie on either season ladder (Season: Points or Season: Wins) breaks outright,
+never splits: total weekly wins, then total points, then who submitted the season's final
+scored week first, then a deterministic fallback. Season Standings shows a muted note on any
+row a tiebreak decided. A weekly or bowl tie always still splits the combined payout, as
+before. A commissioner who wants the old shared-payout behavior for a season scope can switch
+`season_tiebreak_mode` back to `"split"` for the pool.
+
 ### The site admin
 
 The site admin (the global `admin` role, sometimes called the platform owner in the UI) runs

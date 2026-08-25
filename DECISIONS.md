@@ -4099,3 +4099,21 @@ statistically fancier one nobody in the group will intuitively trust anyway. See
 `app/services/standings.py._season_submission_times` for the implementation and
 `tests/test_standings.py`'s `test_season_submission_time_*` tests for the empty cases (a
 non-submitter, an all-non-submitter group, a season with zero scored weeks) required by Phase 3.
+
+## Phase 6, a real settings control for `season_tiebreak_mode`
+
+The spec's own Phase 2 text only asked for the column and its default ("without a code
+change"), not a UI. Left as DB-only, a commissioner who wanted `"split"` would need direct
+database or CLI access, which does not match how every other payout setting on this pool
+works (`payout_rounding`, `payout_tiebreak`, `weekly_payout_weeks` are all real dropdowns
+and inputs on `/league/payouts`'s pot panel, saved by the same `POST /league/payouts/pot`
+route). Added `season_tiebreak_mode` to that same panel and route
+(`app/routers/payouts.py`, `app/templates/admin/payouts.html`) rather than leave a
+documented-but-inaccessible setting: the README now correctly describes something a
+commissioner can actually do from the app. `Form(...)` (required) matches the pattern the
+other three pot-panel fields already use, so the existing
+`test_weekly_payout_weeks_out_of_range_is_rejected` test needed the new field added to its
+POST body to keep reaching its own in-route validation rather than 422ing on FastAPI's own
+missing-field check first; `test_season_tiebreak_mode_is_saved` and
+`test_unknown_season_tiebreak_mode_is_rejected` (`tests/test_payout_routes.py`) cover the
+new field itself.

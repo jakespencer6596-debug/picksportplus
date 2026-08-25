@@ -279,6 +279,13 @@ def test_how_it_works_page_renders(client, world):
     response = client.get("/how-it-works")
     assert response.status_code == 200
     assert "inverse" in response.text.lower()
+    # Phase 6, "Tab entry and season tiebreak": the copy has to match the real rule
+    # (app/services/standings.py) exactly, so players can read it without asking.
+    normalized = " ".join(response.text.split())
+    assert (
+        "By default, a season standings tie breaks outright: total weekly wins, "
+        "then total points, then who submitted the season's final week first." in normalized
+    )
 
     _login(client, "player@example.com")
     response = client.get("/how-it-works")
