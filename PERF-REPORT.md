@@ -28,7 +28,7 @@ real measurements against the live production site.
 - [x] Phase 4: sorting on slate editor and picks page
 - [x] Phase 5: regression sweep
 - [x] Phase 6: full verification
-- [ ] Phase 7: documentation
+- [x] Phase 7: documentation
 - [ ] Phase 8: merge, push, deploy
 - [ ] Phase 9: verify on the live site
 

@@ -301,6 +301,13 @@ def test_how_it_works_page_renders(client, world):
         "By default, a season standings tie breaks outright: total weekly wins, "
         "then total points, then who submitted the season's final week first." in normalized
     )
+    # Phase 7 (weekly tiebreak/sorting/performance work, see PERF-REPORT.md): the weekly
+    # equivalent, matching app/services/standings.py.weekly_leaderboard's real chain.
+    assert (
+        "A weekly tie breaks the same outright way: whoever has more wins entering that "
+        "week takes the full place and the full payout, falling to who submitted that week "
+        "first if wins are equal too." in normalized
+    )
 
     _login(client, "player@example.com")
     response = client.get("/how-it-works")
