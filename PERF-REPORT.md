@@ -26,7 +26,7 @@ real measurements against the live production site.
 - [x] Phase 2: wider performance review
 - [x] Phase 3: weekly tiebreak on total wins
 - [x] Phase 4: sorting on slate editor and picks page
-- [ ] Phase 5: regression sweep
+- [x] Phase 5: regression sweep
 - [ ] Phase 6: full verification
 - [ ] Phase 7: documentation
 - [ ] Phase 8: merge, push, deploy
@@ -260,3 +260,32 @@ bytes, over the 150KB budget `tests/test_slate_performance.py` enforces.
 `CANDIDATES_PAGE_SIZE` (`app/routers/admin.py`) dropped from 25 to 20 to buy back the
 headroom, which also modestly improves the initial page weight further. The budget test still
 passes with real margin; see DECISIONS.md for the reasoning.
+
+## Phase 5: regression sweep
+
+| # | Item | Result |
+|---|---|---|
+| 1 | Inverse scoring: lowest total wins; non-submitter takes max penalty, never wins | Pass (untouched, `app/scoring.py` not modified; full suite green) |
+| 2 | 15 of 20: 14 and 16 each rejected with specific messages; 15 saves | Pass (untouched, `validate_picks` not modified) |
+| 3 | Two-step pick entry: numeric input, Reorder to inputs, drag, Lock picks | Pass (untouched SortableJS/renumber/reorderToInputs code; `tests/js/pick_navigation.test.js` 12/12) |
+| 4 | Tab/arrow keys move between confidence values, including after sorting | Pass, explicitly (`tests/js/sorting.test.js`: "the keyboard tab sequence follows the picks page's new sorted order") |
+| 5 | Player-major results grid: rows are players, columns confidence descending | Pass (untouched, full suite green) |
+| 6 | Payouts: known ladder totals 2775, 400, 1155, 620, grand total 4950 | Pass (`tests/test_payouts.py`, pure engine math, unaffected by the tiebreak or perf work) |
+| 7 | Payout snapshots do not move when the pot changes | Pass (untouched `snapshot_awards` freezing logic) |
+| 8 | Season tiebreaks still work as built previously | Pass (`tests/test_standings.py` season tests all green, untouched) |
+| 9 | Scenarios: 5 final games threshold, percentages/leverage, same ranking direction as standings | Pass (untouched `app/scenarios.py`; see the flaky-test note below for two unrelated timing tests) |
+| 10 | Week resolution: a rebuilt week spans no more than 8 days, no duplicate teams | Pass (untouched `app/services/ingest.py`/`app/slate.py`) |
+| 11 | Test weeks contribute nothing to standings, payouts, or the new wins tiebreak | Pass, explicitly (`test_a_test_weeks_win_does_not_count_toward_the_weekly_tiebreak`) |
+| 12 | Commissioner pages contain no "admin" wording; `/site` routes still 403 for commissioners | **Found and fixed a real leak**: `results.html`'s "No games on this slate" empty state said "rebuild the slate from Admin." Fixed the copy and added `/results` and `/standings` to `test_league_pages_never_render_the_word_admin_for_a_real_commissioner`'s parametrize list, which had never covered either page |
+| 13 | Email still sends and still fails loudly when disabled | Pass (untouched `app/services/mail.py`) |
+| 14 | All slate actions still work with JavaScript disabled, via the full POST fallback | Pass, explicitly, and previously untested at the router level: `tests/test_slate_actions_no_js.py` (8 tests) exercises pin, unpin, add, remove, swap, void, unvoid, spread and one HTMX error path directly against `/league/slate/game` |
+
+**The one real finding**, item 12: a pre-existing wording leak, not introduced by this
+initiative, but exactly the kind of thing a regression sweep exists to catch. Fixed in this
+phase since it was found during it.
+
+**A note on the flaky scenarios tests continues to apply** (see Phase 2's section above):
+`test_exhaustive_r15_16_players_completes_well_under_the_two_second_cap` and
+`test_monte_carlo_after_an_aborted_exhaustive_attempt_still_respects_the_hard_cap` both failed
+intermittently during this phase's full-suite runs and passed cleanly in isolation and on
+retry every time. Neither is touched by this work.

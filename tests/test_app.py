@@ -2362,6 +2362,8 @@ def _make_pool_commissioner_who_is_not_admin(db: Session, pool: Pool) -> User:
         "/league/settings",
         "/league/payouts",
         "/league/payouts/summary",
+        "/results",
+        "/standings",
     ],
 )
 def test_league_pages_never_render_the_word_admin_for_a_real_commissioner(
@@ -2376,7 +2378,13 @@ def test_league_pages_never_render_the_word_admin_for_a_real_commissioner(
     checks a real rendered response rather than the template source, which is the only honest
     way to verify it. world's own boss@example.com is deliberately both role="admin" and this
     pool's commissioner (see the block comment above), which is exactly the case this test
-    must NOT use, so it builds its own plain commissioner instead."""
+    must NOT use, so it builds its own plain commissioner instead.
+
+    /results and /standings were added in the Phase 5 regression sweep (weekly tiebreak/
+    sorting/performance work, see PERF-REPORT.md): results.html's own empty state ("No games
+    on this slate") used to say "the slate from Admin," a leak this parametrize list never
+    caught because neither page was in it. A week with no published slate is exactly the state
+    that empty state needs, so this pool is deliberately left with nothing built."""
     db = session_factory()
     pool = _make_pool(db)
     _make_pool_commissioner_who_is_not_admin(db, pool)

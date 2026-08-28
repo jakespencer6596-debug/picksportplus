@@ -64,6 +64,17 @@ asked for. The swap datalist is unaffected by this pagination: it always lists e
 candidate, since swapping in a game further down the list than the visible page is still a
 legitimate thing to want to do.
 
+### Phase 5: fix the "Admin" wording leak found during the sweep, expand its own test's coverage
+
+Regression item 12 asked to verify commissioner pages never say "admin"; `results.html`'s "No
+games on this slate" empty state actually did ("rebuild the slate from Admin"), a pre-existing
+leak this initiative did not introduce but found while sweeping for exactly this. Fixed the
+copy, and added `/results` and `/standings` to `test_league_pages_never_render_the_word_admin_
+for_a_real_commissioner`'s own parametrize list in `tests/test_app.py`, since neither page was
+in it before, which is why the leak went uncaught. "Anything deliberately not built" does not
+apply here since this was already broken, not something the brief scoped out; fixing a bug
+found by an in-scope regression check is the check doing its job, not scope creep.
+
 ### Phase 4: reuse the table engine's shape for the picks list, do not extend it in place
 
 `app/static/app.js`'s `table[data-sortable]` engine reads a cell by `cellIndex` and compares
