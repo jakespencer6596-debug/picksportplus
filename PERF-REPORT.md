@@ -29,8 +29,8 @@ real measurements against the live production site.
 - [x] Phase 5: regression sweep
 - [x] Phase 6: full verification
 - [x] Phase 7: documentation
-- [ ] Phase 8: merge, push, deploy
-- [ ] Phase 9: verify on the live site
+- [x] Phase 8: merge, push, deploy
+- [x] Phase 9: verify on the live site
 
 ## Phase 0 baseline (20 on-slate games, 100 candidates)
 
@@ -387,6 +387,122 @@ below.
     at all, distinct from the pre-existing test that only covered a real member who is not a
     commissioner).
 
-**Final test count: 1150** (pytest) **+ 22** (JS, `node --test tests/js/*.test.js`), against a
-Phase 0 baseline of 1117 pytest tests and 0 JS tests. That is +33 pytest and +22 JS, comfortably
-over the "+40 total" guardrail once both suites count.
+**Final test count: 1151** (pytest, after Phase 9's own fix added one more) **+ 22** (JS,
+`node --test tests/js/*.test.js`), against a Phase 0 baseline of 1117 pytest tests and 0 JS
+tests. That is +34 pytest and +22 JS, comfortably over the "+40 total" guardrail once both
+suites count.
+
+## Phase 8: merge, push, deploy
+
+Full gate re-run on `perf-and-tiebreak` before merging: 1150 pytest + 22 JS, clean. Merged into
+`main` with `--no-ff` (commit `28876a4`), full gate re-run on `main` after the merge (a merge
+can break a suite green on both sides; this one didn't): 1150 pytest, clean. Pushed to
+`origin/main`. Render's auto-deploy-on-commit picked it up immediately
+(`srv-d9s0imqfngtc73eb4450`, `picksportplus-live`); the deploy (`dep-da8rmlgu01pc73f67tl0`)
+reached `status: live` in about a minute, `alembic upgrade head` included in its start command
+so the new `weekly_tiebreak_mode` migration ran as part of boot, not a separate step.
+
+## Phase 9: verify on the live site
+
+Verified against both `https://picksportplus-live.onrender.com` (the Render service directly)
+and `https://picksportplus.com` (the custom domain in front of it, confirmed to resolve to the
+same origin, not a separately cached edge).
+
+- `/health`: 200 on both hostnames.
+- `/how-it-works`: 200, and the page's rendered text contains the exact new weekly tiebreak
+  sentence from Phase 7, confirming the real deployed code (not a cached page) is what's
+  serving traffic.
+- `/results` and `/standings` for a signed-out visitor: 303 (redirect to login), not a 500,
+  confirming the auth gate survived the deploy.
+- The hashed `app.css`/`app.js` URLs referenced in the live HTML resolve and serve with the
+  correct `Cache-Control: public, max-age=31536000, immutable` header.
+
+**Found one more real bug here**: a `curl -I` (HEAD request) against the exact same hashed
+asset URL the live HTML itself referenced returned 404, while a plain GET on that identical URL
+returned 200 with the right headers. `@app.get(...)` only ever registers the GET method; a HEAD
+request for that path fell through to the generic `/static` mount (which legitimately 404s,
+since no file is actually named `app.<hash>.css` on disk). This reproduced identically against
+the local dev server once checked, so it was a real, pre-existing code gap, not anything
+Render-specific, and it never broke an actual page load (every browser fetches a
+`<link>`/`<script>` tag with GET, never HEAD), but a monitor or cache warmer using HEAD would
+have seen a false 404. Fixed (`@app.api_route(..., methods=["GET", "HEAD"])`), tested, committed
+directly to `main` (a second, small, targeted push rather than a new branch, per the brief's own
+"fix forward" guidance for something found in Phase 9 itself), and redeployed
+(`dep-da8src7lk1mc73fkekcg`, live in about 90 seconds). Re-verified: both hashed URLs now answer
+HEAD with 200 and the correct cache header, on both hostnames. See DECISIONS.md.
+
+**What was not re-verified live, and why.** The authenticated commissioner and player flows
+(the slate editor, pin/unpin, sorting both slate tables, the picks page, Weekly Results'
+tiebreak reason, Season Standings) were not clicked through against the real production
+account in this session: doing so needs the real commissioner's login credentials, which
+were not provided to this session, and entering or requesting real production credentials is
+outside what this session does on its own judgment. Everything in that category was instead:
+(a) verified thoroughly against a local dev server seeded with realistic demo data in Phase 6,
+using the identical code that is now deployed, which is exactly where the three real bugs in
+this initiative were actually found and fixed, and (b) confirmed to be running the correct,
+current code in production via the public checks above (the exact new copy on `/how-it-works`,
+the correct asset hashes, a clean boot implying the migration ran). If the user wants those
+authenticated flows spot-checked directly against production, that needs either their own
+click-through or a way to authenticate this session as the real commissioner.
+
+## Phase-by-phase commit reference
+
+| Phase | Commit (on `perf-and-tiebreak`, then merged) |
+|---|---|
+| 0 | `0133ce2` chore: timing instrumentation and performance baseline |
+| 1 | `aaacf92` perf: render swap options once, htmx partial updates, paged candidates |
+| 2 | `96169eb` perf: index audit, query reduction and asset caching |
+| 3 | `169b4dd` feat: weekly ties break on total wins entering the week |
+| 4 | `038dfff` feat: sort slate and picks by date, sport, time and closeness |
+| 5 | `94c4b2d` test: regression sweep |
+| 6 | `215e91b` test: full verification |
+| 7 | `6eaebe4` docs: weekly tiebreak, sorting and performance |
+| 8 | `28876a4` merge into `main` (`--no-ff`), pushed to `origin/main` |
+| 9 | `44dd3b3` fix: hashed asset routes answer HEAD as well as GET (found live, committed directly to `main`, pushed and redeployed) |
+
+## What was deliberately not built, and what it would take
+
+- **A real device/viewport check of the 360px, 768px, 1280px breakpoints** (Phase 6 item 18).
+  The browser automation tool's window resize did not produce a genuinely narrower viewport in
+  this session (`window.innerWidth` stayed desktop-sized after a requested 375px resize). The
+  new mobile sort controls reuse the pre-existing, already-shipped `.mobile-only`/
+  `.sort-select-wrap` CSS pattern unchanged, so this is a real gap in *verification*, not a
+  known gap in the feature itself. Would take: a real phone, or a working headless-browser
+  viewport emulation, five minutes per breakpoint.
+- **Authenticated production click-through** (slate editor, pin/unpin, sorting, tiebreak
+  rendering, against the real live commissioner account). Not done in this session because it
+  needs real production credentials this session was not given, and requesting or entering
+  them is outside this session's own judgment to do unprompted. Would take: the commissioner
+  spot-checking `/league/slate` and `/results` themselves for five minutes, or handing this
+  session a way to authenticate as that account.
+- **A UI control surfacing `wins_entering_week` counts to a curious player** beyond the
+  tiebreak reason sentence itself (for example, a "prior wins" column on the weekly
+  leaderboard). Not asked for by the brief; the reason sentence already answers "why did I
+  lose the tiebreak" without a permanent extra column most weeks never need.
+
+## Top three risks this introduces, and a mitigation for each
+
+1. **The 150KB/60-form slate editor budget has very little headroom left** (currently
+   ~149-151KB depending on exact candidate count and typed values, against a 150KB test
+   threshold). A future control added to a slate row, or a further increase to
+   `CANDIDATES_PAGE_SIZE`, could tip it over without anyone noticing until the automated test
+   fails. *Mitigation*: the budget test (`tests/test_slate_performance.py`) already fails loud
+   in CI the moment this happens; treat that failure as a real constraint requiring either a
+   further page-size reduction or trimming markup elsewhere, not a threshold to raise casually.
+2. **A weekly or bowl payout no longer splits by default**, which is a real behavior change a
+   commissioner could be surprised by mid-season if they do not read the new rule line on
+   Weekly Results. *Mitigation*: the rule line and the tiebreak-reason note render automatically
+   whenever the mode is `"wins"` (the default), so the explanation is always on the page the
+   money shows up on, not buried in a settings screen; a commissioner who wants the old
+   behavior back can switch `weekly_tiebreak_mode` to `"split"` from `/league/payouts` in one
+   click, no code change or redeploy needed.
+3. **The three browser-only bugs this phase found (header/body mismatch, the empty-field 422,
+   the un-wrapped OOB `<tbody>`) are exactly the class of bug that server-only testing cannot
+   catch, and this codebase's test suite is otherwise almost entirely server-side.** A future
+   change to the slate editor's HTMX wiring could reintroduce a sibling bug in the same family
+   without any automated test failing. *Mitigation*: `tests/js/oob_table_swap.test.js` and the
+   new HTMX-shape assertions in `tests/test_slate_actions_no_js.py` now guard the two shapes
+   that broke; more importantly, any future change to `app/templates/admin/_slate_fragments.html`
+   or the HTMX wiring in `app/routers/admin.py` should get a real browser click-through before
+   shipping, not just a green pytest run, exactly as this phase's own brief required and exactly
+   what caught these three.
