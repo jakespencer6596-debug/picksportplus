@@ -56,15 +56,22 @@ app.add_middleware(ProxyHeadersMiddleware, trusted_hosts="*")
 # moment app.css or app.js does, on the next deploy's fresh hash (app/templating.py), so
 # "immutable" here really does mean this exact URL's bytes can never change under a client,
 # not just "we don't expect them to."
+#
+# methods=["GET", "HEAD"], not the bare @app.get shorthand: found live against production
+# (Phase 9, see DECISIONS.md) that a plain @app.get route only answers GET, so a HEAD request
+# for the exact same URL fell through to the generic /static mount below, which then 404s
+# because no file is actually named app.<hash>.css on disk. Never broke a real page load
+# (every browser fetches a <link>/<script> with GET, never HEAD), but any tool that does use
+# HEAD to check a resource, a monitor or a cache warmer, saw a false 404.
 _LONG_CACHE_HEADERS = {"Cache-Control": "public, max-age=31536000, immutable"}
 
 
-@app.get(APP_CSS_URL, include_in_schema=False)
+@app.api_route(APP_CSS_URL, methods=["GET", "HEAD"], include_in_schema=False)
 def _versioned_app_css():
     return FileResponse(STATIC_DIR / "app.css", media_type="text/css", headers=_LONG_CACHE_HEADERS)
 
 
-@app.get(APP_JS_URL, include_in_schema=False)
+@app.api_route(APP_JS_URL, methods=["GET", "HEAD"], include_in_schema=False)
 def _versioned_app_js():
     return FileResponse(
         STATIC_DIR / "app.js", media_type="application/javascript", headers=_LONG_CACHE_HEADERS

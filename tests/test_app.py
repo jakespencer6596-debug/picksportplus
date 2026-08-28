@@ -272,6 +272,20 @@ def test_hashed_app_assets_are_served_with_a_far_future_cache_header(client):
         assert response.headers["cache-control"] == "public, max-age=31536000, immutable"
 
 
+def test_hashed_app_assets_also_answer_a_head_request(client):
+    """Phase 9, found live against production (see DECISIONS.md): a plain @app.get route only
+    answers GET. A HEAD request for the identical URL used to fall through to the generic
+    /static mount, which 404s because no file is actually named app.<hash>.css on disk. Never
+    broke a real page load (a <link>/<script> tag always fetches with GET), but a monitor or
+    cache warmer using HEAD saw a false 404."""
+    from app.templating import APP_CSS_URL, APP_JS_URL
+
+    for url in (APP_CSS_URL, APP_JS_URL):
+        response = client.request("HEAD", url)
+        assert response.status_code == 200
+        assert response.headers["cache-control"] == "public, max-age=31536000, immutable"
+
+
 def test_pricing_page_renders_signed_out(client):
     response = client.get("/pricing")
     assert response.status_code == 200

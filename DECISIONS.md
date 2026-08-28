@@ -64,6 +64,25 @@ asked for. The swap datalist is unaffected by this pagination: it always lists e
 candidate, since swapping in a game further down the list than the visible page is still a
 legitimate thing to want to do.
 
+### Phase 9: hashed asset routes only answered GET, not HEAD
+
+Found live against the real production deploy, after Phase 8's push: `curl -I` (a HEAD
+request) against the freshly deployed, content-hashed `/static/app.<hash>.css`/`.js` URLs
+(Phase 2) returned 404, even though the exact same URL answered a plain GET with 200 and the
+right `Cache-Control` header. `@app.get(...)` only ever registers the GET method; a HEAD
+request for that same path fell through past it to the generic `/static` mount below (a
+Starlette `Mount` still gets a turn when an earlier route's path matches but its method
+doesn't), which then legitimately 404s because no file is actually named `app.<hash>.css` on
+disk, only the plain `app.css`. This never broke a real page load: every browser fetches a
+`<link>`/`<script>` tag with GET, never HEAD. It reproduced identically against the local dev
+server too once checked, so it was a real, pre-existing code gap rather than anything
+Render-specific; a monitor, a cache warmer, or any tool that legitimately uses HEAD to check a
+resource's freshness without downloading it would have seen a false 404. Fixed by declaring
+both routes with `@app.api_route(path, methods=["GET", "HEAD"])` instead of the `@app.get`
+shorthand. Committed directly to `main` and re-pushed/redeployed as a small, targeted fix
+found during Phase 9's own live verification, per the brief's "fix forward" guidance, rather
+than opening a second feature branch for one line.
+
 ### Phase 6: three real bugs found only by a real browser, all in the Phase 1 slate editor rewrite
 
 Every automated test (pytest, the JS suite) was green through Phase 5. Live verification
