@@ -49,6 +49,7 @@ from app.models import (
     PAYOUT_SCOPES,
     PAYOUT_TIEBREAKS,
     SEASON_TIEBREAK_MODES,
+    WEEKLY_TIEBREAK_MODES,
     PayoutAward,
     PayoutRule,
     PoolMember,
@@ -161,6 +162,7 @@ def _editor_context(db: Session, pool: Pool) -> dict:
         "PAYOUT_ROUNDINGS": PAYOUT_ROUNDINGS,
         "PAYOUT_TIEBREAKS": PAYOUT_TIEBREAKS,
         "SEASON_TIEBREAK_MODES": SEASON_TIEBREAK_MODES,
+        "WEEKLY_TIEBREAK_MODES": WEEKLY_TIEBREAK_MODES,
     }
 
 
@@ -204,6 +206,7 @@ def save_pot(
     payout_rounding: str = Form(...),
     payout_tiebreak: str = Form(...),
     season_tiebreak_mode: str = Form(...),
+    weekly_tiebreak_mode: str = Form(...),
     db: Session = Depends(get_db),
     user: User = Depends(require_user),
     pool: Pool = Depends(require_commissioner),
@@ -220,6 +223,8 @@ def save_pot(
         errors.append("Unknown tiebreak option.")
     if season_tiebreak_mode not in SEASON_TIEBREAK_MODES:
         errors.append("Unknown season tiebreak option.")
+    if weekly_tiebreak_mode not in WEEKLY_TIEBREAK_MODES:
+        errors.append("Unknown weekly tiebreak option.")
 
     if errors:
         for message in errors:
@@ -232,6 +237,7 @@ def save_pot(
     pool.payout_rounding = payout_rounding
     pool.payout_tiebreak = payout_tiebreak
     pool.season_tiebreak_mode = season_tiebreak_mode
+    pool.weekly_tiebreak_mode = weekly_tiebreak_mode
     db.commit()
     flash(request, "Pot settings saved.")
     return _redirect()

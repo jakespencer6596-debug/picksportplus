@@ -244,6 +244,25 @@
           </div>
         </div>
 
+        <div class="form-row">
+          <div class="field">
+            <label class="field-label" for="weekly_tiebreak_mode">Weekly tiebreak</label>
+            <select class="select" id="weekly_tiebreak_mode" name="weekly_tiebreak_mode">
+              {% for m in WEEKLY_TIEBREAK_MODES %}
+                <option value="{{ m }}" {% if m == pool.weekly_tiebreak_mode %}selected{% endif %}>
+                  {{ "Break outright (wins entering the week, then submission time)" if m == "wins" else "Split, evenly between the tied places" }}
+                </option>
+              {% endfor %}
+            </select>
+            <p class="form-hint">
+              How a tie on weekly or bowl points settles. "Break outright" is the default:
+              more wins entering the week (not counting the week itself) takes the full
+              payout, then falls to submission time if wins are equal too. "Split" restores
+              the old behavior, sharing the combined payout evenly.
+            </p>
+          </div>
+        </div>
+
         <div class="form-actions">
           <button class="btn btn-primary" type="submit">Save pot settings</button>
         </div>

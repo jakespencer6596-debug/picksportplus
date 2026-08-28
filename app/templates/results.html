@@ -198,10 +198,23 @@
                   </td>
                 {% endif %}
               </tr>
+              {% if row.tiebreak_reason %}
+                <tr class="lb-row lb-tiebreak-row">
+                  <td></td>
+                  <td colspan="{{ 4 if payout_rules_exist else 3 }}">
+                    <p class="muted lb-tiebreak-note">{{ row.tiebreak_reason }}</p>
+                  </td>
+                </tr>
+              {% endif %}
             {% endfor %}
           </tbody>
         </table>
       </div>
+      {% if pool.weekly_tiebreak_mode == "wins" %}
+        <p class="muted lb-note">
+          Weekly ties are broken by total wins entering the week, then by submission time.
+        </p>
+      {% endif %}
       {% if pool.scoring_mode == "inverse" %}
         <p class="muted lb-note">
           Low score wins. You take the points you staked on any pick that loses.
@@ -214,9 +227,13 @@
             This week is still being scored, so these amounts are projected and can still
             change.
           {% endif %}
-          A tie splits the combined amount for those places evenly, rounded to
-          {{ rounding_words.get(pool.payout_rounding, pool.payout_rounding) }}. Any leftover
-          goes to whoever submitted their picks earliest.
+          {% if pool.weekly_tiebreak_mode == "wins" %}
+            A weekly place never splits under this pool's tiebreak setting: see the rule above.
+          {% else %}
+            A tie splits the combined amount for those places evenly, rounded to
+            {{ rounding_words.get(pool.payout_rounding, pool.payout_rounding) }}. Any leftover
+            goes to whoever submitted their picks earliest.
+          {% endif %}
         </p>
       {% endif %}
     {% else %}

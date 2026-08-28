@@ -64,6 +64,33 @@ asked for. The swap datalist is unaffected by this pagination: it always lists e
 candidate, since swapping in a game further down the list than the visible page is still a
 legitimate thing to want to do.
 
+### Phase 3: a real settings control for `weekly_tiebreak_mode`, not DB-only
+
+The bullet list for this phase only asked for the column and its default ("implemented as a
+setting so it can be changed without a code change"), not a UI, but Phase 6's own manual
+verification checklist ("Set `weekly_tiebreak_mode` to `split`. The old behavior returns...")
+only makes sense if a commissioner can actually do that from the app. Added a "Weekly tiebreak"
+dropdown to `/league/payouts`' pot panel right next to the existing `season_tiebreak_mode` one
+(`app/routers/payouts.py`, `app/templates/admin/payouts.html`), the same precedent this
+codebase already set for `season_tiebreak_mode` itself (see "Phase 6, a real settings control
+for `season_tiebreak_mode`" below): a documented-but-inaccessible setting is worse than no
+setting, since it looks like a bug to anyone who does not already know to reach for the CLI.
+
+### Phase 3: renumber ranks after filtering no-shows, do not reuse `weekly_leaderboard`'s rank
+
+`weekly_leaderboard`'s own `rank` is assigned across the FULL roster, no-shows included, since
+the weekly leaderboard display legitimately shows a no-show's row ("No picks submitted") in its
+correct position. `app/services/payouts.py._weekly_or_bowl_standings` filters no-shows out
+before handing standings to `allocate()` (a no-show must never collect money even when its raw
+points would otherwise place), and reusing the pre-filter rank directly left gaps in the
+sequence (rank 2, 3, ... instead of 1, 2, ...) that `allocate()` silently treats as "past the
+last configured place" and skips, awarding nobody. Fixed by renumbering the filtered list
+1-based after the fact, since under `"wins"` mode the remaining rows are already in correct
+relative order (the chain produces a strict total order with no ties left to resolve) and only
+the rank NUMBER, not the order, needed recomputing. Caught by
+`test_no_show_is_excluded_from_weekly_awards_even_if_their_points_would_have_placed`, a
+pre-existing test this exact bug broke during development.
+
 ### Phase 2: content-hashed filename over a query string cache-buster
 
 The brief's own wording asked for "a content hash in the filename," and a `?v=hash` query

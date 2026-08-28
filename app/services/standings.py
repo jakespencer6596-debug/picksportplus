@@ -64,6 +64,12 @@ class WeeklyRow:
     is_winner: bool
     rank: int = 0
     is_you: bool = False
+    # Set only when pool.weekly_tiebreak_mode == "wins" and this row's place was actually
+    # decided by a tiebreak rather than points alone (Phase 3, weekly wins tiebreak): a muted,
+    # plain sentence naming what broke the tie, for example "Tiebreak: 3 prior wins to 2." or,
+    # in a week with no prior wins yet (week 1), "Tiebreak: submitted first." None otherwise,
+    # including always under "split" mode, where a tie is never broken at all.
+    tiebreak_reason: str | None = None
 
 
 def _members(db: Session, pool: Pool) -> list[User]:
@@ -400,13 +406,137 @@ def latest_scored_week(db: Session, pool: Pool) -> Week | None:
     )
 
 
+def wins_entering_week(db: Session, pool: Pool, week: Week) -> dict[int, int]:
+    """Each member's total weekly wins from every already-scored, non-test week of this
+    pool's season with a week_number strictly lower than `week`'s own (Phase 3, weekly ties
+    break on total wins). A member with no such row maps to 0, never a missing key.
+
+    Deliberately excludes `week` itself: using week N's own win to decide a tie in week N is
+    circular, the tie exists precisely because it is not yet known who won week N. A test
+    week never contributes here, matching every other season-wide aggregate in this module
+    (_season_base_rows filters the same way); this matters more than usual here, since a test
+    week's own week_number is 0 and would otherwise silently count as "entering" week 1.
+    Applies uniformly to the bowl week too (its week_number is simply the highest of the
+    season, so this sums every regular week that preceded it): there is no separate bowl
+    branch anywhere in this function.
+    """
+    members = _members(db, pool)
+    counts = {m.id: 0 for m in members}
+    entries = db.scalars(
+        select(WeekEntry)
+        .join(Week, Week.id == WeekEntry.week_id)
+        .where(
+            WeekEntry.pool_id == pool.id,
+            Week.season_year == pool.season_year,
+            Week.week_number < week.week_number,
+            Week.is_test_week.is_(False),
+            Week.status == "scored",
+            WeekEntry.is_winner.is_(True),
+        )
+    )
+    for entry in entries:
+        counts[entry.user_id] = counts.get(entry.user_id, 0) + 1
+    return counts
+
+
+@dataclass(frozen=True)
+class _WeeklyComponents:
+    """One player's position on every level of the weekly tiebreak chain (Phase 3), each
+    already oriented so a plain ascending comparison means "better." points is the pool's own
+    scoring direction (see _points_sort_key). wins is -wins_entering_week, so more prior wins
+    always sorts as better, mirroring _SeasonComponents' identical convention for the season
+    wins level. submission is (missing, timestamp): a real, earlier submission for THIS week
+    always sorts ahead of a later one, and both sort ahead of a missing one.
+    """
+
+    points: int
+    wins: int
+    submission: tuple[bool, dt.datetime | None]
+    user_id: int
+
+
+def _weekly_sort_key(components: _WeeklyComponents):
+    """The one place the weekly (and, since a bowl week is just another week, bowl) tiebreak
+    order is stated (Phase 3: "Write it as a single sort key function so weekly and bowl
+    share one definition and cannot drift"): points, then prior wins, then this week's own
+    submission time, then user id. user_id is the final level, so two distinct players are
+    never fully tied: every real rank this produces is unique.
+    """
+    return (components.points, components.wins, components.submission, components.user_id)
+
+
+def _weekly_tiebreak_reason(
+    mine: tuple[WeeklyRow, _WeeklyComponents],
+    other: tuple[WeeklyRow, _WeeklyComponents],
+) -> str:
+    """A plain sentence naming whichever level of the chain actually separated these two
+    players, checked in the same order the chain itself applies (prior wins, then submission
+    time, then user id) so the reason named is always the level that actually decided."""
+    mine_row, mine_c = mine
+    other_row, other_c = other
+    if mine_c.wins != other_c.wins:
+        mine_wins, other_wins = -mine_c.wins, -other_c.wins
+        return f"Tiebreak: {mine_wins} prior {_wins_word(mine_wins)} to {other_wins}."
+
+    if mine_c.submission != other_c.submission:
+        mine_missing, other_missing = mine_c.submission[0], other_c.submission[0]
+        if mine_missing and not other_missing:
+            return "Tiebreak: did not submit."
+        if other_missing and not mine_missing:
+            return "Tiebreak: the other player did not submit."
+        if mine_c.submission[1] < other_c.submission[1]:
+            return "Tiebreak: submitted first."
+        return "Tiebreak: the other player submitted first."
+
+    return "Tiebreak: entry order."
+
+
+def _wins_word(count: int) -> str:
+    return "win" if count == 1 else "wins"
+
+
+def _submission_key(entry: WeekEntry | None) -> tuple[bool, dt.datetime | None]:
+    """(missing, timestamp) so a real, earlier submission always sorts ahead of a later one,
+    and both sort ahead of a missing entry or a missing submitted_at."""
+    submitted_at = entry.submitted_at if entry else None
+    return (submitted_at is None, submitted_at)
+
+
+def _attach_weekly_tiebreak_reasons(ranked: list[tuple[WeeklyRow, _WeeklyComponents]]) -> None:
+    """Walk the already fully ranked list and, for every consecutive run of rows sharing the
+    same points (a real tie the chain had to break), set each row's tiebreak_reason by
+    comparing it to its nearest neighbor in that run. A run of size one is left with
+    tiebreak_reason=None: no tiebreak was needed, nothing to explain. Mirrors
+    _attach_tiebreak_reasons' identical shape for the season ladders."""
+    n = len(ranked)
+    i = 0
+    while i < n:
+        j = i
+        points = ranked[i][1].points
+        while j + 1 < n and ranked[j + 1][1].points == points:
+            j += 1
+        if j > i:
+            for k in range(i, j + 1):
+                neighbor = k - 1 if k > i else k + 1
+                ranked[k][0].tiebreak_reason = _weekly_tiebreak_reason(ranked[k], ranked[neighbor])
+        i = j + 1
+
+
 def weekly_leaderboard(
     db: Session,
     pool: Pool,
     week: Week | None = None,
     viewer_id: int | None = None,
 ) -> tuple[list[WeeklyRow], Week | None]:
-    """Leaderboard for one week. Defaults to the most recent scored or locked week."""
+    """Leaderboard for one week. Defaults to the most recent scored or locked week.
+
+    Under pool.weekly_tiebreak_mode "wins" (the default, Phase 3), a tie on points breaks
+    outright through the full chain (prior wins entering this week, then this week's own
+    submission time, then user id): every rank in the result is unique and tiebreak_reason
+    explains any row a tiebreak actually decided. Under "split", identical to this function's
+    pre-Phase-3 behavior: ties share a rank and app/payouts.py's own tie-splitting is what
+    actually divides the pot, exactly as it always has for weekly and bowl.
+    """
     week = week or latest_scored_week(db, pool)
     if week is None:
         return [], None
@@ -434,6 +564,27 @@ def weekly_leaderboard(
         )
 
     sign = _points_sort_key(pool)
-    rows.sort(key=lambda r: (sign * r.points, -r.correct, r.display_name.lower()))
-    _assign_ranks(rows)
-    return rows, week
+
+    if pool.weekly_tiebreak_mode != "wins":
+        rows.sort(key=lambda r: (sign * r.points, -r.correct, r.display_name.lower()))
+        _assign_ranks(rows)
+        return rows, week
+
+    wins_by_user = wins_entering_week(db, pool, week)
+    keyed = [
+        (
+            row,
+            _WeeklyComponents(
+                points=sign * row.points,
+                wins=-wins_by_user.get(row.user_id, 0),
+                submission=_submission_key(entries.get(row.user_id)),
+                user_id=row.user_id,
+            ),
+        )
+        for row in rows
+    ]
+    keyed.sort(key=lambda pair: _weekly_sort_key(pair[1]))
+    for index, (row, _components) in enumerate(keyed, start=1):
+        row.rank = index
+    _attach_weekly_tiebreak_reasons(keyed)
+    return [row for row, _components in keyed], week

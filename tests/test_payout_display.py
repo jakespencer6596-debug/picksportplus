@@ -302,10 +302,14 @@ def test_no_payout_rules_for_the_applicable_scope_hides_the_column(client, sessi
 def test_tied_week_splits_the_amount_and_it_sums_to_the_allocated_total(client, session_factory):
     """Alice and Bob tie for 1st (both 15 points): they split the combined 1st (90) and 2nd
     (30) place amounts, 120 total, evenly, 60 each. Carol, alone in 3rd, gets the 3rd place
-    rule (10) untouched by the split.
+    rule (10) untouched by the split. Explicit weekly_tiebreak_mode="split" (Phase 3, weekly
+    tiebreak on total wins): the pool default is now "wins", which would break this exact tie
+    outright on prior wins (both zero here) then submission time rather than split it, and this
+    test's whole point is exercising the split math, still fully supported when a commissioner
+    asks for it.
     """
     db = session_factory()
-    pool = _pool(db)
+    pool = _pool(db, weekly_tiebreak_mode="split")
     boss = _user(db, "boss@example.com", "The Commissioner", role="admin")
     alice = _user(db, "alice@example.com", "Alice Alpha")
     bob = _user(db, "bob@example.com", "Bob Beta")
@@ -457,4 +461,68 @@ def test_standings_page_hides_the_tiebreak_rule_sentence_under_split_mode(client
     assert response.status_code == 200
     assert "Season ties are broken by total weekly wins" not in response.text
     # Split mode: no tiebreak decided anything, so no reason renders either.
+    assert "Tiebreak:" not in response.text
+
+
+def test_weekly_results_page_shows_the_tiebreak_reason_and_rule_line(client, session_factory):
+    """Phase 3 (weekly tiebreak on total wins): the same pattern as the season standings
+    tiebreak rendering above, for Weekly Results. Alice enters week 2 with one prior win,
+    Bob with none; tied on week 2 points, Alice takes 1st outright."""
+    db = session_factory()
+    pool = _pool(db)  # weekly_tiebreak_mode defaults to "wins"
+    boss = _user(db, "boss@example.com", "The Commissioner", role="admin")
+    alice = _user(db, "alice@example.com", "Alice Alpha")
+    bob = _user(db, "bob@example.com", "Bob Beta")
+    _member(db, pool, boss, role="commissioner")
+    _member(db, pool, alice)
+    _member(db, pool, bob)
+
+    week1 = _week(db, pool, week_number=1, status="scored")
+    _entry(db, pool, week1, alice, points=5, is_winner=True)
+    _entry(db, pool, week1, bob, points=50, is_winner=False)
+
+    week2 = _week(db, pool, week_number=2, status="scored")
+    _entry(db, pool, week2, alice, points=10)
+    _entry(db, pool, week2, bob, points=10)
+    _rule(db, pool, "weekly", 1, "105")
+    _rule(db, pool, "weekly", 2, "55")
+    payout_service.snapshot_awards(db, pool, "weekly", week=week2)
+    db.commit()
+    db.close()
+
+    _login(client, "boss@example.com")
+    response = client.get("/results?week=2")
+
+    assert response.status_code == 200
+    assert "Weekly ties are broken by total wins entering the week" in response.text
+    assert "Tiebreak: 1 prior win to 0." in response.text
+    assert "105 dollars" in response.text
+    assert "55 dollars" in response.text
+    # An outright win, never a split: the old "a tie splits the combined amount" sentence must
+    # not render under this mode.
+    assert "A tie splits the combined amount" not in response.text
+
+
+def test_weekly_results_page_hides_the_tiebreak_rule_sentence_under_split_mode(
+    client, session_factory
+):
+    db = session_factory()
+    pool = _pool(db, weekly_tiebreak_mode="split")
+    boss = _user(db, "boss@example.com", "The Commissioner", role="admin")
+    alice = _user(db, "alice@example.com", "Alice Alpha")
+    bob = _user(db, "bob@example.com", "Bob Beta")
+    _member(db, pool, boss, role="commissioner")
+    _member(db, pool, alice)
+    _member(db, pool, bob)
+    week = _week(db, pool, week_number=1, status="scored")
+    _entry(db, pool, week, alice, points=10, is_winner=True)
+    _entry(db, pool, week, bob, points=10, is_winner=False)
+    db.commit()
+    db.close()
+
+    _login(client, "boss@example.com")
+    response = client.get("/results?week=1")
+
+    assert response.status_code == 200
+    assert "Weekly ties are broken by total wins entering the week" not in response.text
     assert "Tiebreak:" not in response.text

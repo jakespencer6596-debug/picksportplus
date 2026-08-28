@@ -24,7 +24,7 @@ real measurements against the live production site.
 - [x] Phase 0: timing instrumentation and performance baseline
 - [x] Phase 1: slate editor page weight
 - [x] Phase 2: wider performance review
-- [ ] Phase 3: weekly tiebreak on total wins
+- [x] Phase 3: weekly tiebreak on total wins
 - [ ] Phase 4: sorting on slate editor and picks page
 - [ ] Phase 5: regression sweep
 - [ ] Phase 6: full verification
@@ -161,3 +161,56 @@ runs (under whatever else was running on this machine at the time) and passed cl
 isolation and on retry. Neither test was touched by this work, which never modifies
 `app/scenarios.py`. Recorded here rather than silently ignored, since a real CI run of this same
 suite could hit the same flake; not something Phases 0-9 of this initiative are scoped to fix.
+
+## Phase 3: weekly tiebreak on total wins
+
+**What changed:**
+
+- `Pool.weekly_tiebreak_mode` (`"wins"` default, `"split"`), migration `4ed79f23298d`
+  (up/down/up verified against a scratch database).
+- `app/services/standings.py.wins_entering_week(db, pool, week)`: each member's total weekly
+  wins from every already-scored, non-test week with a lower `week_number`, excluding the week
+  being decided (the only non-circular definition) and any test week.
+- `weekly_leaderboard` now breaks a points tie outright under `"wins"` mode through a single
+  sort key function (`_weekly_sort_key`): points (pool's own direction), then prior wins
+  entering the week, then this week's own submission time, then user id. Every rank in the
+  result is unique under this mode; under `"split"`, unchanged pre-Phase-3 behavior (ties share
+  a rank, no reason attached). Applies identically to a bowl week, since a bowl week is simply
+  another `Week` row, no separate code path.
+- `app/services/payouts.py._weekly_or_bowl_standings` reuses that already-broken rank under
+  `"wins"` mode (renumbered contiguously after no-shows are filtered out, since
+  `weekly_leaderboard`'s own ranks are assigned across the full roster and would otherwise leave
+  gaps `allocate()` would silently skip past) rather than re-deriving one from
+  `rank_standings`, which would let a tie reach `allocate()`'s splitting logic again. Under
+  `"split"`, unchanged: `rank_standings` still runs and `allocate()` still splits, fully
+  exercised by `test_weekly_ties_still_split_under_weekly_tiebreak_mode_split`.
+- Weekly Results (`app/templates/results.html`) shows a muted tiebreak reason row under any
+  place a tiebreak actually decided ("Tiebreak: 3 prior wins to 2." or, week 1, "Tiebreak:
+  submitted first."), a rule line under the table when the mode is `"wins"`, and the old "a tie
+  splits the combined amount" sentence is now conditional on the mode so it never contradicts
+  what actually just happened on the page.
+- `/league/payouts`' pot panel gained a "Weekly tiebreak" dropdown next to the existing "Season
+  tiebreak" one, so a commissioner can actually flip `weekly_tiebreak_mode` without CLI or
+  database access, the same way `season_tiebreak_mode` already works.
+
+**Tests:** `tests/test_weekly_tiebreak.py` (7 tests: more-wins-wins, prior-wins-excludes-the-
+current-week, week-1-falls-to-submission-without-raising, a three-way tie with three distinct
+win counts, a test week's win not counting, `"split"` mode restoring shared ranks, inverse
+scoring direction never inverted by the tiebreak); `tests/test_payout_service.py` (the outright
+full-payout worked example, the bowl week sharing the same chain, and the pre-existing weekly
+split test updated to opt into `"split"` explicitly, since it is no longer the default);
+`tests/test_payout_display.py` and `tests/test_payout_routes.py` (the reason and rule line
+actually render on `/results`, and the new settings field saves/rejects correctly).
+
+**The worked example** (final deliverable item 6, real numbers): two players tied on 10 points
+for the week, weekly rules 1st = 105, 2nd = 55.
+
+| | Old behavior (or `weekly_tiebreak_mode = "split"`) | New default (`"wins"`) |
+|---|---|---|
+| Alice (2 prior wins entering the week) | Splits 1st+2nd (160) evenly: **80 dollars** | Takes 1st outright: **105 dollars** |
+| Bob (1 prior win entering the week) | Splits 1st+2nd (160) evenly: **80 dollars** | Takes 2nd outright: **55 dollars** |
+
+Same two players, same pot, same rules; the only thing that changed is which of them the
+tiebreak favors. This exact scenario is `test_weekly_tie_breaks_outright_on_prior_wins_under_
+the_default_mode` in `tests/test_payout_service.py`, asserting the dollar amounts directly, not
+just the rank order.
