@@ -23,11 +23,12 @@ else, but never manage anyone's commissioner status. See app.auth.require_full_c
 from __future__ import annotations
 
 import datetime as dt
+import html
 import re
 from decimal import Decimal, InvalidOperation
 
 from fastapi import APIRouter, Depends, Form, HTTPException, Request, status
-from fastapi.responses import RedirectResponse, Response
+from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
@@ -59,11 +60,17 @@ from app.providers.http import get_platform_settings, provider_warnings
 from app.providers.teams import canonical_key, display_name
 from app.routers.leagues import _fresh_commissioner_invite_code, _parse_commissioner_emails
 from app.services import ingest, mail
-from app.templating import get_zone, render
+from app.templating import get_zone, render, templates
 
 router = APIRouter(prefix="/league", tags=["admin"])
 
-LEAGUE_LABELS = {"nfl": "NFL", "ncaaf": "College"}
+# How many candidate rows the slate editor renders on first load and per "Load more" click
+# (Phase 1, weekly tiebreak/sorting/performance work, see PERF-REPORT.md). A week can carry
+# well over a hundred candidates; rendering them all at once was most of the page's weight.
+# 25 keeps the initial page well inside the 60 form budget (20 on-slate rows at one form each,
+# plus 25 candidate rows at one form each, plus the handful of other forms on the page) with
+# real headroom, while still showing enough to be useful without a click.
+CANDIDATES_PAGE_SIZE = 25
 
 
 def _redirect(target: str = "/league") -> RedirectResponse:
@@ -808,22 +815,35 @@ def member_remove(
 # Slate editor ---------------------------------------------------------------
 
 
-@router.get("/slate")
-def slate_page(
-    request: Request,
-    week: int | None = None,
-    db: Session = Depends(get_db),
-    user: User = Depends(require_user),
-    pool: Pool = Depends(require_commissioner),
-):
-    row = _week_or_none(db, pool, week)
-    weeks = list(
-        db.scalars(
-            select(Week)
-            .where(Week.pool_id == pool.id, Week.season_year == pool.season_year)
-            .order_by(Week.week_number.desc())
-        )
+def _sorted_candidates(games: list[Game]) -> list[Game]:
+    return sorted(
+        [g for g in games if not g.in_slate],
+        key=lambda g: (
+            g.closeness if g.closeness is not None else float("inf"),
+            g.start_time,
+        ),
     )
+
+
+def _matches_query(game: Game, q: str) -> bool:
+    """Plain substring match against team names and abbreviations, case insensitive. Empty
+    q matches everything, so the search box's own empty state is just "show the first page."
+    """
+    if not q:
+        return True
+    needle = q.strip().lower()
+    if not needle:
+        return True
+    haystacks = (game.home_team, game.away_team, game.home_abbr, game.away_abbr)
+    return any(needle in (h or "").lower() for h in haystacks)
+
+
+def _slate_context(db: Session, pool: Pool, row: Week | None) -> dict:
+    """Everything the slate editor's full page render and its HTMX fragments both need,
+    computed once so the two can never drift (Phase 1, weekly tiebreak/sorting/performance
+    work, see PERF-REPORT.md). candidates here is the full, unpaged, unfiltered list: the
+    swap datalist always offers every real candidate regardless of what page of the visible
+    candidates table a commissioner happens to be looking at."""
     on_slate: list[Game] = []
     candidates: list[Game] = []
     editable = False
@@ -836,13 +856,7 @@ def slate_page(
     if row is not None:
         games = list(db.scalars(select(Game).where(Game.week_id == row.id)))
         on_slate = sorted([g for g in games if g.in_slate], key=lambda g: (g.slate_rank or 999))
-        candidates = sorted(
-            [g for g in games if not g.in_slate],
-            key=lambda g: (
-                g.closeness if g.closeness is not None else float("inf"),
-                g.start_time,
-            ),
-        )
+        candidates = _sorted_candidates(games)
         editable = ingest.can_resize_slate(db, row)
         pick_count = (
             db.scalar(select(func.count(func.distinct(Pick.user_id))).where(Pick.week_id == row.id))
@@ -862,30 +876,94 @@ def slate_page(
                 "wide": (latest - earliest) > dt.timedelta(hours=48),
             }
 
+    return {
+        "on_slate": on_slate,
+        "candidates": candidates,
+        "editable": editable,
+        "pick_count": pick_count,
+        "reasons": reasons,
+        "pinned_count": pinned_count,
+        "missing_spread_count": missing_spread_count,
+        "slate_span": slate_span_info,
+    }
+
+
+@router.get("/slate")
+def slate_page(
+    request: Request,
+    week: int | None = None,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_user),
+    pool: Pool = Depends(require_commissioner),
+):
+    row = _week_or_none(db, pool, week)
+    weeks = list(
+        db.scalars(
+            select(Week)
+            .where(Week.pool_id == pool.id, Week.season_year == pool.season_year)
+            .order_by(Week.week_number.desc())
+        )
+    )
+    ctx = _slate_context(db, pool, row)
+    all_candidates = ctx.pop("candidates")
+    first_page = all_candidates[:CANDIDATES_PAGE_SIZE]
+
     return render(
         request,
         "admin/slate.html",
         {
             "week": row,
             "weeks": weeks,
-            "on_slate": on_slate,
-            "candidates": candidates,
-            "editable": editable,
-            "pick_count": pick_count,
+            "candidates": first_page,
+            "candidates_total": len(all_candidates),
+            "candidates_has_more": len(all_candidates) > CANDIDATES_PAGE_SIZE,
+            "all_candidates_for_swap": all_candidates,
             "targets": pool.league_targets,
-            "league_labels": LEAGUE_LABELS,
             "warnings": provider_warnings(db),
-            "reasons": reasons,
-            "pinned_count": pinned_count,
-            "missing_spread_count": missing_spread_count,
-            "slate_span": slate_span_info,
             # The global switch (Phase 5 remediation), read fresh so the neutral note below
             # always reflects whatever the site admin has it set to right now, never a stale
             # value. No billing/credit language reaches the commissioner: see slate.html.
             "espn_only": get_platform_settings(db).espn_only,
+            **ctx,
         },
         **_base(db, user, pool),
     )
+
+
+@router.get("/slate/candidates")
+def slate_candidates_page(
+    request: Request,
+    week_id: int,
+    q: str = "",
+    offset: int = 0,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_user),
+    pool: Pool = Depends(require_commissioner),
+):
+    """HTMX fragment: one page of the candidates table, filtered by q, starting at offset.
+    Powers both the search box (offset always 0, swapped in as the tbody's whole innerHTML)
+    and "Load more" (offset advances, appended to the tbody), see admin/slate.html. Always
+    returns plain <tr> rows plus an out-of-band refresh of the "Load more" control, which is
+    outside whichever element htmx actually swaps for either caller."""
+    row = _week_for_action(db, pool, week_id)
+    all_candidates = _sorted_candidates(
+        list(db.scalars(select(Game).where(Game.week_id == row.id)))
+    )
+    matched = [g for g in all_candidates if _matches_query(g, q)]
+    page = matched[offset : offset + CANDIDATES_PAGE_SIZE]
+    editable = ingest.can_resize_slate(db, row)
+
+    frag = templates.env.get_template("admin/_slate_fragments.html").module
+    rows_html = "".join(
+        str(frag.candidate_row(row, game, editable, pool.timezone)) for game in page
+    )
+    if not page and offset == 0:
+        rows_html = '<tr><td colspan="7" class="muted">No games match your search.</td></tr>'
+    next_offset = offset + len(page)
+    load_more_html = str(
+        frag.candidates_load_more(row.id, q, next_offset, next_offset < len(matched), oob=True)
+    )
+    return HTMLResponse(rows_html + load_more_html)
 
 
 def _week_for_action(db: Session, pool: Pool, week_id: int) -> Week:
@@ -995,6 +1073,105 @@ def slate_publish(
     return _redirect(f"/league/slate?week={row.week_number}")
 
 
+_SLATE_ACTION_MESSAGES = {
+    "add": "Game added to the slate.",
+    "remove": "Game removed from the slate.",
+    "swap": "Games swapped.",
+    "void": "Game voided. Nobody scores it and it leaves the possible count.",
+    "unvoid": "Game restored.",
+    "spread": "Line set by hand. No feed will overwrite it.",
+    "pin": "Game pinned. It will always be on the slate the next time it is built.",
+    "unpin": "Game unpinned.",
+}
+
+# Actions that change which table a game belongs to, versus one that only mutates a game
+# already sitting in whichever table it started in (pin, unpin, void, unvoid, spread). Those
+# in-place actions only ever need to swap their own row (Phase 1: "Pin a game. Only that row
+# updates."); these three need the on-slate and candidates tables both refreshed, since a game
+# just left one and joined the other. See _slate_action_fragment below.
+_SLATE_MEMBERSHIP_ACTIONS = {"add", "remove", "swap"}
+
+
+def _slate_action_fragment(
+    db: Session, pool: Pool, row: Week, game_id: int, action: str, error: str | None
+) -> HTMLResponse:
+    """The HTMX partial response for one slate action: the affected row (or nothing, when the
+    action itself never leaves a single row to re-render, see _SLATE_MEMBERSHIP_ACTIONS), plus
+    out-of-band updates for the header summary and, on error, an inline banner. A membership
+    action additionally OOB-refreshes both tables in full (still only the first page of
+    candidates, and small either way next to the 500KB+ full page reload this replaces), since
+    a row that changed which table it belongs to cannot be expressed as a same-element swap.
+    An in-place action deliberately never touches the tables at large: doing so would wipe out
+    whatever a commissioner is mid-typing into another row's own spread or swap box.
+    """
+    frag = templates.env.get_template("admin/_slate_fragments.html").module
+    tz = pool.timezone
+    ctx = _slate_context(db, pool, row)
+    parts: list[str] = []
+
+    game = db.get(Game, game_id)
+    if game is not None and action not in _SLATE_MEMBERSHIP_ACTIONS:
+        if game.in_slate:
+            parts.append(
+                str(
+                    frag.slate_row(
+                        row, game, pool, ctx["reasons"].get(game.id, ""), ctx["editable"], tz
+                    )
+                )
+            )
+        else:
+            parts.append(str(frag.candidate_row(row, game, ctx["editable"], tz)))
+
+    nfl_on = sum(1 for g in ctx["on_slate"] if g.league == "nfl")
+    ncaaf_on = sum(1 for g in ctx["on_slate"] if g.league == "ncaaf")
+    summary_html = frag.week_summary(
+        row,
+        pool,
+        ctx["on_slate"],
+        nfl_on,
+        ncaaf_on,
+        pool.league_targets,
+        ctx["pinned_count"],
+        ctx["missing_spread_count"],
+        ctx["pick_count"],
+    )
+    parts.append(f'<div id="week-summary-body" hx-swap-oob="true">{summary_html}</div>')
+
+    error_html = (
+        f'<div class="flash flash-error" role="alert"><span>{html.escape(error)}</span></div>'
+        if error
+        else ""
+    )
+    parts.append(f'<div id="slate-action-error" hx-swap-oob="true">{error_html}</div>')
+
+    if action in _SLATE_MEMBERSHIP_ACTIONS and not error:
+        all_candidates = ctx["candidates"]
+        first_page = all_candidates[:CANDIDATES_PAGE_SIZE]
+        on_slate_rows = "".join(
+            str(frag.slate_row(row, g, pool, ctx["reasons"].get(g.id, ""), ctx["editable"], tz))
+            for g in ctx["on_slate"]
+        )
+        parts.append(f'<tbody id="on-slate-tbody" hx-swap-oob="true">{on_slate_rows}</tbody>')
+        candidate_rows = "".join(
+            str(frag.candidate_row(row, g, ctx["editable"], tz)) for g in first_page
+        )
+        parts.append(f'<tbody id="candidates-tbody" hx-swap-oob="true">{candidate_rows}</tbody>')
+        parts.append(
+            str(
+                frag.candidates_load_more(
+                    row.id,
+                    "",
+                    len(first_page),
+                    len(all_candidates) > CANDIDATES_PAGE_SIZE,
+                    oob=True,
+                )
+            )
+        )
+        parts.append(str(frag.swap_datalist(all_candidates, oob=True)))
+
+    return HTMLResponse("".join(str(p) for p in parts))
+
+
 @router.post("/slate/game")
 def slate_game_action(
     request: Request,
@@ -1007,44 +1184,48 @@ def slate_game_action(
     user: User = Depends(require_user),
     pool: Pool = Depends(require_commissioner),
 ):
+    is_hx = request.headers.get("HX-Request") == "true"
     row = _week_for_action(db, pool, week_id)
+    error: str | None = None
     try:
         if action == "add":
             ingest.add_to_slate(db, row, game_id)
-            flash(request, "Game added to the slate.")
         elif action == "remove":
             ingest.remove_from_slate(db, row, game_id)
-            flash(request, "Game removed from the slate.")
         elif action == "swap":
             if swap_with is None:
                 raise ValueError("Choose a game to swap in.")
             ingest.swap_slate_game(db, row, game_id, swap_with)
-            flash(request, "Games swapped.")
         elif action == "void":
             ingest.set_void(db, row, game_id, True)
-            flash(request, "Game voided. Nobody scores it and it leaves the possible count.")
         elif action == "unvoid":
             ingest.set_void(db, row, game_id, False)
-            flash(request, "Game restored.")
         elif action == "spread":
             value = spread.strip()
             ingest.set_manual_spread(db, row, game_id, float(value) if value else None)
-            flash(request, "Line set by hand. No feed will overwrite it.")
         elif action == "pin":
             ingest.set_pinned(db, row, game_id, True)
-            flash(request, "Game pinned. It will always be on the slate the next time it is built.")
         elif action == "unpin":
             ingest.set_pinned(db, row, game_id, False)
-            flash(request, "Game unpinned.")
         else:
             raise ValueError("Unknown action.")
         db.commit()
     except ingest.SlateLocked as exc:
         db.rollback()
-        flash(request, str(exc), "error")
+        error = str(exc)
     except ValueError as exc:
         db.rollback()
-        flash(request, str(exc), "error")
+        error = str(exc)
+
+    if is_hx:
+        return _slate_action_fragment(db, pool, row, game_id, action, error)
+
+    # The plain POST fallback (no JavaScript, see SPEC.md Section 3g/17): a full page reload
+    # with the same flash-and-redirect behavior this route has always had.
+    if error:
+        flash(request, error, "error")
+    else:
+        flash(request, _SLATE_ACTION_MESSAGES.get(action, "Done."))
     return _redirect(f"/league/slate?week={row.week_number}")
 
 

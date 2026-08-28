@@ -1,80 +1,9 @@
 {% extends "base.html" %}
 {% import "components/icons.html" as ic %}
+{% import "admin/_slate_fragments.html" as frag %}
 {% block title %}Slate editor. {{ APP_NAME }}{% endblock %}
 
 {% block content %}
-{% macro game_cells(game) %}
-  {% set source_labels = {
-    "espn": "ESPN",
-    "espn_core": "ESPN core",
-    "odds_api": "The Odds API",
-    "cfbd": "CollegeFootballData",
-    "manual": "Set by hand"
-  } %}
-  {% set status_labels = {
-    "scheduled": "Scheduled",
-    "in_progress": "Live",
-    "final": "Final",
-    "void": "Void"
-  } %}
-  {% set status_classes = {
-    "in_progress": " badge-live",
-    "final": " badge-final",
-    "void": " badge-void"
-  } %}
-  <td data-label="Matchup">
-    <span class="matchup">
-      <span class="team-abbr">{{ game.away_abbr }}</span>
-      <span class="matchup-at">at</span>
-      <span class="team-abbr">{{ game.home_abbr }}</span>
-    </span>
-    <span class="matchup-full muted">{{ game.away_team }} at {{ game.home_team }}</span>
-  </td>
-  <td data-label="League">
-    <span class="badge badge-{{ game.league }}">{{ league_labels.get(game.league, game.league) }}</span>
-  </td>
-  <td data-label="Line">
-    <span class="game-line">{{ game.line_text }}</span>
-    {% if game.closeness is not none %}
-      <span class="line-gap num">{{ "%.1f" | format(game.closeness) }} point gap</span>
-    {% endif %}
-  </td>
-  <td data-label="Spread source">
-    {{ source_labels.get(game.spread_source, "No source yet") }}
-  </td>
-  <td data-label="Kickoff">
-    <span class="num">{{ game.start_time | kickoff(tz) }}</span>
-    <span class="muted">{{ game.start_time | shortdate(tz) }}</span>
-  </td>
-  <td data-label="Status">
-    <span class="badge{{ status_classes.get(game.status, '') }}">
-      {{ status_labels.get(game.status, game.status) }}
-    </span>
-    {% if game.home_score is not none and game.away_score is not none %}
-      <span class="game-score num">
-        {{ game.away_abbr }} {{ game.away_score }}, {{ game.home_abbr }} {{ game.home_score }}
-      </span>
-    {% endif %}
-  </td>
-{% endmacro %}
-
-{% macro spread_form(week_id, game) %}
-  <form method="post" action="/league/slate/game" class="action-form">
-    <input type="hidden" name="week_id" value="{{ week_id }}">
-    <input type="hidden" name="game_id" value="{{ game.id }}">
-    <input type="hidden" name="action" value="spread">
-    <label class="visually-hidden" for="spread-{{ game.id }}">
-      Home line for {{ game.away_abbr }} at {{ game.home_abbr }}
-    </label>
-    <input class="input input-sm num" type="text" inputmode="decimal" id="spread-{{ game.id }}"
-           name="spread" value="{% if game.spread_home is not none %}{{ '%g' | format(game.spread_home) }}{% endif %}"
-           placeholder="-2.5" autocomplete="off" spellcheck="false">
-    <button class="btn btn-secondary btn-sm" type="submit">
-      Set line<span class="visually-hidden"> for {{ game.away_abbr }} at {{ game.home_abbr }}</span>
-    </button>
-  </form>
-{% endmacro %}
-
 <div class="page-head">
   <div>
     <p class="eyebrow">Commissioner</p>
@@ -206,30 +135,14 @@
 {% if week %}
   {% set nfl_on = on_slate | selectattr("league", "equalto", "nfl") | list | length %}
   {% set ncaaf_on = on_slate | selectattr("league", "equalto", "ncaaf") | list | length %}
-  {% set swap_options = candidates[:40] %}
 
   <section class="section" aria-labelledby="week-title">
     <h2 class="section-title" id="week-title">{{ week.label }}</h2>
 
-    <div class="panel week-summary">
-      <div class="row">
-        <span class="badge badge-{{ week.status }}">{{ week.status }}</span>
-        <span class="pill num">{{ on_slate | length }} of {{ pool.num_games_per_week }} games</span>
-        <span class="pill num">
-          {{ pick_count }} {{ pick_count | pluralize("player", "players") }} submitted
-        </span>
-        <span class="pill num">{{ pinned_count }} pinned</span>
-        <span class="pill num">{{ missing_spread_count }} missing a spread</span>
+    <div class="panel week-summary" id="week-summary">
+      <div id="week-summary-body">
+        {{ frag.week_summary(week, pool, on_slate, nfl_on, ncaaf_on, targets, pinned_count, missing_spread_count, pick_count) }}
       </div>
-
-      <p class="target-line">
-        Target:
-        {%- for key, value in targets.items() %}
-          {{ league_labels.get(key, key) }} {{ value }}{% if not loop.last %},{% endif %}
-        {%- endfor %}.
-        On the slate: {{ league_labels.get("nfl", "NFL") }} {{ nfl_on }},
-        {{ league_labels.get("ncaaf", "College") }} {{ ncaaf_on }}.
-      </p>
 
       <p class="muted">
         Lock:
@@ -308,6 +221,8 @@
       </div>
     </div>
 
+    <div id="slate-action-error"></div>
+
     {% if not editable %}
       <div class="flash flash-info" id="slate-locked-note">
         {{ ic.icon("lock", 18) }}
@@ -321,104 +236,47 @@
     {% endif %}
   </section>
 
+  {# The swap datalist is rendered exactly once for the whole page (Phase 1: "the option list
+     appears in the document once, not once per row"), shared by every on-slate row's swap
+     input via list="swap-candidates". It lists every real candidate, not just the first page
+     shown below, since swapping in a game further down the list than the visible page is still
+     a legitimate thing to want to do. #}
+  {{ frag.swap_datalist(all_candidates_for_swap) }}
+
   <section class="section" aria-labelledby="on-slate-title">
     <h2 class="section-title" id="on-slate-title">On the slate</h2>
     <p class="form-hint">
       Ranked by closeness, closest first. Lines are home relative, so -2.5 means the home team is
-      favoured by 2.5 points. Clear the line box and save to drop a line you set by hand.
+      favoured by 2.5 points. Clear the line box and save to drop a line you set by hand. Type a
+      game id into "Swap it for" or pick one from the list, which covers every game not already
+      on the slate.
     </p>
 
     {% if on_slate %}
       <div class="table-wrap">
-        <table class="table">
+        <table class="table" id="on-slate-table" data-sortable data-default-sort-col="0">
           <thead>
             <tr>
-              <th scope="col" class="num">Rank</th>
-              <th scope="col">Matchup</th>
-              <th scope="col">League</th>
-              <th scope="col">Line</th>
+              <th scope="col" class="num" data-sortable-col>Rank</th>
+              <th scope="col" data-sortable-col>Matchup</th>
+              <th scope="col" data-sortable-col>League</th>
+              <th scope="col" data-sortable-col>Line</th>
               <th scope="col">Spread source</th>
               <th scope="col">Why it's here</th>
-              <th scope="col">Kickoff</th>
+              <th scope="col" data-sortable-col>Kickoff</th>
               <th scope="col">Status</th>
               <th scope="col">Actions</th>
             </tr>
           </thead>
-          <tbody>
+          <tbody id="on-slate-tbody">
             {% for game in on_slate %}
-              <tr class="{% if game.is_void %}is-void{% endif %}">
-                <td data-label="Rank" class="num">{{ game.slate_rank or "" }}</td>
-                {{ game_cells(game) }}
-                <td data-label="Why it's here">
-                  {% set reason = reasons.get(game.id, "") %}
-                  <span class="badge{% if game.pinned %} badge-pinned{% endif %}">
-                    {{ reason }}
-                  </span>
-                </td>
-                <td data-label="Actions" class="cell-actions">
-                  <form method="post" action="/league/slate/game" class="inline-form">
-                    <input type="hidden" name="week_id" value="{{ week.id }}">
-                    <input type="hidden" name="game_id" value="{{ game.id }}">
-                    <input type="hidden" name="action" value="{% if game.pinned %}unpin{% else %}pin{% endif %}">
-                    <button class="btn btn-secondary btn-sm" type="submit">
-                      {% if game.pinned %}Unpin{% else %}Pin{% endif %}
-                      <span class="visually-hidden">
-                        {{ game.away_abbr }} at {{ game.home_abbr }}</span>
-                    </button>
-                  </form>
-
-                  {% if editable %}
-                    <form method="post" action="/league/slate/game" class="inline-form">
-                      <input type="hidden" name="week_id" value="{{ week.id }}">
-                      <input type="hidden" name="game_id" value="{{ game.id }}">
-                      <input type="hidden" name="action" value="remove">
-                      <button class="btn btn-secondary btn-sm" type="submit">
-                        Remove<span class="visually-hidden">
-                          {{ game.away_abbr }} at {{ game.home_abbr }} from the slate</span>
-                      </button>
-                    </form>
-
-                    {% if swap_options %}
-                      <form method="post" action="/league/slate/game" class="action-form">
-                        <input type="hidden" name="week_id" value="{{ week.id }}">
-                        <input type="hidden" name="game_id" value="{{ game.id }}">
-                        <input type="hidden" name="action" value="swap">
-                        <label class="visually-hidden" for="swap-{{ game.id }}">
-                          Swap {{ game.away_abbr }} at {{ game.home_abbr }} for
-                        </label>
-                        <select class="select select-sm" id="swap-{{ game.id }}" name="swap_with" required>
-                          <option value="">Swap it for</option>
-                          {% for option in swap_options %}
-                            <option value="{{ option.id }}">
-                              {{ option.away_abbr }} at {{ option.home_abbr }}, {{ option.line_text }}
-                            </option>
-                          {% endfor %}
-                        </select>
-                        <button class="btn btn-secondary btn-sm" type="submit">Swap</button>
-                      </form>
-                    {% endif %}
-                  {% endif %}
-
-                  <form method="post" action="/league/slate/game" class="inline-form">
-                    <input type="hidden" name="week_id" value="{{ week.id }}">
-                    <input type="hidden" name="game_id" value="{{ game.id }}">
-                    <input type="hidden" name="action" value="{% if game.is_void %}unvoid{% else %}void{% endif %}">
-                    <button class="btn btn-secondary btn-sm" type="submit">
-                      {% if game.is_void %}Restore{% else %}Void{% endif %}
-                      <span class="visually-hidden">
-                        {{ game.away_abbr }} at {{ game.home_abbr }}</span>
-                    </button>
-                  </form>
-
-                  {{ spread_form(week.id, game) }}
-                </td>
-              </tr>
+              {{ frag.slate_row(week, game, pool, reasons.get(game.id, ""), editable, tz) }}
             {% endfor %}
           </tbody>
         </table>
       </div>
     {% else %}
-      <div class="empty-state">
+      <div class="empty-state" id="on-slate-tbody">
         {{ ic.icon("list", 28) }}
         <h3 class="empty-state-title">Nothing on the slate</h3>
         <p>
@@ -431,72 +289,52 @@
   <section class="section" aria-labelledby="candidates-title">
     <h2 class="section-title" id="candidates-title">Everything else this week</h2>
     <p class="form-hint">
-      Every other NFL and college game in {{ week.label }} with its line, closest first, so you can
-      see exactly what is available. A line ranks a game, closest first, but is not required: a
-      game with no line posted yet can still be added.
+      Every other NFL and college game in {{ week.label }} with its line, closest first. A line
+      ranks a game, closest first, but is not required: a game with no line posted yet can still
+      be added. {{ candidates_total }} {{ candidates_total | pluralize("game", "games") }} total;
+      search narrows the list below.
     </p>
+
+    <form class="stack" id="candidates-search-form"
+          hx-get="/league/slate/candidates" hx-target="#candidates-tbody" hx-swap="innerHTML"
+          hx-trigger="input changed delay:300ms from:#candidates-q, submit">
+      <input type="hidden" name="week_id" value="{{ week.id }}">
+      <div class="field">
+        <label class="field-label" for="candidates-q">Search candidates</label>
+        <input class="input" type="search" id="candidates-q" name="q"
+               placeholder="Team name or abbreviation" autocomplete="off">
+      </div>
+    </form>
 
     {% if candidates %}
       <div class="table-wrap">
-        <table class="table">
+        <table class="table" id="candidates-table" data-sortable data-default-sort-col="3">
           <thead>
             <tr>
-              <th scope="col">Matchup</th>
-              <th scope="col">League</th>
-              <th scope="col">Line</th>
+              <th scope="col" data-sortable-col>Matchup</th>
+              <th scope="col" data-sortable-col>League</th>
+              <th scope="col" data-sortable-col>Line</th>
               <th scope="col">Spread source</th>
-              <th scope="col">Kickoff</th>
+              <th scope="col" data-sortable-col>Kickoff</th>
               <th scope="col">Status</th>
               <th scope="col">Actions</th>
             </tr>
           </thead>
-          <tbody>
+          <tbody id="candidates-tbody">
             {% for game in candidates %}
-              <tr>
-                {{ game_cells(game) }}
-                <td data-label="Actions" class="cell-actions">
-                  {% if game.pinned %}
-                    <span class="badge badge-pinned">Pinned</span>
-                  {% endif %}
-                  {% if editable %}
-                    <form method="post" action="/league/slate/game" class="inline-form">
-                      <input type="hidden" name="week_id" value="{{ week.id }}">
-                      <input type="hidden" name="game_id" value="{{ game.id }}">
-                      <input type="hidden" name="action" value="add">
-                      <button class="btn btn-primary btn-sm" type="submit">
-                        Add<span class="visually-hidden">
-                          {{ game.away_abbr }} at {{ game.home_abbr }} to the slate</span>
-                      </button>
-                    </form>
-                  {% else %}
-                    <span class="cell-note muted">Picks are in, the slate is fixed.</span>
-                  {% endif %}
-
-                  <form method="post" action="/league/slate/game" class="inline-form">
-                    <input type="hidden" name="week_id" value="{{ week.id }}">
-                    <input type="hidden" name="game_id" value="{{ game.id }}">
-                    <input type="hidden" name="action" value="{% if game.pinned %}unpin{% else %}pin{% endif %}">
-                    <button class="btn btn-secondary btn-sm" type="submit">
-                      {% if game.pinned %}Unpin{% else %}Pin{% endif %}
-                      <span class="visually-hidden">
-                        {{ game.away_abbr }} at {{ game.home_abbr }}</span>
-                    </button>
-                  </form>
-
-                  {{ spread_form(week.id, game) }}
-                </td>
-              </tr>
+              {{ frag.candidate_row(week, game, editable, tz) }}
             {% endfor %}
           </tbody>
         </table>
       </div>
+      {{ frag.candidates_load_more(week.id, "", candidates | length, candidates_has_more) }}
     {% else %}
-      <div class="empty-state">
+      <div class="empty-state" id="candidates-tbody">
         {{ ic.icon("flag", 28) }}
         <h3 class="empty-state-title">No other games</h3>
         <p>
-          Every game {{ week.label }} pulled in is already on the slate. Build the week again to
-          refresh the pool from ESPN.
+          Every game {{ week.label }} pulled in is already on the slate, or nothing matched your
+          search.
         </p>
       </div>
     {% endif %}

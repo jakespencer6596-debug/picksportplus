@@ -3,6 +3,80 @@
 Record of ambiguity resolutions and other build-time judgment calls, most recent first.
 Each entry states the decision, why, and where it took effect.
 
+## Weekly tiebreak, sorting and performance
+
+Three decisions the prompt made explicitly, plus every ambiguity resolved along the way.
+Sub-headings below are in the order the work happened, not most-recent-first, since they build
+on each other within this one initiative; the section as a whole sits at the top because the
+initiative itself is the most recent work.
+
+### The three pre-made decisions
+
+1. **A weekly tie breaks outright**, more wins takes the full weekly payout, no split.
+   `Pool.weekly_tiebreak_mode` (`"wins"` default, `"split"` restores the old behavior). This
+   matches how season ties already work (`Pool.season_tiebreak_mode`), so a commissioner who
+   has already internalized "ties break on wins" for the season does not have to learn a second
+   rule for the week.
+2. **Wins entering the week exclude the week being decided.** The only non-circular definition:
+   using week 5's own win to decide week 5 is circular. `wins_entering_week(pool, week)` sums
+   only weeks with a lower `week_number` than the one being decided, already scored, excluding
+   test weeks (they must contribute nothing, the same rule they already follow everywhere else
+   in `app/services/standings.py`).
+3. **Sorting ships on the slate editor first, then mirrors onto the picks page**, matching where
+   the complaint actually came from and reusing one shared client-side sorting engine
+   (`app/static/app.js`'s existing `table[data-sortable]`/`data-sortable-col` machinery, already
+   built for season standings and the weekly leaderboard) rather than writing a second one.
+
+### Phase 1: swap control is a shared `<datalist>`, not an HTMX-fetched-on-open control
+
+The brief names two acceptable approaches. Chose the `<datalist>`: it needs no JavaScript at
+all to render its native autocomplete, which is what actually lets "Keep a no-JavaScript
+fallback that still works via full POST" hold for the swap control itself, not just the row's
+other actions. An HTMX-fetched-on-open control would have needed a second, separate no-JS
+fallback (a real server-rendered `<select>` inside a `<noscript>` block) to satisfy the same
+requirement, which is more moving parts for the same outcome. `<option value="{id}"
+label="...">` is what makes this work: modern browsers show `label` in the suggestion list but
+fill the input with `value` (the numeric game id `swap_slate_game` actually expects) on
+selection. See `app/templates/admin/_slate_fragments.html`'s `swap_datalist` macro.
+
+### Phase 1: one `<form>` per row, buttons carry their own `hx-target`/`hx-swap`
+
+Getting a 20-row on-slate table with up to five actions each (pin, void, set a line, remove,
+swap) under a 60-form budget is not possible with a form per action (that alone is 100 forms
+before a single candidate row is counted). htmx honors `hx-target`/`hx-swap` set directly on
+the triggering button over anything it would otherwise inherit, and still includes every
+sibling field in the same `<form>` when building the request, so one form per row loses nothing
+functionally while cutting the row's own form count by up to 5x. A browser with no JavaScript
+ignores every `hx-*` attribute regardless and submits the form's own `method="post"
+action="/league/slate/game"`, so the no-JS fallback is unaffected by this consolidation.
+
+### Phase 1: the candidates panel is paged and searchable, not literally collapsed by default
+
+The brief's own wording ("a collapsed-by-default candidates panel") would send zero candidate
+rows until a commissioner opens it, which is fine for a JavaScript-enabled browser but leaves a
+no-JS visitor with nothing to add from at all (a native `<details>` still needs an HTMX request
+to populate its rows, which does not fire without JavaScript). Rendered the first
+`CANDIDATES_PAGE_SIZE` (25) rows directly and openly instead: enough to be immediately useful
+and to leave real headroom under the 60-form budget (20 on-slate rows at one form each plus 25
+candidate rows at one form each, plus the handful of other forms already on the page), while
+"Load more" and the search box are the HTMX-powered paging and filtering the brief actually
+asked for. The swap datalist is unaffected by this pagination: it always lists every real
+candidate, since swapping in a game further down the list than the visible page is still a
+legitimate thing to want to do.
+
+### Phase 1: an add/remove/swap action OOB-refreshes both tables in full; pin/void/spread do not
+
+Pin, void, and setting a line by hand never change which table a game belongs to, so each swaps
+only its own row (`hx-target="#slate-row-{id}"`/`"#candidate-row-{id}"`), matching the brief's
+own example ("Pin a game. Only that row updates."). Add, remove, and swap change slate
+membership, which cannot be expressed as a single-element swap, so those three instead
+out-of-band refresh the on-slate tbody and the current (first-page) candidates tbody in full.
+This was a deliberate choice over trying to surgically move one `<tr>` between two `<table>`
+elements: the OOB refresh is still a few KB, not a 500KB reload, and is far less code to get
+right than cross-table DOM surgery. It also has to stay OFF the in-place actions specifically,
+not just be "nice to have" on every action: OOB-replacing the whole tbody on every pin would
+wipe out whatever a commissioner is mid-typing into a different row's own spread or swap box.
+
 ## Phase 0
 
 ### Local environment: repo moved out of OneDrive
