@@ -64,6 +64,57 @@ asked for. The swap datalist is unaffected by this pagination: it always lists e
 candidate, since swapping in a game further down the list than the visible page is still a
 legitimate thing to want to do.
 
+### Phase 6: three real bugs found only by a real browser, all in the Phase 1 slate editor rewrite
+
+Every automated test (pytest, the JS suite) was green through Phase 5. Live verification
+against a real Chrome browser in Phase 6 found three genuine defects none of that automated
+coverage could have caught, because each one is specifically about the gap between "a
+hand-built test request" and "what a real browser actually sends or does with a response":
+
+1. **On-slate table header/body column mismatch.** `slate_row`'s actual `<td>` order (Rank,
+   then `game_cells()`'s Matchup/League/Line/Spread source/Kickoff/Status, then Why it's
+   here, then Actions) never matched the header row's declared order (which had Why it's
+   here and Kickoff swapped), a bug that predates this initiative entirely (the original,
+   pre-Phase-1 template had the identical mismatch). It was invisible until Phase 4 added
+   click-to-sort, since a `data-label`-driven mobile card never depended on header position
+   and nothing before this ever needed the header and body to agree on column order.
+   Fixed by reordering the header to match the body exactly, with a comment explaining why an
+   apparently trivial reorder actually matters.
+
+2. **`swap_with: int | None = Form(None)` 422ed on a real button click.** Every row's actions
+   share one `<form>` (Phase 1), so a real browser always submits every field in that form,
+   including `swap_with` as an empty string on a plain pin/void/spread click, not merely
+   omitted. FastAPI/Pydantic tries to parse a present-but-empty field against its declared
+   type, and an empty string is not a valid `int`, so every single-row HTMX action 422ed the
+   instant any row was editable (before picks exist). Every automated test up to this point
+   only ever sent the exact fields a given action needed, which a real form never does, so
+   none of them could have caught this. Fixed by declaring the field `str = Form("")` and
+   parsing it by hand inside the function, mirroring how `spread` already worked.
+
+3. **OOB `<tbody>` swaps for add/remove/swap were completely inert in a real browser.** A
+   `<tbody id="on-slate-tbody" hx-swap-oob="true">` with no enclosing `<table>` parses to
+   nothing when htmx parses the response fragment through a `<template>` element: table
+   section elements only parse correctly in "in table" insertion mode, so a browser's own
+   HTML parser silently drops a `<tbody>` sitting at the top level with no `<table>` ancestor.
+   The request succeeded, the database changed correctly, and the raw response text contained
+   exactly the right markup (which is why `response.text` assertions in
+   `tests/test_slate_actions_no_js.py` all passed), but nothing ever reached the live page: a
+   commissioner clicking Add or Swap would see no visible change at all until their next full
+   reload. Fixed by wrapping both OOB `<tbody>` fragments in a `<table>...</table>` scaffold;
+   htmx still finds and swaps in only the matched `<tbody>` by id, the wrapping `<table>` is
+   discarded. `tests/js/oob_table_swap.test.js` proves the wrapped shape survives real HTML
+   parsing (jsdom does not reproduce the bare-`<tbody>` drop the same way a real Chrome does,
+   so that file tests the fix's shape, not the bug itself); `tests/test_slate_actions_no_js.py`
+   asserts the route's actual response literally contains the wrapping `<table>`.
+
+None of these were reachable from server-only testing (TestClient/pytest) because all three
+are specifically about what a REAL browser does with markup and a response: parses a header
+row positionally, serializes every field a real `<form>` contains rather than a
+hand-picked subset, and runs the actual HTML parsing algorithm on a response fragment. This is
+exactly why the brief's Phase 6 calls for manual verification in a real browser rather than
+trusting the automated suite alone, and why finding all three there rather than after deploy
+is the entire point of doing it before Phase 8.
+
 ### Phase 5: fix the "Admin" wording leak found during the sweep, expand its own test's coverage
 
 Regression item 12 asked to verify commissioner pages never say "admin"; `results.html`'s "No

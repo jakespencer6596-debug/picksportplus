@@ -1152,11 +1152,23 @@ def _slate_action_fragment(
             str(frag.slate_row(row, g, pool, ctx["reasons"].get(g.id, ""), ctx["editable"], tz))
             for g in ctx["on_slate"]
         )
-        parts.append(f'<tbody id="on-slate-tbody" hx-swap-oob="true">{on_slate_rows}</tbody>')
+        # Wrapped in a real <table>, not a bare <tbody>: htmx parses an OOB response fragment
+        # through a <template>, and a browser's own HTML parser silently drops a <tbody> that
+        # has no enclosing <table> in that parse (table section elements only parse correctly
+        # in table insertion mode), so the id htmx is searching for never actually exists in
+        # the parsed tree and this OOB swap silently no-ops. Confirmed live during Phase 6
+        # verification: the response body was correct, but nothing ever reached the DOM. The
+        # wrapping <table> is scaffolding only, htmx swaps in just the matched <tbody>. See
+        # DECISIONS.md.
+        parts.append(
+            f'<table><tbody id="on-slate-tbody" hx-swap-oob="true">{on_slate_rows}</tbody></table>'
+        )
         candidate_rows = "".join(
             str(frag.candidate_row(row, g, ctx["editable"], tz)) for g in first_page
         )
-        parts.append(f'<tbody id="candidates-tbody" hx-swap-oob="true">{candidate_rows}</tbody>')
+        parts.append(
+            f'<table><tbody id="candidates-tbody" hx-swap-oob="true">{candidate_rows}</tbody></table>'
+        )
         parts.append(
             str(
                 frag.candidates_load_more(
@@ -1179,7 +1191,15 @@ def slate_game_action(
     week_id: int = Form(...),
     game_id: int = Form(...),
     action: str = Form(...),
-    swap_with: int | None = Form(None),
+    # str, not int | None: every row's actions now share one <form> (Phase 1), so a plain
+    # pin/void/spread submit always carries this field too, empty whenever the commissioner
+    # has not typed a swap target. FastAPI/Pydantic treats a present-but-empty form field as
+    # "" for a str, which parses fine; declaring this int | None instead made Pydantic try to
+    # parse "" as an int on every non-swap action and 422 the whole request, a bug that only
+    # showed up against a real browser (a hand built curl/TestClient call naturally omits an
+    # unused field entirely, which is not what a real <input> sitting empty in the form
+    # actually sends). Found live during Phase 6 verification, see DECISIONS.md.
+    swap_with: str = Form(""),
     spread: str = Form(""),
     db: Session = Depends(get_db),
     user: User = Depends(require_user),
@@ -1194,9 +1214,13 @@ def slate_game_action(
         elif action == "remove":
             ingest.remove_from_slate(db, row, game_id)
         elif action == "swap":
-            if swap_with is None:
+            if not swap_with.strip():
                 raise ValueError("Choose a game to swap in.")
-            ingest.swap_slate_game(db, row, game_id, swap_with)
+            try:
+                swap_with_id = int(swap_with.strip())
+            except ValueError:
+                raise ValueError("That is not a game id. Pick one from the list.") from None
+            ingest.swap_slate_game(db, row, game_id, swap_with_id)
         elif action == "void":
             ingest.set_void(db, row, game_id, True)
         elif action == "unvoid":

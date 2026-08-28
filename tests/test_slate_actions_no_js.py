@@ -149,6 +149,30 @@ def test_pin_and_unpin_work_without_javascript(actions_world):
     assert _game(session_factory, ids["on_slate_id"]).pinned is False
 
 
+def test_pin_works_when_the_shared_row_form_also_carries_an_empty_swap_with(actions_world):
+    """Phase 6, found live in a real browser: every row's actions share one <form> (Phase 1),
+    so a real browser always submits swap_with alongside a pin/void/spread click, empty
+    whenever nothing was typed into it. Declaring that field `int | None = Form(None)` made
+    FastAPI try to parse the empty string as an int on every one of those clicks and 422 the
+    whole request; a hand built test that only ever sent the fields a given action needs (like
+    every other test in this file, before this one) could not have caught it, since it never
+    reproduced a real browser's actual form submission shape. See DECISIONS.md."""
+    client, session_factory, ids = actions_world
+    response = client.post(
+        "/league/slate/game",
+        data={
+            "week_id": ids["week_id"],
+            "game_id": ids["on_slate_id"],
+            "action": "pin",
+            "swap_with": "",
+            "spread": "",
+        },
+        headers={"HX-Request": "true"},
+    )
+    assert response.status_code == 200
+    assert _game(session_factory, ids["on_slate_id"]).pinned is True
+
+
 def test_void_and_unvoid_work_without_javascript(actions_world):
     client, session_factory, ids = actions_world
     response = client.post(
@@ -231,6 +255,14 @@ def test_add_via_htmx_returns_oob_table_refreshes_not_the_whole_page(actions_wor
     assert response.status_code == 200
     assert 'id="on-slate-tbody"' in response.text
     assert 'id="candidates-tbody"' in response.text
+    # Phase 6, found live in a real browser: an OOB <tbody> with no enclosing <table> parses
+    # to nothing in real HTML parsing (table section elements only make sense "in table"
+    # insertion mode), so the swap silently never reaches the page even though this exact
+    # string is present in the raw response text. Both must be wrapped. See DECISIONS.md and
+    # tests/js/oob_table_swap.test.js, which proves the wrapped shape actually survives HTML
+    # parsing.
+    assert '<table><tbody id="on-slate-tbody"' in response.text
+    assert '<table><tbody id="candidates-tbody"' in response.text
     assert 'id="week-summary-body"' in response.text
     assert _game(session_factory, ids["candidate_id"]).in_slate is True
 

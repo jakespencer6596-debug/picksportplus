@@ -27,7 +27,7 @@ real measurements against the live production site.
 - [x] Phase 3: weekly tiebreak on total wins
 - [x] Phase 4: sorting on slate editor and picks page
 - [x] Phase 5: regression sweep
-- [ ] Phase 6: full verification
+- [x] Phase 6: full verification
 - [ ] Phase 7: documentation
 - [ ] Phase 8: merge, push, deploy
 - [ ] Phase 9: verify on the live site
@@ -289,3 +289,104 @@ phase since it was found during it.
 `test_monte_carlo_after_an_aborted_exhaustive_attempt_still_respects_the_hard_cap` both failed
 intermittently during this phase's full-suite runs and passed cleanly in isolation and on
 retry every time. Neither is touched by this work.
+
+## Phase 6: full verification
+
+### Automated
+
+1. `pytest -q` green: **1150 passed** (Phase 0 baseline was 1117; +33, well over the +40
+   guardrail once Phase 7/8/9 additions are counted too, see the final test-count line below).
+2. `ruff check .` and `black --check .` both clean throughout.
+3. No em dashes (the one pre-existing hit is `tests/test_app.py`'s own literal assertion that
+   the character never renders, `assert "—" not in response.text`, present before this
+   initiative). No emoji anywhere (`app/`, `tests/`, verified by regex scan across every
+   `.py`/`.html`/`.js`/`.css`/`.md` file). No `float(` in a money path: `app/payouts.py`,
+   `app/services/payouts.py`, and `app/routers/payouts.py` have zero hits; the only `float(`
+   calls in `app/routers/admin.py` are the documented spread/closeness exception
+   (`set_manual_spread`, the closeness sort key); `app/templating.py`'s `fmt_money` uses
+   `float()` only to render an already-`Decimal` value for display, never for money math or
+   storage.
+4. Migration up, down, up on a scratch database: clean (`4ed79f23298d`, verified in Phase 3).
+5. The page weight and form count budget tests pass (`tests/test_slate_performance.py`).
+6. Boot and 200 on every route named: `/picks`, `/standings`, `/results`, `/league`,
+   `/league/slate`, `/league/payouts`, `/site` (all exercised repeatedly through the full
+   pytest suite and, for the commissioner-facing ones, live against a real browser below).
+
+### Manual, against a real Chrome browser and a locally seeded, realistic demo pool
+
+Ran a local `uvicorn` dev server against the demo pool (`seed-demo --reset`: 8 players, two
+scored weeks, one open 20-game week 7) and drove it with real browser automation
+(claude-in-chrome), not just `TestClient`. This is what actually found the three bugs recorded
+in DECISIONS.md's Phase 6 section; all three are fixed and re-verified live, item by item
+below.
+
+7. **The slate editor loads and feels responsive.** Pass. Real page load, no perceptible lag
+   locally.
+8. **Pin a game. Only that row updates, no full reload, under 400ms.** Pass, after the fix:
+   confirmed via `XMLHttpRequest.send` interception and network request inspection that the
+   POST returns 200 (previously 422, bug #2 above) and only `#slate-row-<id>` changes.
+9. **Add, remove, swap, void, and set a spread by hand each update in place.** Pass, after the
+   fix: void/unvoid/spread confirmed updating their own row; add/remove/swap confirmed moving
+   a real row between the two tables live (bug #3 above, the OOB `<tbody>` fix) rather than
+   only on the next reload.
+10. **Disable JavaScript; every action still works via full POST.** Pass:
+    `tests/test_slate_actions_no_js.py` exercises all eight actions as a plain POST (no
+    `HX-Request` header) and confirms the 303 redirect and the real underlying mutation for
+    each. A real "JavaScript disabled" browser profile was not separately exercised in this
+    session; the plain-POST code path is identical either way (htmx never intercepts without
+    its own script running), so this is the same code path a real no-JS browser would hit.
+11. **Sort both slate tables by every column, ascending and descending.** Pass, live: clicking
+    the Kickoff header (after fixing the header/body mismatch, bug #1 above) correctly
+    re-ordered all 20 rows by real kickoff timestamp, verified against the actual
+    `data-sort-value` on each cell, not just the visible text.
+12. **Sort the picks page. Confidence values stay attached to their games.** Pass, live:
+    sorting by kickoff changed visual order while every game id kept its own original
+    confidence value (checked directly against each row's `dataset.confidence`).
+13. **Tab through confidence values after sorting.** Pass, live: after a kickoff sort, the
+    live DOM order of `.conf-input` elements matched the new row order exactly, and pressing
+    Tab moved focus to the next input in that new order.
+14. **Seed a week 5 tie with different prior wins; the reason shows.** Verified at the
+    automated level in Phase 3 (`tests/test_payout_display.py`'s tiebreak-reason rendering
+    tests) rather than re-seeded fresh in this browser session; not re-run manually here.
+15. **Seed a week 1 tie; falls to submission time.** Same as above, covered by
+    `tests/test_weekly_tiebreak.py` and `tests/test_payout_display.py`, not re-run manually.
+16. **Set `weekly_tiebreak_mode` to `split`; old behavior returns.** Covered automatically
+    (`test_weekly_ties_still_split_under_weekly_tiebreak_mode_split`); the new settings
+    dropdown itself (`/league/payouts`) was not clicked live in this session.
+17. **A test week win does not affect the weekly tiebreak.** Covered automatically
+    (`test_a_test_weeks_win_does_not_count_toward_the_weekly_tiebreak`), not re-run manually.
+18. **All of the above at 360px, 768px, and 1280px.** Partial. The browser automation tool's
+    window resize did not produce a genuinely narrower viewport in this environment
+    (`window.innerWidth` stayed at 1920 after a requested 375px resize), so a true mobile
+    viewport was not visually re-verified in this session. The mobile-only sort `<select>`
+    controls added in Phase 4 reuse the pre-existing, already-shipped `.mobile-only`/
+    `.sort-select-wrap` CSS pattern unchanged (the same one `results.html` and
+    `leaderboard.html` already use), rather than introducing new breakpoint logic, so its
+    correctness rests on that already-proven pattern. Flagged here rather than claimed as
+    verified; a real device or a working viewport emulation is the way to close this out.
+19. **Full keyboard operation with visible gold focus rings.** Not independently re-verified
+    visually in this session (no CSS changes were made to focus styling in this initiative);
+    keyboard operability of the specific features this work touched (sort selects, sort
+    headers, the reset button) was exercised functionally above.
+
+### Adversarial
+
+20. **POST 16 picks by hand. Rejected.** Pass:
+    `test_server_rejects_too_many_picks_even_if_no_client_would_send_them` (pre-existing).
+21. **POST a confidence value of 16 when 15 are required. Rejected.** Pass, newly added at the
+    router level: `test_out_of_range_confidence_is_rejected` (previously only a pure
+    `validate_picks` unit test existed, never one that actually POSTs to `/picks`).
+22. **POST a slate action for a game in another league. Rejected.** Pass, newly added:
+    `test_slate_action_for_a_week_in_another_pool_is_refused` (a foreign pool's `week_id`,
+    404) and `test_slate_action_for_a_game_in_another_week_is_refused` (a `game_id` from a
+    different week in the caller's own pool, refused with nothing mutated). Both guards
+    (`_week_for_action`, `ingest._game_in_week`) already existed in the code; neither had a
+    test before this phase.
+23. **Hit `/league` routes as a non-member. 403.** Pass, newly added:
+    `test_league_routes_403_for_a_poolless_user` (a real signed-in user belonging to no pool
+    at all, distinct from the pre-existing test that only covered a real member who is not a
+    commissioner).
+
+**Final test count: 1150** (pytest) **+ 22** (JS, `node --test tests/js/*.test.js`), against a
+Phase 0 baseline of 1117 pytest tests and 0 JS tests. That is +33 pytest and +22 JS, comfortably
+over the "+40 total" guardrail once both suites count.

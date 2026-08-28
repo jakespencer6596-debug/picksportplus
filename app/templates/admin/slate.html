@@ -265,22 +265,29 @@
           <option value="3:desc">Widest spread first</option>
           <option value="4:asc">Spread source, A to Z</option>
           <option value="4:desc">Spread source, Z to A</option>
-          <option value="6:asc">Kickoff, earliest first</option>
-          <option value="6:desc">Kickoff, latest first</option>
+          <option value="5:asc">Kickoff, earliest first</option>
+          <option value="5:desc">Kickoff, latest first</option>
         </select>
       </div>
       <div class="table-wrap">
         <table class="table" id="on-slate-table" data-sortable data-default-sort-col="0">
           <thead>
             <tr>
+              {# Column order here must match slate_row's actual <td> order exactly: Rank,
+                 then game_cells() (Matchup, League, Line, Spread source, Kickoff, Status), then
+                 Why it's here, then Actions. A header/body mismatch here is invisible in the
+                 stacked mobile card view (each <td> carries its own correct data-label), but on
+                 desktop the header row is positional, so a mismatch silently puts the wrong
+                 label over the wrong column, found live while verifying Phase 4's sort feature
+                 (Phase 6, see DECISIONS.md). #}
               <th scope="col" class="num" data-sortable-col data-sort-default-dir="asc" aria-sort="ascending">Rank</th>
               <th scope="col" data-sortable-col data-sort-default-dir="asc" aria-sort="none">Matchup</th>
               <th scope="col" data-sortable-col data-sort-default-dir="asc" aria-sort="none">League</th>
               <th scope="col" data-sortable-col data-sort-default-dir="asc" aria-sort="none">Line</th>
               <th scope="col" data-sortable-col data-sort-default-dir="asc" aria-sort="none">Spread source</th>
-              <th scope="col">Why it's here</th>
               <th scope="col" data-sortable-col data-sort-default-dir="asc" aria-sort="none">Kickoff</th>
               <th scope="col">Status</th>
+              <th scope="col">Why it's here</th>
               <th scope="col">Actions</th>
             </tr>
           </thead>

@@ -922,6 +922,19 @@ def test_duplicate_confidence_is_rejected(client, world):
     assert "used twice" in response.text
 
 
+def test_out_of_range_confidence_is_rejected(client, world):
+    """Phase 6 adversarial check: a confidence value outside 1..picks_required, submitted
+    straight to the route (never a value the client UI itself would ever produce), must be
+    rejected server side. Only a pure unit test of validate_picks existed for this before
+    (tests/test_scoring.py), never one that actually POSTs to /picks."""
+    _login(client, "player@example.com")
+    data = _valid_submission(world["game_ids"])
+    data[f"confidence-{world['game_ids'][0]}"] = "16"
+    response = client.post("/picks", data=data, headers={"HX-Request": "true"})
+    assert response.status_code == 400
+    assert "outside the range" in response.text
+
+
 def test_an_incomplete_submission_is_rejected(client, world):
     """Phase 3: an unpicked slate game is legal, but the submission still has to add up to
     exactly picks_required. Dropping one of the pool's 4 required picks (world's pool sets
@@ -2714,6 +2727,86 @@ def test_get_active_pool_non_admin_behavior_is_unchanged_by_a_bogus_session_pool
     # And the session is corrected back to the real membership, same as pre-fix behavior.
     assert request.session[SESSION_POOL_KEY] == real_pool_id
     db.close()
+
+
+def test_slate_action_for_a_week_in_another_pool_is_refused(client, world, session_factory):
+    """Phase 6 adversarial check: a slate action naming a week_id that belongs to a DIFFERENT
+    pool than the caller's own must 404, never silently act on someone else's league.
+    _week_for_action (app/routers/admin.py) is the guard; this is the first test to actually
+    exercise it end to end rather than just reading the code."""
+    db = session_factory()
+    other_pool = _make_other_pool(db, name="Foreign League", join_code="XFOREIGN")
+    other_week = _make_week(db, other_pool)
+    other_games = _make_games(db, other_week, count=1)
+    other_week_id = other_week.id
+    other_game_id = other_games[0].id
+    db.commit()
+    db.close()
+
+    _login(client, "boss@example.com")  # world's own commissioner
+    response = client.post(
+        "/league/slate/game",
+        data={"week_id": other_week_id, "game_id": other_game_id, "action": "pin"},
+    )
+    assert response.status_code == 404
+
+    db = session_factory()
+    assert db.get(Game, other_game_id).pinned is False
+    db.close()
+
+
+def test_slate_action_for_a_game_in_another_week_is_refused(client, world, session_factory):
+    """Same boundary, the other guard: a game_id that belongs to a DIFFERENT week within the
+    caller's OWN pool must also be refused (ingest._game_in_week), not just a foreign pool's
+    week_id."""
+    db = session_factory()
+    pool = db.get(Pool, world["pool_id"])
+    # Not _make_week: it hard codes week_number=5, which world's own fixture week already
+    # uses for this same pool, and would collide on the (pool_id, season_year, week_number)
+    # unique constraint.
+    other_week = Week(
+        pool_id=pool.id,
+        season_year=pool.season_year,
+        week_number=6,
+        label="Week 6",
+        status="open",
+        lock_at=dt.datetime.now(dt.UTC) + dt.timedelta(hours=96),
+    )
+    db.add(other_week)
+    db.flush()
+    other_games = _make_games(db, other_week, count=1)
+    world_week_id = world["week_id"]
+    other_game_id = other_games[0].id
+    db.commit()
+    db.close()
+
+    _login(client, "boss@example.com")
+    response = client.post(
+        "/league/slate/game",
+        data={"week_id": world_week_id, "game_id": other_game_id, "action": "pin"},
+    )
+    assert response.status_code == 303  # flash-and-redirect, the ValueError path
+    _follow = client.get(response.headers["location"])
+    assert _follow.status_code == 200
+
+    db = session_factory()
+    assert db.get(Game, other_game_id).pinned is False
+    db.close()
+
+
+def test_league_routes_403_for_a_poolless_user(client, session_factory):
+    """Phase 6 adversarial check: a real, signed in user who belongs to no pool at all must
+    still be refused every /league/* commissioner route, not just a real member who is not a
+    commissioner (test_admin_pages_refused_for_a_regular_player already covers that case)."""
+    db = session_factory()
+    _make_user(db, "nopool@example.com", "No Pool At All")
+    db.commit()
+    db.close()
+
+    _login(client, "nopool@example.com")
+    for path in ("/league", "/league/slate", "/league/members", "/league/settings"):
+        response = client.get(path)
+        assert response.status_code == 403, path
 
 
 def test_viewing_as_commissioner_banner_shows_for_admin_and_never_for_a_real_commissioner(
