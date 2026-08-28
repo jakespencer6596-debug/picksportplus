@@ -7,7 +7,7 @@ import time
 
 from fastapi import FastAPI, Request
 from fastapi.exceptions import HTTPException as FastAPIHTTPException
-from fastapi.responses import RedirectResponse
+from fastapi.responses import FileResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy import event
 from sqlalchemy.engine import Engine
@@ -17,7 +17,7 @@ from starlette.middleware.trustedhost import TrustedHostMiddleware
 from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
 
 from app.config import settings
-from app.templating import STATIC_DIR, render, templates
+from app.templating import APP_CSS_URL, APP_JS_URL, STATIC_DIR, render, templates
 
 logging.basicConfig(
     level=logging.INFO,
@@ -44,6 +44,32 @@ app.add_middleware(TrustedHostMiddleware, allowed_hosts=settings.allowed_hosts)
 # Render terminates TLS at its edge and forwards X-Forwarded-Proto. Without this the app
 # would believe every request is plain http and would refuse to set a Secure cookie.
 app.add_middleware(ProxyHeadersMiddleware, trusted_hosts="*")
+
+# Far-future cached, content-hashed URLs for the two hand authored assets the design system
+# calls out as large (Phase 2, weekly tiebreak/sorting/performance work, see PERF-REPORT.md).
+# Registered BEFORE the generic /static mount below: a Starlette Mount claims its whole path
+# prefix outright once it matches, so these two literal routes would 404 from inside the mount
+# itself (never falling through to a route defined later) if they were not declared first. The
+# plain /static/app.css and /static/app.js the mount serves still work too, unversioned, for
+# any old bookmark or cached reference; every page just links the hashed URL below instead, so
+# a browser that has ever fetched one can cache it for a year. The URL itself changes the
+# moment app.css or app.js does, on the next deploy's fresh hash (app/templating.py), so
+# "immutable" here really does mean this exact URL's bytes can never change under a client,
+# not just "we don't expect them to."
+_LONG_CACHE_HEADERS = {"Cache-Control": "public, max-age=31536000, immutable"}
+
+
+@app.get(APP_CSS_URL, include_in_schema=False)
+def _versioned_app_css():
+    return FileResponse(STATIC_DIR / "app.css", media_type="text/css", headers=_LONG_CACHE_HEADERS)
+
+
+@app.get(APP_JS_URL, include_in_schema=False)
+def _versioned_app_js():
+    return FileResponse(
+        STATIC_DIR / "app.js", media_type="application/javascript", headers=_LONG_CACHE_HEADERS
+    )
+
 
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 

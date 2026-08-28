@@ -23,7 +23,7 @@ real measurements against the live production site.
 
 - [x] Phase 0: timing instrumentation and performance baseline
 - [x] Phase 1: slate editor page weight
-- [ ] Phase 2: wider performance review
+- [x] Phase 2: wider performance review
 - [ ] Phase 3: weekly tiebreak on total wins
 - [ ] Phase 4: sorting on slate editor and picks page
 - [ ] Phase 5: regression sweep
@@ -98,3 +98,66 @@ against the 150KB budget at exactly 20 on-slate rows and 100 candidates. A pool 
 focused with a long typed value, could push a specific render over the line; the automated test
 in `tests/test_slate_performance.py` is what will catch that the moment it happens rather than
 letting it drift back to 500KB unnoticed.
+
+## Phase 2: wider performance review
+
+Profiled every authenticated route against the demo seed data (`seed_demo_pool`: 8 players, two
+fully scored historical weeks, one open 20 game current week, payout rules for all four
+scopes). Same `DEBUG_TIMING` instrumentation as Phase 0/1, same in-process `TestClient`
+methodology.
+
+| Route | Render | Queries | Response size |
+|---|---|---|---|
+| `/league` (dashboard) | 178 ms (first request; ~cold start) | 14 | 12,533 bytes |
+| `/league/slate` | 179 ms | 20 | 124,453 bytes |
+| `/league/members` | 180 ms | 7 | 38,226 bytes |
+| `/league/settings` | 53 ms | 6 | 24,441 bytes |
+| `/league/payouts` | 101 ms | 7 | 59,572 bytes |
+| `/standings` | 32-102 ms | 14 | 33,826-34,726 bytes |
+| `/results` | 19-176 ms | 8 | 28,183-29,173 bytes |
+| `/picks` | 41-165 ms | 10 | 109,585-110,081 bytes |
+| `/site` (site dashboard) | 37 ms | 5 | 12,420 bytes |
+| `/site/providers` | 51 ms | 13 | 11,940 bytes |
+
+**Nothing crossed the 500ms/30-query thresholds Phase 2 set for "fix this."** The widest spread
+between a route's first and later request in this run (`/picks`: 165ms then 41ms, `/results`:
+176ms then 19ms) tracks with process warm-up (first SQLite statement compilation, first Jinja
+template compile) rather than a real per-request cost; a long-running production worker only
+pays that once. Phase 0 already showed the slate editor was the one page in a different class
+of problem, and this confirms the rest of the app was never in that class to begin with.
+
+**Index audit.** Every foreign key already carries `index=True` in `app/models.py`:
+`picks.week_id`, `picks.user_id`, `games.week_id`, `week_entries.week_id`,
+`week_entries.user_id`, `payout_awards.pool_id`, `payout_awards.user_id`,
+`payout_awards.week_id`, `pool_members.pool_id`, `pool_members.user_id`, and so on. The
+composite `UniqueConstraint`s (`weeks(pool_id, season_year, week_number)`,
+`week_entries(user_id, week_id)`, `picks(user_id, game_id)`) also back a real index whose
+leftmost columns cover the common "every week/entry/pick for this pool or user" queries. No
+missing index turned up against any WHERE or ORDER BY column in a hot path; no migration was
+needed for this phase.
+
+**In-request caching.** Query counts topped out at 20 (the slate editor) with nothing repeating
+identical work inside one request; `feed_cache` already covers the one place repeated identical
+work across DIFFERENT requests actually happens (a metered spread pull). Nothing here needed
+extending.
+
+**Static asset delivery.** `app.css` (141KB) and `app.js` (44KB) were served with only
+`ETag`/`Last-Modified`, no `Cache-Control`, so a browser revalidated on every request instead of
+skipping the round trip entirely. `app/templating.py` now computes a content hash of each file
+once at import time (`APP_CSS_URL`/`APP_JS_URL`, e.g. `/static/app.6c9011e383.css`); every page
+links that hashed URL, and `app/main.py` serves it with `Cache-Control: public,
+max-age=31536000, immutable`. The URL changes the moment either file's content does (the next
+deploy re-imports the module and re-hashes), so "immutable" is actually true, not just assumed.
+The old unversioned `/static/app.css`/`/static/app.js` still work unchanged for any existing
+bookmark or cached reference. Covered by
+`tests/test_app.py::test_hashed_app_assets_are_served_with_a_far_future_cache_header`.
+
+**A note on two flaky, unrelated test failures seen during this work.**
+`tests/test_scenarios.py::test_exhaustive_r15_16_players_completes_well_under_the_two_second_cap`
+and `test_monte_carlo_after_an_aborted_exhaustive_attempt_still_respects_the_hard_cap` both
+assert a wall-clock margin against `app/scenarios.py`'s Monte Carlo timing cap, calibrated for a
+specific reference machine's speed; both failed intermittently during this phase's full-suite
+runs (under whatever else was running on this machine at the time) and passed cleanly in
+isolation and on retry. Neither test was touched by this work, which never modifies
+`app/scenarios.py`. Recorded here rather than silently ignored, since a real CI run of this same
+suite could hit the same flake; not something Phases 0-9 of this initiative are scoped to fix.

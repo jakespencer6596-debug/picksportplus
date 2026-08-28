@@ -253,8 +253,23 @@ def test_login_page_renders(client):
     response = client.get("/login")
     assert response.status_code == 200
     assert "Sign in" in response.text
-    # The design system must actually be wired up.
-    assert "app.css" in response.text
+    # The design system must actually be wired up. A content-hashed URL (Phase 2, weekly
+    # tiebreak/sorting/performance work, see PERF-REPORT.md), not the bare filename.
+    from app.templating import APP_CSS_URL
+
+    assert APP_CSS_URL in response.text
+
+
+def test_hashed_app_assets_are_served_with_a_far_future_cache_header(client):
+    """Phase 2, weekly tiebreak/sorting/performance work (see PERF-REPORT.md): app.css and
+    app.js are large, hand authored, and unchanged for most requests, so a browser that has
+    fetched the current content-hashed URL should never refetch it."""
+    from app.templating import APP_CSS_URL, APP_JS_URL
+
+    for url in (APP_CSS_URL, APP_JS_URL):
+        response = client.get(url)
+        assert response.status_code == 200
+        assert response.headers["cache-control"] == "public, max-age=31536000, immutable"
 
 
 def test_pricing_page_renders_signed_out(client):

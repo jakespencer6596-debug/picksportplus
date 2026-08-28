@@ -64,6 +64,27 @@ asked for. The swap datalist is unaffected by this pagination: it always lists e
 candidate, since swapping in a game further down the list than the visible page is still a
 legitimate thing to want to do.
 
+### Phase 2: content-hashed filename over a query string cache-buster
+
+The brief's own wording asked for "a content hash in the filename," and a `?v=hash` query
+string, while functionally similar in every browser, is the version some CDNs and proxies
+strip from their cache key, which is exactly the failure mode filename hashing does not have.
+Implemented as two literal FastAPI routes (`/static/app.<hash>.css`/`.js`) registered before
+the generic `/static` mount, since a Starlette `Mount` claims its whole path prefix once it
+matches and would otherwise 404 these from inside itself without ever trying a route defined
+after it. The old unversioned paths are left working through the untouched mount, so nothing
+that already links or caches `/static/app.css` breaks.
+
+### Phase 2: no index migration, no new caching
+
+Every foreign key in `app/models.py` already carries `index=True`, and the composite unique
+constraints back the common multi-column lookups too, so the audit found nothing to add.
+Profiling every authenticated route against the demo seed data found nothing over 20 queries or
+180ms (the high end of which tracked with process warm-up, not a per-request cost), so Phase
+2's own "fix any route over 500ms or over 30 queries" had nothing to fix, and nothing showed
+repeated identical work inside one request that would justify extending `feed_cache`. Recorded
+here so a future reader does not wonder why Phase 2 shipped no migration.
+
 ### Phase 1: an add/remove/swap action OOB-refreshes both tables in full; pin/void/spread do not
 
 Pin, void, and setting a line by hand never change which table a game belongs to, so each swaps
