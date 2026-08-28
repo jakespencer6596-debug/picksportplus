@@ -95,6 +95,12 @@ class Settings(BaseSettings):
 
     offline_mode: bool = False
 
+    # Off in production (Phase 0, weekly tiebreak/sorting/performance work, see PERF-REPORT.md).
+    # When true, app/main.py logs a server render time and SQL query count per request, and
+    # echoes both back as X-Render-Time-Ms/X-Query-Count response headers, purely so a
+    # measurement script or a browser's network tab can read them without scraping logs.
+    debug_timing: bool = False
+
     # Transactional email (Phase 7 remediation, see DECISIONS.md). Off by default so a fresh
     # deploy or a local dev environment never accidentally tries to send: every call site
     # (invites, password reset, week-published notification) must keep working through its

@@ -144,6 +144,25 @@ def _weekly_or_bowl_standings(
     if week is None:
         raise ValueError(f"scope {scope!r} requires an explicit week")
     rows, _ = weekly_leaderboard(db, pool, week=week)
+    # A no-show does not win money, even though under scoring_mode "inverse" their raw points
+    # can be a real, nonzero maximum-penalty value that might otherwise place.
+    rows = [row for row in rows if not row.did_not_submit]
+
+    if pool.weekly_tiebreak_mode == "wins":
+        # weekly_leaderboard already broke every tie outright (points, then prior wins
+        # entering the week, then this week's own submission time, then user id, see
+        # app/services/standings.py), so the remaining, no-show-filtered rows are already in
+        # correct final order; only their RANK NUMBER needs recomputing, not their order, since
+        # weekly_leaderboard's own rank was assigned across the full roster including whichever
+        # no-shows the filter above just removed and would otherwise leave gaps (rank 2, 3, ...
+        # instead of 1, 2, ...) that allocate() would silently skip as "past the last real
+        # place." Every rank in "wins" mode is already unique (no ties left to share), so a
+        # plain 1-based enumerate is correct, not a call to _assign_ranks.
+        return [
+            Standing(user_id=row.user_id, rank=index, metric=Decimal(row.points), submitted_at=None)
+            for index, row in enumerate(rows, start=1)
+        ]
+
     # Matches the shape of the old, deleted service's weekly_payouts helper: submitted_at
     # comes straight from WeekEntry for this week, keyed by user_id, and a player with no
     # entry row (or no submission) simply has no key here, so StandingInput.submitted_at
@@ -159,9 +178,6 @@ def _weekly_or_bowl_standings(
             submitted_at=submitted_by_user.get(row.user_id),
         )
         for row in rows
-        # A no-show does not win money, even though under scoring_mode "inverse" their raw
-        # points can be a real, nonzero maximum-penalty value that might otherwise place.
-        if not row.did_not_submit
     ]
     return rank_standings(inputs, descending=_direction_descending(pool))
 

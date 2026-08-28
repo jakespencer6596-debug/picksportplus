@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import datetime as dt
+import hashlib
 from pathlib import Path
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -14,6 +15,24 @@ TEMPLATES_DIR = Path(__file__).parent / "templates"
 STATIC_DIR = Path(__file__).parent / "static"
 
 templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
+
+
+def _hashed_asset_url(filename: str) -> str:
+    """/static/app.<10 hex chars>.css, the hash a real digest of the file's own bytes right
+    now (Phase 2, weekly tiebreak/sorting/performance work, see PERF-REPORT.md). Computed once
+    at import time, not per request: the content only ever changes on a redeploy, which
+    re-imports this module and produces a fresh hash automatically. The point is a URL that
+    changes exactly when the file's content does, so app/main.py can hand out a far-future,
+    immutable Cache-Control on it without ever risking a client stuck on a stale asset.
+    """
+    path = STATIC_DIR / filename
+    digest = hashlib.sha256(path.read_bytes()).hexdigest()[:10]
+    stem, _, ext = filename.rpartition(".")
+    return f"/static/{stem}.{digest}.{ext}"
+
+
+APP_CSS_URL = _hashed_asset_url("app.css")
+APP_JS_URL = _hashed_asset_url("app.js")
 
 # Short forms for the common US zones, since "ET" reads better than "EDT" in a banner.
 _ZONE_LABELS = {
@@ -170,6 +189,8 @@ templates.env.globals.update(
         "OPERATOR_URL": settings.operator_url,
         "SUPPORT_EMAIL": settings.support_email,
         "LEGAL_DATE": settings.legal_effective_date,
+        "APP_CSS_URL": APP_CSS_URL,
+        "APP_JS_URL": APP_JS_URL,
     }
 )
 

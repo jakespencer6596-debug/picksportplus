@@ -144,6 +144,10 @@ Semantic HTML, labeled form controls, visible gold focus rings, AA contrast, ful
   Everywhere else in this codebase money uses a plain `Float` column (see `Game.spread_home`
   for the established, older convention), which the payout system deliberately departs from;
   see DECISIONS.md, "Payout system", for the reasoning.
+- `Settings.debug_timing` (env `DEBUG_TIMING`, off by default, never on in production): a
+  middleware in `app/main.py` logs and echoes back `X-Render-Time-Ms`/`X-Query-Count` response
+  headers per request, the latter from a SQLAlchemy query counter. Purely a local performance
+  measurement aid; see PERF-REPORT.md for how it was used.
 
 ## 5. Data sources and integration
 
@@ -226,6 +230,8 @@ The tool always proposes a slate. The commissioner can override it, and the comm
 - The commissioner curates the rivalry list from the pool settings page: any matchup, one per line. The seeded default covers the games named by the group running the pool plus the other historically lopsided-but-always-relevant rivalries (Army vs Navy, Michigan vs Michigan State, Florida vs Georgia, Texas vs Oklahoma, USC vs Notre Dame).
 - Voiding a game is always available, including after picks exist.
 - Once any pick exists for a week the game count is fixed for that week and only voiding remains, so scoring stays consistent.
+- **Sorting.** Both tables (on the slate, and the candidate pool) sort by kickoff date and time, league, closeness of spread, spread source, and matchup name: click a column heading to sort, click again to reverse, with correct `aria-sort` on the active header. Numeric and datetime columns sort by a raw `data-sort-value`, never the rendered text. Below the medium breakpoint, where there is no header row to click, a `<select>` drives the same sort. The slate editor is the only page with two sortable tables sharing one page; the chosen sort for each is remembered in the browser (`localStorage`, keyed per table) and re-applied automatically after any partial update (pinning a game, adding a candidate, and so on), so a commissioner never has to re-sort mid-edit. See Section 8 for the identical sort on the picks page.
+- **Performance.** The candidate pool pages at a fixed size (`CANDIDATES_PAGE_SIZE`, 20 as of this writing) rather than rendering every candidate at once, with search and "Load more" as HTMX requests. The swap control on each on-slate row is a single shared `<datalist>` covering every real candidate, rendered once for the whole page, not a full option list repeated per row. Every action (pin, unpin, add, remove, swap, void, set a line by hand) is an HTMX partial update: pin/void/spread-setting swap only their own row, add/remove/swap (which change which table a game belongs to) refresh both tables in place. A plain POST with no JavaScript still works identically, just with a full page reload. A rendered slate page for a 20 game, 100 candidate week must stay under 150KB and 60 `<form>` elements; an automated test enforces this budget.
 
 ## 7. Automation and the weekly lifecycle (set and forget)
 
@@ -256,6 +262,7 @@ For a week that is open and before `lock_at`:
 - **Player lock, distinct from the pool wide `lock_at`.** After ranking, a player may deliberately lock their own picks in early: "Lock picks" opens a confirmation panel summarizing the `picks_required` picks in confidence order before anything is submitted, a second, separate tap from Save so locking cannot happen by accident. Locking saves the entry (the same validation Save runs) and sets `WeekEntry.locked_at`. While `locked_at` is set and the week itself has not reached `lock_at`, the page renders a read only confirmation view for that player alone, with an "Unlock to edit" action. The moment the pool wide `lock_at` passes, the normal read only state takes over for everyone regardless of `locked_at`, and unlocking is refused from then on; a player lock never grants or costs any extra time against the real lock.
 - Editable until `lock_at`, then read only for everyone. After lock, all players' picks become visible on the Results page for transparency.
 - A player who did not submit by `lock_at` is flagged `did_not_submit` and scored per the pool's `scoring_mode`: 0 under `standard`, the maximum possible penalty (`sum(1..picks_required)`) under `inverse` (the default), and never eligible to win the week either way. See Section 9.
+- **Sorting.** The same five dimensions as the slate editor (Section 6a): kickoff date and time, league, closeness of spread, spread source, and matchup name, offered through a `<select>` above the list (there is no header row on this list to click). The default is the commissioner's own slate order, with a "Reset to slate order" control always visible. Sorting only ever changes visual order: it moves the real row for a game, never relabels it, so confidence values, hidden form inputs, and the picked/unpicked "Not picked" grouping all stay correctly attached to their own game regardless of how the list is currently sorted. The Tab and arrow key sequence always follows whatever order is currently on screen, exactly the same rule Section 8's own keyboard entry already states, so a sort never breaks it. The chosen sort is remembered per browser (`localStorage`) and restored on the next visit.
 
 ## 9. Scoring and leaderboards
 
@@ -409,17 +416,44 @@ every regular week; a weekly 1st of 2.12 percent means 2.12 percent of the pot e
 `Pool.weekly_payout_weeks` (default 15) is what multiplies the per-week figure into a season
 total for display; every other scope is a one-time payout.
 
+**Weekly tiebreak chain, `Pool.weekly_tiebreak_mode` (`"wins"` default, or `"split"`).** A tie
+on weekly (or bowl) points breaks outright under `"wins"`, through a single shared sort key
+(`app/services/standings.py.weekly_leaderboard`, the same function both the weekly leaderboard
+and the payout engine read from, so the two can never disagree about who actually won):
+
+1. Points, in the pool's own scoring direction.
+2. Tie: more total wins entering the week takes the higher place.
+   `wins_entering_week(db, pool, week)` sums each player's weekly wins from every already-scored,
+   non-test week with a strictly lower `week_number` than the week being decided. The week being
+   decided itself is deliberately excluded: using week 5's own win to decide a tie in week 5 is
+   circular, since the tie exists precisely because it is not yet known who won week 5. A test
+   week never contributes here either, matching every other season-wide aggregate in this
+   codebase. Week 1 (or any week with nothing scored before it) gives every player 0 prior wins,
+   which is correct, not an error, and falls straight to the next level.
+3. Still tied: earliest submission for the week being decided (not a season-wide reference
+   point the way the season chain below uses one, since there is only ever one week in play
+   here). A missing submission sorts last.
+4. Still tied: lower `user_id`, for a fully deterministic result.
+
+Weekly Results shows a muted note on any row a tiebreak actually decided ("Tiebreak: 3 prior
+wins to 2." or, in a week with no prior wins yet, "Tiebreak: submitted first.") and a rule line
+under the table ("Weekly ties are broken by total wins entering the week, then by submission
+time.") whenever the mode is `"wins"`. Under `"split"`, a weekly or bowl tie behaves exactly as
+it always has (below): ties share a rank and the combined payout for their places splits
+evenly.
+
 **Ties** split the combined pool of the consecutive places they occupy (two tied for 1st split
 1st and 2nd, the next player takes 3rd); a place with no rule contributes zero to that split
 rather than raising. Each tied group's combined total is rounded down to `Pool.payout_rounding`
 (`cent`, `dollar`, or `five`) before splitting, and the leftover is handed out one unit at a
 time in `Pool.payout_tiebreak` order (today, `earliest_submit`: earliest `WeekEntry.submitted_at`
-first, a missing submission time sorts last, then `user_id` for full determinism). This applies
-to `weekly` and `bowl` unconditionally, and to the two season scopes only when
-`Pool.season_tiebreak_mode` is `"split"` (below); under the default `"wins"`, a season place
+first, a missing submission time sorts last, then `user_id` for full determinism). This
+splitting logic is reachable for `weekly` and `bowl` only when `Pool.weekly_tiebreak_mode` is
+`"split"` (above; under the default `"wins"` a weekly or bowl place never reaches it, the same
+way a season place does not), and for the two season scopes only when
+`Pool.season_tiebreak_mode` is `"split"` (below); under either default `"wins"` mode, a place
 never reaches this splitting logic at all, because nothing ranked by
-`app/services/standings.py`'s season ranking functions is ever still tied by the time it gets
-here.
+`app/services/standings.py`'s ranking functions is ever still tied by the time it gets here.
 
 **Season tiebreak chain, `Pool.season_tiebreak_mode` (`"wins"` default, or `"split"`).** Under
 `"wins"`, both season ladders break a tie outright, through a single shared sort key

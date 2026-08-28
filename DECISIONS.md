@@ -3,6 +3,227 @@
 Record of ambiguity resolutions and other build-time judgment calls, most recent first.
 Each entry states the decision, why, and where it took effect.
 
+## Weekly tiebreak, sorting and performance
+
+Three decisions the prompt made explicitly, plus every ambiguity resolved along the way.
+Sub-headings below are in the order the work happened, not most-recent-first, since they build
+on each other within this one initiative; the section as a whole sits at the top because the
+initiative itself is the most recent work.
+
+### The three pre-made decisions
+
+1. **A weekly tie breaks outright**, more wins takes the full weekly payout, no split.
+   `Pool.weekly_tiebreak_mode` (`"wins"` default, `"split"` restores the old behavior). This
+   matches how season ties already work (`Pool.season_tiebreak_mode`), so a commissioner who
+   has already internalized "ties break on wins" for the season does not have to learn a second
+   rule for the week.
+2. **Wins entering the week exclude the week being decided.** The only non-circular definition:
+   using week 5's own win to decide week 5 is circular. `wins_entering_week(pool, week)` sums
+   only weeks with a lower `week_number` than the one being decided, already scored, excluding
+   test weeks (they must contribute nothing, the same rule they already follow everywhere else
+   in `app/services/standings.py`).
+3. **Sorting ships on the slate editor first, then mirrors onto the picks page**, matching where
+   the complaint actually came from and reusing one shared client-side sorting engine
+   (`app/static/app.js`'s existing `table[data-sortable]`/`data-sortable-col` machinery, already
+   built for season standings and the weekly leaderboard) rather than writing a second one.
+
+### Phase 1: swap control is a shared `<datalist>`, not an HTMX-fetched-on-open control
+
+The brief names two acceptable approaches. Chose the `<datalist>`: it needs no JavaScript at
+all to render its native autocomplete, which is what actually lets "Keep a no-JavaScript
+fallback that still works via full POST" hold for the swap control itself, not just the row's
+other actions. An HTMX-fetched-on-open control would have needed a second, separate no-JS
+fallback (a real server-rendered `<select>` inside a `<noscript>` block) to satisfy the same
+requirement, which is more moving parts for the same outcome. `<option value="{id}"
+label="...">` is what makes this work: modern browsers show `label` in the suggestion list but
+fill the input with `value` (the numeric game id `swap_slate_game` actually expects) on
+selection. See `app/templates/admin/_slate_fragments.html`'s `swap_datalist` macro.
+
+### Phase 1: one `<form>` per row, buttons carry their own `hx-target`/`hx-swap`
+
+Getting a 20-row on-slate table with up to five actions each (pin, void, set a line, remove,
+swap) under a 60-form budget is not possible with a form per action (that alone is 100 forms
+before a single candidate row is counted). htmx honors `hx-target`/`hx-swap` set directly on
+the triggering button over anything it would otherwise inherit, and still includes every
+sibling field in the same `<form>` when building the request, so one form per row loses nothing
+functionally while cutting the row's own form count by up to 5x. A browser with no JavaScript
+ignores every `hx-*` attribute regardless and submits the form's own `method="post"
+action="/league/slate/game"`, so the no-JS fallback is unaffected by this consolidation.
+
+### Phase 1: the candidates panel is paged and searchable, not literally collapsed by default
+
+The brief's own wording ("a collapsed-by-default candidates panel") would send zero candidate
+rows until a commissioner opens it, which is fine for a JavaScript-enabled browser but leaves a
+no-JS visitor with nothing to add from at all (a native `<details>` still needs an HTMX request
+to populate its rows, which does not fire without JavaScript). Rendered the first
+`CANDIDATES_PAGE_SIZE` (25) rows directly and openly instead: enough to be immediately useful
+and to leave real headroom under the 60-form budget (20 on-slate rows at one form each plus 25
+candidate rows at one form each, plus the handful of other forms already on the page), while
+"Load more" and the search box are the HTMX-powered paging and filtering the brief actually
+asked for. The swap datalist is unaffected by this pagination: it always lists every real
+candidate, since swapping in a game further down the list than the visible page is still a
+legitimate thing to want to do.
+
+### Phase 6: three real bugs found only by a real browser, all in the Phase 1 slate editor rewrite
+
+Every automated test (pytest, the JS suite) was green through Phase 5. Live verification
+against a real Chrome browser in Phase 6 found three genuine defects none of that automated
+coverage could have caught, because each one is specifically about the gap between "a
+hand-built test request" and "what a real browser actually sends or does with a response":
+
+1. **On-slate table header/body column mismatch.** `slate_row`'s actual `<td>` order (Rank,
+   then `game_cells()`'s Matchup/League/Line/Spread source/Kickoff/Status, then Why it's
+   here, then Actions) never matched the header row's declared order (which had Why it's
+   here and Kickoff swapped), a bug that predates this initiative entirely (the original,
+   pre-Phase-1 template had the identical mismatch). It was invisible until Phase 4 added
+   click-to-sort, since a `data-label`-driven mobile card never depended on header position
+   and nothing before this ever needed the header and body to agree on column order.
+   Fixed by reordering the header to match the body exactly, with a comment explaining why an
+   apparently trivial reorder actually matters.
+
+2. **`swap_with: int | None = Form(None)` 422ed on a real button click.** Every row's actions
+   share one `<form>` (Phase 1), so a real browser always submits every field in that form,
+   including `swap_with` as an empty string on a plain pin/void/spread click, not merely
+   omitted. FastAPI/Pydantic tries to parse a present-but-empty field against its declared
+   type, and an empty string is not a valid `int`, so every single-row HTMX action 422ed the
+   instant any row was editable (before picks exist). Every automated test up to this point
+   only ever sent the exact fields a given action needed, which a real form never does, so
+   none of them could have caught this. Fixed by declaring the field `str = Form("")` and
+   parsing it by hand inside the function, mirroring how `spread` already worked.
+
+3. **OOB `<tbody>` swaps for add/remove/swap were completely inert in a real browser.** A
+   `<tbody id="on-slate-tbody" hx-swap-oob="true">` with no enclosing `<table>` parses to
+   nothing when htmx parses the response fragment through a `<template>` element: table
+   section elements only parse correctly in "in table" insertion mode, so a browser's own
+   HTML parser silently drops a `<tbody>` sitting at the top level with no `<table>` ancestor.
+   The request succeeded, the database changed correctly, and the raw response text contained
+   exactly the right markup (which is why `response.text` assertions in
+   `tests/test_slate_actions_no_js.py` all passed), but nothing ever reached the live page: a
+   commissioner clicking Add or Swap would see no visible change at all until their next full
+   reload. Fixed by wrapping both OOB `<tbody>` fragments in a `<table>...</table>` scaffold;
+   htmx still finds and swaps in only the matched `<tbody>` by id, the wrapping `<table>` is
+   discarded. `tests/js/oob_table_swap.test.js` proves the wrapped shape survives real HTML
+   parsing (jsdom does not reproduce the bare-`<tbody>` drop the same way a real Chrome does,
+   so that file tests the fix's shape, not the bug itself); `tests/test_slate_actions_no_js.py`
+   asserts the route's actual response literally contains the wrapping `<table>`.
+
+None of these were reachable from server-only testing (TestClient/pytest) because all three
+are specifically about what a REAL browser does with markup and a response: parses a header
+row positionally, serializes every field a real `<form>` contains rather than a
+hand-picked subset, and runs the actual HTML parsing algorithm on a response fragment. This is
+exactly why the brief's Phase 6 calls for manual verification in a real browser rather than
+trusting the automated suite alone, and why finding all three there rather than after deploy
+is the entire point of doing it before Phase 8.
+
+### Phase 5: fix the "Admin" wording leak found during the sweep, expand its own test's coverage
+
+Regression item 12 asked to verify commissioner pages never say "admin"; `results.html`'s "No
+games on this slate" empty state actually did ("rebuild the slate from Admin"), a pre-existing
+leak this initiative did not introduce but found while sweeping for exactly this. Fixed the
+copy, and added `/results` and `/standings` to `test_league_pages_never_render_the_word_admin_
+for_a_real_commissioner`'s own parametrize list in `tests/test_app.py`, since neither page was
+in it before, which is why the leak went uncaught. "Anything deliberately not built" does not
+apply here since this was already broken, not something the brief scoped out; fixing a bug
+found by an in-scope regression check is the check doing its job, not scope creep.
+
+### Phase 4: reuse the table engine's shape for the picks list, do not extend it in place
+
+`app/static/app.js`'s `table[data-sortable]` engine reads a cell by `cellIndex` and compares
+either `data-sort-value` or the cell's own text; the picks page's `.game-list` is an `<ol>` of
+`<li>` rows with no cells at all, so `cellIndex` has nothing to mean there. Rather than bend
+the table engine to also understand a non-tabular list, added a second, small, parallel
+function (`sortGameListRows`) that reads named `data-sort-<key>` attributes instead of a
+column index, and shares the same two rules that actually matter (a stable sort, and moving
+real DOM nodes rather than relabeling them) rather than the table engine's specific mechanics.
+This is still "one shared sorting implementation" in the sense the brief means it: one engine
+per DOM shape (table vs. list), not two competing definitions of what "sorted" means for the
+same shape, and not a third, redundant table-only implementation for the slate editor.
+
+### Phase 4: persistence lives in the engine, keyed by table id, not per-page
+
+`localStorage` persistence (`psp-sort:<table id>`) was added inside `initSortableTable` itself
+rather than as page-specific code on the slate editor, so season standings and the weekly
+leaderboard get it too, for free, the moment they are next touched. The brief's own wording
+("Persist the chosen sort per user in localStorage so a commissioner working through a slate
+does not have to re-sort on every partial update") is really two requirements in one sentence:
+remembering a choice across a page load, and NOT losing it to an HTMX partial swap in the
+meantime. The second one needed its own fix (a document level `htmx:afterSwap`/
+`htmx:oobAfterSwap` listener that re-applies whatever sort is currently active), since a fresh
+tbody or newly appended "Load more" rows always arrive in server default order and would
+otherwise silently drop a commissioner back out of their chosen sort on the very next click.
+
+### Phase 4: `CANDIDATES_PAGE_SIZE` dropped from 25 to 20 to protect the page weight budget
+
+Adding the two mobile "Sort by" `<select>` controls (required below the medium breakpoint,
+where there is no header row to click) cost about 2KB of fixed weight, pushing the 20-slate/
+100-candidate scenario just over the 150KB budget Phase 1 had left almost no headroom against.
+Rather than trim the sort controls themselves (their option text is already about as short as
+it can be while staying readable), reduced the initial candidates page size, which is real,
+per-row weight that scales down cleanly and still leaves "Load more" covering the rest with no
+loss of function. `tests/test_slate_performance.py` still passes with real margin after this
+change (see PERF-REPORT.md's Phase 4 section for the exact numbers).
+
+### Phase 3: a real settings control for `weekly_tiebreak_mode`, not DB-only
+
+The bullet list for this phase only asked for the column and its default ("implemented as a
+setting so it can be changed without a code change"), not a UI, but Phase 6's own manual
+verification checklist ("Set `weekly_tiebreak_mode` to `split`. The old behavior returns...")
+only makes sense if a commissioner can actually do that from the app. Added a "Weekly tiebreak"
+dropdown to `/league/payouts`' pot panel right next to the existing `season_tiebreak_mode` one
+(`app/routers/payouts.py`, `app/templates/admin/payouts.html`), the same precedent this
+codebase already set for `season_tiebreak_mode` itself (see "Phase 6, a real settings control
+for `season_tiebreak_mode`" below): a documented-but-inaccessible setting is worse than no
+setting, since it looks like a bug to anyone who does not already know to reach for the CLI.
+
+### Phase 3: renumber ranks after filtering no-shows, do not reuse `weekly_leaderboard`'s rank
+
+`weekly_leaderboard`'s own `rank` is assigned across the FULL roster, no-shows included, since
+the weekly leaderboard display legitimately shows a no-show's row ("No picks submitted") in its
+correct position. `app/services/payouts.py._weekly_or_bowl_standings` filters no-shows out
+before handing standings to `allocate()` (a no-show must never collect money even when its raw
+points would otherwise place), and reusing the pre-filter rank directly left gaps in the
+sequence (rank 2, 3, ... instead of 1, 2, ...) that `allocate()` silently treats as "past the
+last configured place" and skips, awarding nobody. Fixed by renumbering the filtered list
+1-based after the fact, since under `"wins"` mode the remaining rows are already in correct
+relative order (the chain produces a strict total order with no ties left to resolve) and only
+the rank NUMBER, not the order, needed recomputing. Caught by
+`test_no_show_is_excluded_from_weekly_awards_even_if_their_points_would_have_placed`, a
+pre-existing test this exact bug broke during development.
+
+### Phase 2: content-hashed filename over a query string cache-buster
+
+The brief's own wording asked for "a content hash in the filename," and a `?v=hash` query
+string, while functionally similar in every browser, is the version some CDNs and proxies
+strip from their cache key, which is exactly the failure mode filename hashing does not have.
+Implemented as two literal FastAPI routes (`/static/app.<hash>.css`/`.js`) registered before
+the generic `/static` mount, since a Starlette `Mount` claims its whole path prefix once it
+matches and would otherwise 404 these from inside itself without ever trying a route defined
+after it. The old unversioned paths are left working through the untouched mount, so nothing
+that already links or caches `/static/app.css` breaks.
+
+### Phase 2: no index migration, no new caching
+
+Every foreign key in `app/models.py` already carries `index=True`, and the composite unique
+constraints back the common multi-column lookups too, so the audit found nothing to add.
+Profiling every authenticated route against the demo seed data found nothing over 20 queries or
+180ms (the high end of which tracked with process warm-up, not a per-request cost), so Phase
+2's own "fix any route over 500ms or over 30 queries" had nothing to fix, and nothing showed
+repeated identical work inside one request that would justify extending `feed_cache`. Recorded
+here so a future reader does not wonder why Phase 2 shipped no migration.
+
+### Phase 1: an add/remove/swap action OOB-refreshes both tables in full; pin/void/spread do not
+
+Pin, void, and setting a line by hand never change which table a game belongs to, so each swaps
+only its own row (`hx-target="#slate-row-{id}"`/`"#candidate-row-{id}"`), matching the brief's
+own example ("Pin a game. Only that row updates."). Add, remove, and swap change slate
+membership, which cannot be expressed as a single-element swap, so those three instead
+out-of-band refresh the on-slate tbody and the current (first-page) candidates tbody in full.
+This was a deliberate choice over trying to surgically move one `<tr>` between two `<table>`
+elements: the OOB refresh is still a few KB, not a 500KB reload, and is far less code to get
+right than cross-table DOM surgery. It also has to stay OFF the in-place actions specifically,
+not just be "nice to have" on every action: OOB-replacing the whole tbody on every pin would
+wipe out whatever a commissioner is mid-typing into a different row's own spread or swap box.
+
 ## Phase 0
 
 ### Local environment: repo moved out of OneDrive

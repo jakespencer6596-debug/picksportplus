@@ -155,6 +155,7 @@ Every variable is documented in `.env.example`. The ones that matter most:
 | `MAIL_FROM_ADDRESS` | none | The verified sender address every email sends from. |
 | `MAIL_FROM_NAME` | `PickSportPlus` | The sender display name. |
 | `MAIL_RATE_LIMIT_PER_HOUR` | `20` | Per-sender send cap, backed by a durable log so it survives a restart. |
+| `DEBUG_TIMING` | `false` | Local performance measurement only, never turn on in production. Adds `X-Render-Time-Ms`/`X-Query-Count` response headers and a matching log line per request. See PERF-REPORT.md. |
 
 The slate size variables are only **seeds for a new pool**. Once the pool exists the
 commissioner owns those numbers from `/league/settings`.
@@ -254,9 +255,16 @@ running paid and unpaid total and a plain text or CSV export for bookkeeping out
 By default, a tie on either season ladder (Season: Points or Season: Wins) breaks outright,
 never splits: total weekly wins, then total points, then who submitted the season's final
 scored week first, then a deterministic fallback. Season Standings shows a muted note on any
-row a tiebreak decided. A weekly or bowl tie always still splits the combined payout, as
-before. A commissioner who wants the old shared-payout behavior for a season scope can switch
-`season_tiebreak_mode` back to `"split"` for the pool.
+row a tiebreak decided. A commissioner who wants the old shared-payout behavior for a season
+scope can switch `season_tiebreak_mode` back to `"split"` for the pool.
+
+By default, a tie on weekly or bowl points also breaks outright: whoever has more wins entering
+that week (not counting the week itself, since that would be circular) takes the full place and
+the full payout, falling to who submitted that week first if wins are equal too. Weekly Results
+shows the same kind of muted note, plus a rule line under the table. A commissioner who wants
+the old shared-payout behavior for weekly and bowl ties can switch `weekly_tiebreak_mode` back
+to `"split"` for the pool, from the same pot panel on `/league/payouts` as the season setting
+above.
 
 ### The site admin
 

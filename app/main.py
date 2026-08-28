@@ -3,18 +3,21 @@
 from __future__ import annotations
 
 import logging
+import time
 
 from fastapi import FastAPI, Request
 from fastapi.exceptions import HTTPException as FastAPIHTTPException
-from fastapi.responses import RedirectResponse
+from fastapi.responses import FileResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
+from sqlalchemy import event
+from sqlalchemy.engine import Engine
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.middleware.sessions import SessionMiddleware
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
 
 from app.config import settings
-from app.templating import STATIC_DIR, render, templates
+from app.templating import APP_CSS_URL, APP_JS_URL, STATIC_DIR, render, templates
 
 logging.basicConfig(
     level=logging.INFO,
@@ -42,7 +45,81 @@ app.add_middleware(TrustedHostMiddleware, allowed_hosts=settings.allowed_hosts)
 # would believe every request is plain http and would refuse to set a Secure cookie.
 app.add_middleware(ProxyHeadersMiddleware, trusted_hosts="*")
 
+# Far-future cached, content-hashed URLs for the two hand authored assets the design system
+# calls out as large (Phase 2, weekly tiebreak/sorting/performance work, see PERF-REPORT.md).
+# Registered BEFORE the generic /static mount below: a Starlette Mount claims its whole path
+# prefix outright once it matches, so these two literal routes would 404 from inside the mount
+# itself (never falling through to a route defined later) if they were not declared first. The
+# plain /static/app.css and /static/app.js the mount serves still work too, unversioned, for
+# any old bookmark or cached reference; every page just links the hashed URL below instead, so
+# a browser that has ever fetched one can cache it for a year. The URL itself changes the
+# moment app.css or app.js does, on the next deploy's fresh hash (app/templating.py), so
+# "immutable" here really does mean this exact URL's bytes can never change under a client,
+# not just "we don't expect them to."
+_LONG_CACHE_HEADERS = {"Cache-Control": "public, max-age=31536000, immutable"}
+
+
+@app.get(APP_CSS_URL, include_in_schema=False)
+def _versioned_app_css():
+    return FileResponse(STATIC_DIR / "app.css", media_type="text/css", headers=_LONG_CACHE_HEADERS)
+
+
+@app.get(APP_JS_URL, include_in_schema=False)
+def _versioned_app_js():
+    return FileResponse(
+        STATIC_DIR / "app.js", media_type="application/javascript", headers=_LONG_CACHE_HEADERS
+    )
+
+
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
+
+# Performance instrumentation (Phase 0, weekly tiebreak/sorting/performance work, see
+# PERF-REPORT.md). Off in production: settings.debug_timing defaults False, and the listener
+# below is a no-op read of that flag on every query, cheap enough to leave wired at all times
+# rather than attaching and detaching it as a request-scoped concern. Listens on the Engine
+# class, not one instance, so it counts queries against whichever engine is actually bound to
+# the request (the real app.db.engine in production, a throwaway per-test engine in the test
+# suite's own TestClient fixture), matching how app/db.py's own SQLite pragma listener works.
+#
+# A plain dict, not a contextvars.ContextVar: FastAPI runs a sync route handler in a worker
+# thread via anyio's threadpool, which hands that thread a COPY of the calling coroutine's
+# context, so a value the query listener sets from inside that thread never propagates back to
+# this middleware's own context. A process-wide counter sidesteps that entirely. This makes the
+# count exact for one request in flight at a time (true for local dev, the measurement script,
+# and a single commissioner clicking around) but not safe against two concurrent requests
+# interleaving their counts, an acceptable limitation for a diagnostic that is always off in
+# production.
+_query_state = {"count": 0}
+
+
+@event.listens_for(Engine, "before_cursor_execute")
+def _count_query(conn, cursor, statement, parameters, context, executemany):  # pragma: no cover
+    if not settings.debug_timing:
+        return
+    _query_state["count"] += 1
+
+
+@app.middleware("http")
+async def timing_middleware(request: Request, call_next):
+    if not settings.debug_timing:
+        return await call_next(request)
+    _query_state["count"] = 0
+    start = time.perf_counter()
+    try:
+        response = await call_next(request)
+    finally:
+        elapsed_ms = (time.perf_counter() - start) * 1000
+        count = _query_state["count"]
+    response.headers["X-Render-Time-Ms"] = f"{elapsed_ms:.1f}"
+    response.headers["X-Query-Count"] = str(count)
+    log.info(
+        "DEBUG_TIMING %s %s: %.1fms, %d queries",
+        request.method,
+        request.url.path,
+        elapsed_ms,
+        count,
+    )
+    return response
 
 
 @app.on_event("startup")

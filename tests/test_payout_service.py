@@ -760,10 +760,12 @@ def test_season_tiebreak_mode_split_restores_the_old_splitting_behavior_end_to_e
     assert by_user[bob.id].amount == Decimal("500")
 
 
-def test_weekly_ties_still_split_under_the_default_season_tiebreak_mode(db):
-    """The season tiebreak change must never reach the weekly/bowl scopes: a weekly tie still
-    splits exactly as before, a regression guard for Phase 2."""
-    pool = _pool(db, scoring_mode="standard")
+def test_weekly_ties_still_split_under_weekly_tiebreak_mode_split(db):
+    """Phase 3 (weekly tiebreak on total wins) made "wins" the pool default, so a weekly tie no
+    longer splits unless a commissioner explicitly opts back into "split". This is the
+    regression guard the spec itself calls for: the tie-splitting code in app/payouts.py must
+    remain intact and fully tested, since it is still reachable in this mode."""
+    pool = _pool(db, scoring_mode="standard", weekly_tiebreak_mode="split")
     alice = _user(db, "Alice")
     bob = _user(db, "Bob")
     _member(db, pool, alice)
@@ -781,6 +783,68 @@ def test_weekly_ties_still_split_under_the_default_season_tiebreak_mode(db):
     assert by_user[alice.id].tied_with == 2
     assert by_user[alice.id].amount == Decimal("75")
     assert by_user[bob.id].amount == Decimal("75")
+
+
+def test_weekly_tie_breaks_outright_on_prior_wins_under_the_default_mode(db):
+    """Phase 3, the worked example this initiative's own PERF-REPORT.md owes the commissioner:
+    two players tied on weekly points used to split 1st and 2nd (105 + 55, 80 each); under the
+    new default, more prior wins entering the week takes the full 1st place payout and the
+    other takes 2nd outright, no split."""
+    pool = _pool(db, scoring_mode="standard")  # weekly_tiebreak_mode defaults to "wins"
+    alice = _user(db, "Alice")
+    bob = _user(db, "Bob")
+    _member(db, pool, alice)
+    _member(db, pool, bob)
+
+    w1, w2, w3, w4 = (_week(db, pool, week_number=n) for n in (1, 2, 3, 4))
+    # Alice enters week 5 with 2 prior wins, Bob with 1, entering the week that ties them.
+    _entry(db, pool, w1, alice, points=5, is_winner=True)
+    _entry(db, pool, w1, bob, points=50, is_winner=False)
+    _entry(db, pool, w2, alice, points=5, is_winner=True)
+    _entry(db, pool, w2, bob, points=50, is_winner=False)
+    _entry(db, pool, w3, alice, points=50, is_winner=False)
+    _entry(db, pool, w3, bob, points=5, is_winner=True)
+    week5 = _week(db, pool, week_number=5)
+    _entry(db, pool, week5, alice, points=10)
+    _entry(db, pool, week5, bob, points=10)
+
+    _rule(db, pool, "weekly", 1, value=Decimal("105"))
+    _rule(db, pool, "weekly", 2, value=Decimal("55"))
+
+    awards = project_awards(db, pool, "weekly", week=week5)
+    by_user = {a.user_id: a for a in awards}
+    assert by_user[alice.id].tied_with == 1
+    assert by_user[alice.id].amount == Decimal("105")
+    assert by_user[bob.id].tied_with == 1
+    assert by_user[bob.id].amount == Decimal("55")
+
+
+def test_bowl_week_uses_the_same_tiebreak_chain_and_the_bowl_ladder(db):
+    """Phase 3: "Bowl week uses the same chain and the bowl payout ladder." No separate code
+    path, the bowl week is just another Week with is_bowl_week=True; this proves the chain and
+    the bowl-specific rule set both apply correctly together."""
+    pool = _pool(db, scoring_mode="standard")
+    alice = _user(db, "Alice")
+    bob = _user(db, "Bob")
+    _member(db, pool, alice)
+    _member(db, pool, bob)
+
+    w1 = _week(db, pool, week_number=1)
+    _entry(db, pool, w1, alice, points=5, is_winner=True)
+    _entry(db, pool, w1, bob, points=1, is_winner=False)
+
+    bowl = _week(db, pool, week_number=16, is_bowl_week=True)
+    _entry(db, pool, bowl, alice, points=20)
+    _entry(db, pool, bowl, bob, points=20)
+
+    _rule(db, pool, "bowl", 1, value=Decimal("250"))
+    _rule(db, pool, "bowl", 2, value=Decimal("100"))
+    _rule(db, pool, "weekly", 1, value=Decimal("105"))  # must not leak into the bowl scope
+
+    awards = project_awards(db, pool, "bowl", week=bowl)
+    by_user = {a.user_id: a for a in awards}
+    assert by_user[alice.id].amount == Decimal("250")
+    assert by_user[bob.id].amount == Decimal("100")
 
 
 def test_a_player_who_wins_both_season_ladders_collects_from_both(db):
