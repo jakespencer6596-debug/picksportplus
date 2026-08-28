@@ -3,7 +3,7 @@
   "private": true,
   "description": "Node's built-in test runner plus jsdom, the minimum needed to test app/static/app.js's keyboard pick-entry navigation (Phase 1, tab entry and season tiebreak). No bundler, no framework, matching the app itself: see DECISIONS.md.",
   "scripts": {
-    "test": "node --test tests/js"
+    "test": "node --test tests/js/*.test.js"
   },
   "devDependencies": {
     "jsdom": "^25.0.1"

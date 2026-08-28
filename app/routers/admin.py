@@ -67,10 +67,11 @@ router = APIRouter(prefix="/league", tags=["admin"])
 # How many candidate rows the slate editor renders on first load and per "Load more" click
 # (Phase 1, weekly tiebreak/sorting/performance work, see PERF-REPORT.md). A week can carry
 # well over a hundred candidates; rendering them all at once was most of the page's weight.
-# 25 keeps the initial page well inside the 60 form budget (20 on-slate rows at one form each,
-# plus 25 candidate rows at one form each, plus the handful of other forms on the page) with
-# real headroom, while still showing enough to be useful without a click.
-CANDIDATES_PAGE_SIZE = 25
+# 20 keeps the initial page well inside the 60 form budget (20 on-slate rows at one form each,
+# plus 20 candidate rows at one form each, plus the handful of other forms on the page) and
+# the 150KB byte budget (Phase 4's mobile sort <select> controls added fixed weight of their
+# own), while still showing enough to be useful without a click.
+CANDIDATES_PAGE_SIZE = 20
 
 
 def _redirect(target: str = "/league") -> RedirectResponse:

@@ -610,6 +610,40 @@
      "No entry" or "." placeholders that are not numbers), text columns are
      read straight from the cell's own text. */
 
+  /* Reads and writes are both wrapped: localStorage can throw in a private window, with
+     storage disabled, or at a full quota, and none of that should ever break sorting itself,
+     only the "remember it for next time" part (Phase 4: "Persist the chosen sort per
+     user"). */
+  function readStoredSort(key) {
+    try {
+      return window.localStorage.getItem(key);
+    } catch (err) {
+      return null;
+    }
+  }
+
+  function writeStoredSort(key, value) {
+    try {
+      window.localStorage.setItem(key, value);
+    } catch (err) {
+      /* Nothing more to do; sorting still works this session. */
+    }
+  }
+
+  /* One resort function per table[data-sortable] that has an id, keyed by that id, so an
+     HTMX partial swap (a fresh tbody, or new rows appended to an existing one) can restore
+     whatever sort was already active without re-registering the table's header click
+     listeners, which were never removed by the swap in the first place (Phase 4: "Persist
+     the chosen sort... so a commissioner working through a slate does not have to re-sort on
+     every partial update"). */
+  var sortableTableResorters = {};
+
+  function resortAllSortableTables() {
+    Object.keys(sortableTableResorters).forEach(function (id) {
+      sortableTableResorters[id]();
+    });
+  }
+
   var SORT_CARET_PATHS = {
     asc: '<path d="m18 15-6-6-6 6"/>',
     desc: '<path d="m6 9 6 6 6-6"/>'
@@ -662,11 +696,29 @@
     var select = table.id
       ? document.querySelector('[data-sort-select-for="' + table.id + '"]')
       : null;
+    var storageKey = table.id ? "psp-sort:" + table.id : null;
 
     var state = {
       col: parseInt(table.dataset.defaultSortCol, 10) || 0,
       dir: table.dataset.defaultSortDir === "desc" ? "desc" : "asc"
     };
+
+    var restoredFromStorage = false;
+    var stored = storageKey ? readStoredSort(storageKey) : null;
+    if (stored) {
+      var storedParts = stored.split(":");
+      var storedCol = parseInt(storedParts[0], 10);
+      var storedIsSortable = ths.some(function (th) { return th.cellIndex === storedCol; });
+      if (!isNaN(storedCol) && storedIsSortable) {
+        state.col = storedCol;
+        state.dir = storedParts[1] === "desc" ? "desc" : "asc";
+        restoredFromStorage = true;
+      }
+    }
+
+    function persist() {
+      if (storageKey) writeStoredSort(storageKey, state.col + ":" + state.dir);
+    }
 
     function render(resort) {
       if (resort) sortTableRows(table, state.col, state.dir);
@@ -693,6 +745,7 @@
           state.col = th.cellIndex;
           state.dir = th.dataset.sortDefaultDir === "desc" ? "desc" : "asc";
         }
+        persist();
         render(true);
       });
       th.addEventListener("keydown", function (e) {
@@ -708,6 +761,7 @@
         var parts = select.value.split(":");
         state.col = parseInt(parts[0], 10);
         state.dir = parts[1] === "desc" ? "desc" : "asc";
+        persist();
         render(true);
       });
     }
@@ -716,12 +770,85 @@
        season_standings/weekly_leaderboard's own sign-aware sort), so the
        initial render only has to mark the caret and aria-sort, not re-sort
        the DOM out from under a server order that may break ties (correct,
-       weekly wins, name) this client side sort does not know about. */
-    render(false);
+       weekly wins, name) this client side sort does not know about. A sort
+       restored from localStorage is a real, different order though, so that
+       case does need the initial resort. */
+    render(restoredFromStorage);
+
+    if (table.id) {
+      sortableTableResorters[table.id] = function () {
+        render(true);
+      };
+    }
   }
 
   function initSortableTables() {
     document.querySelectorAll("table[data-sortable]").forEach(initSortableTable);
+  }
+
+  /* --------------------------------------------------------- picks page sort */
+
+  /* The picks page's .game-list is an <ol>, not a <table>, so it needs its own value reader
+     (data-sort-<key> attributes set server side in picks.html, one per sort dimension) rather
+     than sortCellValue's cellIndex approach, but the actual reorder is the same idea:
+     physically move the real <li class="game-row"> nodes, never relabel them. Confidence
+     lives entirely inside each row (row.dataset.confidence, the hidden input, the chip), so
+     moving a row for display purposes carries its pick and confidence with it automatically;
+     nothing here ever calls renumber(), which is the one thing that would actually disturb a
+     pick in progress (Phase 4: "confidence values stay attached to their games and must not
+     be renumbered by a sort"). Tab/Arrow key order needs no separate fix either:
+     confInputsInOrder always reads live DOM order, so it already follows wherever this just
+     moved the rows. regroupDivider still runs afterward to keep the "Not picked" group
+     correctly separated, in the freshly sorted relative order within each group. */
+  function sortKeyValue(row, key) {
+    var raw = row.getAttribute("data-sort-" + key);
+    if (raw === null) return "";
+    var num = parseFloat(raw);
+    return isNaN(num) ? raw.toLowerCase() : num;
+  }
+
+  function sortGameListRows(list, key, dir) {
+    var rows = Array.prototype.slice.call(list.querySelectorAll(".game-row"));
+    var mult = dir === "desc" ? -1 : 1;
+    rows.sort(function (a, b) {
+      var av = sortKeyValue(a, key);
+      var bv = sortKeyValue(b, key);
+      if (av < bv) return -1 * mult;
+      if (av > bv) return 1 * mult;
+      return 0;
+    });
+    rows.forEach(function (row) { list.appendChild(row); });
+    regroupDivider(list);
+  }
+
+  function initGameListSort() {
+    var select = document.querySelector("[data-game-sort-select]");
+    var resetBtn = document.querySelector("[data-game-sort-reset]");
+    var list = document.querySelector(".game-list[data-sortable]");
+    if (!select || !list) return;
+    var storageKey = "psp-sort:picks";
+
+    function apply(value, persist) {
+      var parts = value.split(":");
+      var dir = parts[1] === "desc" ? "desc" : "asc";
+      select.value = value;
+      sortGameListRows(list, parts[0], dir);
+      if (persist) writeStoredSort(storageKey, value);
+    }
+
+    select.addEventListener("change", function () {
+      apply(select.value, true);
+    });
+
+    if (resetBtn) {
+      resetBtn.addEventListener("click", function () {
+        apply("slate:asc", true);
+      });
+    }
+
+    /* Default stays the commissioner's slate order (Phase 4): only a stored, previously
+       chosen sort ever changes the initial render, never a hard coded alternative. */
+    apply(readStoredSort(storageKey) || "slate:asc", false);
   }
 
   /* ------------------------------------------------------------- view toggle */
@@ -940,6 +1067,7 @@
     initReorderButton();
     initLockFlow();
     initSortableTables();
+    initGameListSort();
     initViewToggle();
     initMenuToggle();
     tickCountdowns();
@@ -968,6 +1096,15 @@
       e.detail.isError = false;
     }
   });
+
+  /* Re-apply whatever sort was already active on any registered table after ANY htmx swap,
+     in-band or out-of-band (Phase 4: a slate action's fresh tbody, or "Load more"'s appended
+     rows, both arrive in server default order and would otherwise silently drop back out of
+     a commissioner's chosen sort). Cheap and safe to run unconditionally on every swap
+     anywhere on the page: re-sorting an already-correctly-sorted table is a no-op, and only
+     tables this same page actually initialized are ever in the registry. */
+  document.addEventListener("htmx:afterSwap", resortAllSortableTables);
+  document.addEventListener("htmx:oobAfterSwap", resortAllSortableTables);
 
   /* HTMX save feedback. The server returns the summary partial. */
   document.addEventListener("htmx:afterSwap", function (e) {
@@ -1039,6 +1176,8 @@
     regroupDivider: regroupDivider,
     sortTableRows: sortTableRows,
     initSortableTables: initSortableTables,
+    sortGameListRows: sortGameListRows,
+    initGameListSort: initGameListSort,
     initViewToggle: initViewToggle
   };
 })();

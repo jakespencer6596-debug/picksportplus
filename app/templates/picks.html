@@ -461,6 +461,28 @@
 
     <p class="muted">Tab moves to the next confidence value. Arrow keys pick the winner.</p>
 
+    <div class="row picks-sort-toolbar">
+      <div class="field">
+        <label class="field-label" for="picks-sort-select">Sort by</label>
+        <select class="select select-sm" id="picks-sort-select" data-game-sort-select>
+          <option value="slate:asc">Slate order</option>
+          <option value="kickoff:asc">Kickoff, earliest first</option>
+          <option value="kickoff:desc">Kickoff, latest first</option>
+          <option value="league:asc">League, A to Z</option>
+          <option value="league:desc">League, Z to A</option>
+          <option value="closeness:asc">Closest spread first</option>
+          <option value="closeness:desc">Widest spread first</option>
+          <option value="source:asc">Spread source, A to Z</option>
+          <option value="source:desc">Spread source, Z to A</option>
+          <option value="matchup:asc">Matchup, A to Z</option>
+          <option value="matchup:desc">Matchup, Z to A</option>
+        </select>
+      </div>
+      <button class="btn btn-secondary btn-sm" type="button" data-game-sort-reset>
+        Reset to slate order
+      </button>
+    </div>
+
     <ol class="game-list" data-sortable data-picks-required="{{ n }}"
         aria-label="{{ week.label }} slate, most confident first">
       {% for game in games %}
@@ -468,6 +490,12 @@
         <li class="game-row{{ '' if pick else ' is-not-picked' }}"
             data-game-id="{{ game.id }}"
             data-confidence="{{ pick.confidence if pick else '' }}"
+            data-sort-slate="{{ game.slate_rank or loop.index }}"
+            data-sort-kickoff="{{ game.start_time.timestamp() }}"
+            data-sort-league="{{ game.league }}"
+            data-sort-closeness="{{ game.closeness if game.closeness is not none else 999999 }}"
+            data-sort-source="{{ game.spread_source or 'zzz' }}"
+            data-sort-matchup="{{ game.away_abbr }} at {{ game.home_abbr }}"
             tabindex="0"
             aria-label="{{ game.away_team }} at {{ game.home_team }}">
           <span class="game-grip" role="img" aria-label="Drag to rank" title="Drag to rank">

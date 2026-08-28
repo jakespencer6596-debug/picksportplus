@@ -150,9 +150,14 @@ def test_slate_editor_page_weight_budget(big_slate_client: TestClient):
     ), f"Slate editor rendered {option_count} <option> elements, over the {MAX_OPTIONS} budget."
 
     # The swap list itself must still cover every real candidate exactly once, not per row:
-    # one <datalist id="swap-candidates"> holding all 100 off-slate games.
+    # one <datalist id="swap-candidates"> holding all 100 off-slate games. The remaining
+    # options are the two mobile "Sort by" <select> controls (Phase 4), a small, fixed count
+    # that does not grow with the candidate count, unlike the datalist.
     assert body.count('id="swap-candidates"') == 1
-    assert option_count == 100
+    datalist_start = body.index('id="swap-candidates"')
+    datalist_end = body.index("</datalist>", datalist_start)
+    datalist_html = body[datalist_start:datalist_end]
+    assert len(re.findall(r"<option[ >]", datalist_html, re.IGNORECASE)) == 100
 
 
 def test_pin_action_is_a_small_htmx_partial_not_the_whole_page(big_slate_client: TestClient):

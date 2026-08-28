@@ -253,17 +253,33 @@
     </p>
 
     {% if on_slate %}
+      <div class="mobile-only sort-select-wrap">
+        <label class="field-label" for="on-slate-sort-select">Sort by</label>
+        <select class="select select-sm" id="on-slate-sort-select" data-sort-select-for="on-slate-table">
+          <option value="0:asc">Rank</option>
+          <option value="1:asc">Matchup, A to Z</option>
+          <option value="1:desc">Matchup, Z to A</option>
+          <option value="2:asc">League, A to Z</option>
+          <option value="2:desc">League, Z to A</option>
+          <option value="3:asc">Closest spread first</option>
+          <option value="3:desc">Widest spread first</option>
+          <option value="4:asc">Spread source, A to Z</option>
+          <option value="4:desc">Spread source, Z to A</option>
+          <option value="6:asc">Kickoff, earliest first</option>
+          <option value="6:desc">Kickoff, latest first</option>
+        </select>
+      </div>
       <div class="table-wrap">
         <table class="table" id="on-slate-table" data-sortable data-default-sort-col="0">
           <thead>
             <tr>
-              <th scope="col" class="num" data-sortable-col>Rank</th>
-              <th scope="col" data-sortable-col>Matchup</th>
-              <th scope="col" data-sortable-col>League</th>
-              <th scope="col" data-sortable-col>Line</th>
-              <th scope="col">Spread source</th>
+              <th scope="col" class="num" data-sortable-col data-sort-default-dir="asc" aria-sort="ascending">Rank</th>
+              <th scope="col" data-sortable-col data-sort-default-dir="asc" aria-sort="none">Matchup</th>
+              <th scope="col" data-sortable-col data-sort-default-dir="asc" aria-sort="none">League</th>
+              <th scope="col" data-sortable-col data-sort-default-dir="asc" aria-sort="none">Line</th>
+              <th scope="col" data-sortable-col data-sort-default-dir="asc" aria-sort="none">Spread source</th>
               <th scope="col">Why it's here</th>
-              <th scope="col" data-sortable-col>Kickoff</th>
+              <th scope="col" data-sortable-col data-sort-default-dir="asc" aria-sort="none">Kickoff</th>
               <th scope="col">Status</th>
               <th scope="col">Actions</th>
             </tr>
@@ -307,15 +323,30 @@
     </form>
 
     {% if candidates %}
+      <div class="mobile-only sort-select-wrap">
+        <label class="field-label" for="candidates-sort-select">Sort by</label>
+        <select class="select select-sm" id="candidates-sort-select" data-sort-select-for="candidates-table">
+          <option value="0:asc">Matchup, A to Z</option>
+          <option value="0:desc">Matchup, Z to A</option>
+          <option value="1:asc">League, A to Z</option>
+          <option value="1:desc">League, Z to A</option>
+          <option value="2:asc">Closest spread first</option>
+          <option value="2:desc">Widest spread first</option>
+          <option value="3:asc">Spread source, A to Z</option>
+          <option value="3:desc">Spread source, Z to A</option>
+          <option value="4:asc">Kickoff, earliest first</option>
+          <option value="4:desc">Kickoff, latest first</option>
+        </select>
+      </div>
       <div class="table-wrap">
-        <table class="table" id="candidates-table" data-sortable data-default-sort-col="3">
+        <table class="table" id="candidates-table" data-sortable data-default-sort-col="2">
           <thead>
             <tr>
-              <th scope="col" data-sortable-col>Matchup</th>
-              <th scope="col" data-sortable-col>League</th>
-              <th scope="col" data-sortable-col>Line</th>
-              <th scope="col">Spread source</th>
-              <th scope="col" data-sortable-col>Kickoff</th>
+              <th scope="col" data-sortable-col data-sort-default-dir="asc" aria-sort="none">Matchup</th>
+              <th scope="col" data-sortable-col data-sort-default-dir="asc" aria-sort="none">League</th>
+              <th scope="col" data-sortable-col data-sort-default-dir="asc" aria-sort="ascending">Line</th>
+              <th scope="col" data-sortable-col data-sort-default-dir="asc" aria-sort="none">Spread source</th>
+              <th scope="col" data-sortable-col data-sort-default-dir="asc" aria-sort="none">Kickoff</th>
               <th scope="col">Status</th>
               <th scope="col">Actions</th>
             </tr>

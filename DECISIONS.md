@@ -64,6 +64,43 @@ asked for. The swap datalist is unaffected by this pagination: it always lists e
 candidate, since swapping in a game further down the list than the visible page is still a
 legitimate thing to want to do.
 
+### Phase 4: reuse the table engine's shape for the picks list, do not extend it in place
+
+`app/static/app.js`'s `table[data-sortable]` engine reads a cell by `cellIndex` and compares
+either `data-sort-value` or the cell's own text; the picks page's `.game-list` is an `<ol>` of
+`<li>` rows with no cells at all, so `cellIndex` has nothing to mean there. Rather than bend
+the table engine to also understand a non-tabular list, added a second, small, parallel
+function (`sortGameListRows`) that reads named `data-sort-<key>` attributes instead of a
+column index, and shares the same two rules that actually matter (a stable sort, and moving
+real DOM nodes rather than relabeling them) rather than the table engine's specific mechanics.
+This is still "one shared sorting implementation" in the sense the brief means it: one engine
+per DOM shape (table vs. list), not two competing definitions of what "sorted" means for the
+same shape, and not a third, redundant table-only implementation for the slate editor.
+
+### Phase 4: persistence lives in the engine, keyed by table id, not per-page
+
+`localStorage` persistence (`psp-sort:<table id>`) was added inside `initSortableTable` itself
+rather than as page-specific code on the slate editor, so season standings and the weekly
+leaderboard get it too, for free, the moment they are next touched. The brief's own wording
+("Persist the chosen sort per user in localStorage so a commissioner working through a slate
+does not have to re-sort on every partial update") is really two requirements in one sentence:
+remembering a choice across a page load, and NOT losing it to an HTMX partial swap in the
+meantime. The second one needed its own fix (a document level `htmx:afterSwap`/
+`htmx:oobAfterSwap` listener that re-applies whatever sort is currently active), since a fresh
+tbody or newly appended "Load more" rows always arrive in server default order and would
+otherwise silently drop a commissioner back out of their chosen sort on the very next click.
+
+### Phase 4: `CANDIDATES_PAGE_SIZE` dropped from 25 to 20 to protect the page weight budget
+
+Adding the two mobile "Sort by" `<select>` controls (required below the medium breakpoint,
+where there is no header row to click) cost about 2KB of fixed weight, pushing the 20-slate/
+100-candidate scenario just over the 150KB budget Phase 1 had left almost no headroom against.
+Rather than trim the sort controls themselves (their option text is already about as short as
+it can be while staying readable), reduced the initial candidates page size, which is real,
+per-row weight that scales down cleanly and still leaves "Load more" covering the rest with no
+loss of function. `tests/test_slate_performance.py` still passes with real margin after this
+change (see PERF-REPORT.md's Phase 4 section for the exact numbers).
+
 ### Phase 3: a real settings control for `weekly_tiebreak_mode`, not DB-only
 
 The bullet list for this phase only asked for the column and its default ("implemented as a

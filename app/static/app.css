@@ -2822,6 +2822,13 @@ button.team-btn:not([disabled]):not(.is-picked):hover {
 
 .table th[data-sortable-col]:hover { color: var(--text); }
 
+/* Picks page sort control (Phase 4, weekly tiebreak/sorting/performance work): a plain
+   <select>, not a sortable table header, since .game-list is an <ol> with no header row to
+   click at any breakpoint, so this is the one control at every screen size, not a mobile-only
+   fallback the way .sort-select-wrap is for a real table. */
+.picks-sort-toolbar { margin-bottom: var(--space-4); }
+.picks-sort-toolbar .field { margin-bottom: 0; }
+
 .table th[data-sortable-col]:focus-visible {
   outline: 2px solid var(--focus);
   outline-offset: -2px;

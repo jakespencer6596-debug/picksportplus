@@ -25,7 +25,7 @@ real measurements against the live production site.
 - [x] Phase 1: slate editor page weight
 - [x] Phase 2: wider performance review
 - [x] Phase 3: weekly tiebreak on total wins
-- [ ] Phase 4: sorting on slate editor and picks page
+- [x] Phase 4: sorting on slate editor and picks page
 - [ ] Phase 5: regression sweep
 - [ ] Phase 6: full verification
 - [ ] Phase 7: documentation
@@ -214,3 +214,49 @@ Same two players, same pot, same rules; the only thing that changed is which of 
 tiebreak favors. This exact scenario is `test_weekly_tie_breaks_outright_on_prior_wins_under_
 the_default_mode` in `tests/test_payout_service.py`, asserting the dollar amounts directly, not
 just the rank order.
+
+## Phase 4: sorting on the slate editor and picks page
+
+**What changed:**
+
+- Extended the existing `table[data-sortable]`/`data-sortable-col` engine (`app/static/
+  app.js`, already built for season standings and the weekly leaderboard, per the brief's own
+  instruction to reuse it rather than write a second one) with two things every table on the
+  site now gets for free: `localStorage` persistence per table id (`psp-sort:<table id>`), and
+  a re-sort after any htmx swap or out-of-band swap anywhere on the page. The second one is
+  what makes the first one actually useful on the slate editor: without it, a commissioner's
+  chosen sort would silently reset to server default order the next time a pin, add, remove or
+  swap action refreshed the table.
+- Both slate editor tables (on-slate and candidates) are now sortable by kickoff date/time,
+  league, closeness of spread, spread source, and matchup name, with a mobile `<select>`
+  (`data-sort-select-for`) standing in for the header row below the medium breakpoint, matching
+  `results.html`'s existing pattern exactly.
+- The picks page's `.game-list` (an `<ol>`, not a `<table>`, so it needed its own small value
+  reader rather than the table engine's cell-index approach) gained the same five sort
+  dimensions via a `<select data-game-sort-select>` plus a "Reset to slate order" button.
+  Sorting only ever moves the real `<li class="game-row">` nodes; it never calls `renumber()`,
+  so a game's confidence value (and its hidden form inputs) travels with its own row and is
+  never touched by a sort. The Tab/Arrow keyboard sequence needed no separate fix at all: it
+  already always reads live DOM order (`confInputsInOrder`), which a sort changes exactly the
+  same way a drag or "Reorder to inputs" already does.
+- Both surfaces persist the chosen sort in `localStorage` and restore it on the next load; the
+  picks page defaults to slate order, matching the brief.
+
+**Tests:** `tests/js/sorting.test.js` (19 total JS tests now passing, `npm test` /
+`node --test tests/js/*.test.js`; `package.json`'s script was fixed to the explicit glob this
+Node version needs): numeric-column sort by value not text, ascending/descending toggling,
+localStorage persistence and restoration, an `htmx:afterSwap` re-applying an active sort to
+freshly swapped rows, the picks page sort not disturbing confidence values, the keyboard tab
+sequence following a sorted order, "Reset to slate order," and persistence on the picks page
+too. `tests/test_sorting_markup.py` (2 tests) covers that the server actually emits the
+attributes and controls the JS depends on. `tests/test_slate_performance.py` was updated (the
+datalist's own option count, not the whole page's, is what should equal the candidate count,
+now that the two mobile sort selects add a small, fixed number of their own).
+
+**A budget consequence.** Phase 4's two mobile sort `<select>` controls added about 2KB of
+fixed weight to the slate editor (roughly 20 more `<option>` elements across both tables, which
+do not scale with candidate count). That pushed the 20-slate/100-candidate scenario to 151,558
+bytes, over the 150KB budget `tests/test_slate_performance.py` enforces.
+`CANDIDATES_PAGE_SIZE` (`app/routers/admin.py`) dropped from 25 to 20 to buy back the
+headroom, which also modestly improves the initial page weight further. The budget test still
+passes with real margin; see DECISIONS.md for the reasoning.
