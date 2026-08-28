@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 import logging
+import time
 
 from fastapi import FastAPI, Request
 from fastapi.exceptions import HTTPException as FastAPIHTTPException
 from fastapi.responses import RedirectResponse
 from fastapi.staticfiles import StaticFiles
+from sqlalchemy import event
+from sqlalchemy.engine import Engine
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.middleware.sessions import SessionMiddleware
 from starlette.middleware.trustedhost import TrustedHostMiddleware
@@ -43,6 +46,54 @@ app.add_middleware(TrustedHostMiddleware, allowed_hosts=settings.allowed_hosts)
 app.add_middleware(ProxyHeadersMiddleware, trusted_hosts="*")
 
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
+
+# Performance instrumentation (Phase 0, weekly tiebreak/sorting/performance work, see
+# PERF-REPORT.md). Off in production: settings.debug_timing defaults False, and the listener
+# below is a no-op read of that flag on every query, cheap enough to leave wired at all times
+# rather than attaching and detaching it as a request-scoped concern. Listens on the Engine
+# class, not one instance, so it counts queries against whichever engine is actually bound to
+# the request (the real app.db.engine in production, a throwaway per-test engine in the test
+# suite's own TestClient fixture), matching how app/db.py's own SQLite pragma listener works.
+#
+# A plain dict, not a contextvars.ContextVar: FastAPI runs a sync route handler in a worker
+# thread via anyio's threadpool, which hands that thread a COPY of the calling coroutine's
+# context, so a value the query listener sets from inside that thread never propagates back to
+# this middleware's own context. A process-wide counter sidesteps that entirely. This makes the
+# count exact for one request in flight at a time (true for local dev, the measurement script,
+# and a single commissioner clicking around) but not safe against two concurrent requests
+# interleaving their counts, an acceptable limitation for a diagnostic that is always off in
+# production.
+_query_state = {"count": 0}
+
+
+@event.listens_for(Engine, "before_cursor_execute")
+def _count_query(conn, cursor, statement, parameters, context, executemany):  # pragma: no cover
+    if not settings.debug_timing:
+        return
+    _query_state["count"] += 1
+
+
+@app.middleware("http")
+async def timing_middleware(request: Request, call_next):
+    if not settings.debug_timing:
+        return await call_next(request)
+    _query_state["count"] = 0
+    start = time.perf_counter()
+    try:
+        response = await call_next(request)
+    finally:
+        elapsed_ms = (time.perf_counter() - start) * 1000
+        count = _query_state["count"]
+    response.headers["X-Render-Time-Ms"] = f"{elapsed_ms:.1f}"
+    response.headers["X-Query-Count"] = str(count)
+    log.info(
+        "DEBUG_TIMING %s %s: %.1fms, %d queries",
+        request.method,
+        request.url.path,
+        elapsed_ms,
+        count,
+    )
+    return response
 
 
 @app.on_event("startup")
