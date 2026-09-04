@@ -27,7 +27,7 @@ Working document for the slate integrity incident. Updated as each phase lands. 
 | 7. Regression sweep | done | see below |
 | 8. Full verification | done | see below |
 | 9. Documentation | done | `abd66f5` |
-| 10. Merge, push, deploy | done | `69b15b3` (merge), `be58419`, `fa0272a`, `6204e93` (three live-found deploy/cron fixes) |
+| 10. Merge, push, deploy | done | `69b15b3` (merge), `be58419`, `fa0272a`, `6204e93`, `8f47a3e` (four live-found fixes) |
 | 11. Verify on the live site | done | see below |
 
 Commit SHAs are filled in as each phase's commit actually lands (see `git log`).
@@ -331,7 +331,8 @@ warning), `seed-admin` recognized the existing admin and the real "Fatrunner" po
 "Available at your primary URL https://picksportplus.com + 2 more domains."
 
 **Health check.** `GET /health` returned `200` on both `picksportplus-live.onrender.com` and
-the custom domain `picksportplus.com`.
+the custom domain `picksportplus.com`, re-confirmed again after every one of the four total
+pushes this phase ended up making, most recently at commit `8f47a3e`.
 
 **Phase 11, live verification.**
 
