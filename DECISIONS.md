@@ -4456,3 +4456,21 @@ would mean a pool that never turned the routine notice on could silently clear e
 picks with no one finding out except by opening the app, exactly the kind of silent failure
 this whole incident is about. `publish_week` branches on `Week.rebuilt_at` instead, which is
 only ever set by an actual "rebuild and reopen," never by an ordinary build.
+
+**Phase 6, the chat unread badge shows only on This Week and the commissioner dashboard, not
+in the global nav on every single page.** Computing it requires a real query
+(`unread_chat_count`), and `app.templating.render()` is the one shared function every page in
+this codebase renders through with no database session of its own; adding a query there would
+add DB I/O to every request regardless of whether that page has anything to do with chat, a
+cost this app's own performance work (PERF-REPORT.md) has been deliberately careful about
+elsewhere. Threading it through instead required touching the two highest-traffic entry
+points a real player and a real commissioner actually land on, which is a reasonable proxy for
+"noticed soon" without paying that cost on every page. Documented here as a scope choice, not
+an oversight: a future pass could promote it to every page if the product actually needs that.
+
+**Phase 6, league chat messages are soft-deleted (`LeagueMessage.deleted_at`), not removed
+outright.** A member's or commissioner's "delete" hides a message from every list query (all
+of them already filter `deleted_at.is_(None)`) without erasing the row, matching this
+codebase's existing bias toward archiving over destroying (`PickArchive`, `SlateChange`'s own
+audit trail). Nothing today ever reads a deleted row back, but the option to add a moderation
+view later needs no migration, only a new query.

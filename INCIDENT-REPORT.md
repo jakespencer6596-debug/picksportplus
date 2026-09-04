@@ -23,7 +23,7 @@ Working document for the slate integrity incident. Updated as each phase lands. 
 | 3. Explain and reverse voiding | done | `90f1342` |
 | 4. Midweek kickoff warnings, lock policy | done | `9300d85` |
 | 5. Tidy the slate editor | done | `d95698a` |
-| 6. League chat and member email export | pending | |
+| 6. League chat and member email export | done | `0e580a1` |
 | 7. Regression sweep | pending | |
 | 8. Full verification | pending | |
 | 9. Documentation | pending | |
