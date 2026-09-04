@@ -608,6 +608,38 @@ def test_slate_rebuild_confirm_page_renders_for_commissioner(client, world):
     assert "Rebuild" in response.text
 
 
+def test_slate_rebuild_confirm_page_never_renders_the_word_admin_for_a_real_commissioner(
+    client, session_factory
+):
+    """Phase 7 regression sweep item 11, extended to this phase's own new page (SPEC Section
+    10c): a real, non-admin commissioner must never see the word "admin" anywhere."""
+    db = session_factory()
+    pool = Pool(
+        name="Regression Pool",
+        join_code="REGR2025",
+        season_year=2025,
+        num_games_per_week=4,
+        target_nfl=2,
+        target_ncaaf=2,
+        sports=["nfl", "ncaaf"],
+        timezone="America/New_York",
+        current_week=1,
+    )
+    db.add(pool)
+    db.flush()
+    commish = _make_user(db, "commish2@example.com", "League Commissioner")
+    db.add(PoolMember(pool_id=pool.id, user_id=commish.id, role_in_pool="commissioner"))
+    week = _make_week(db, pool)
+    db.commit()
+    week_id = week.id
+    db.close()
+
+    _login(client, "commish2@example.com")
+    response = client.get(f"/league/slate/rebuild?week_id={week_id}")
+    assert response.status_code == 200
+    assert "admin" not in response.text.lower()
+
+
 def test_slate_rebuild_confirm_page_refused_for_a_regular_player(client, world):
     _login(client, "player@example.com")
     response = client.get(f"/league/slate/rebuild?week_id={world['week_id']}")
@@ -2653,6 +2685,7 @@ def _make_pool_commissioner_who_is_not_admin(db: Session, pool: Pool) -> User:
         "/league/settings",
         "/league/payouts",
         "/league/payouts/summary",
+        "/league/chat",
         "/results",
         "/standings",
     ],

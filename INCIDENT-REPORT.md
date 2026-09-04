@@ -24,7 +24,7 @@ Working document for the slate integrity incident. Updated as each phase lands. 
 | 4. Midweek kickoff warnings, lock policy | done | `9300d85` |
 | 5. Tidy the slate editor | done | `d95698a` |
 | 6. League chat and member email export | done | `0e580a1` |
-| 7. Regression sweep | pending | |
+| 7. Regression sweep | done | see below |
 | 8. Full verification | pending | |
 | 9. Documentation | pending | |
 | 10. Merge, push, deploy | pending | |
@@ -120,6 +120,65 @@ production, where the actual incident happened, is Phase 11's job below.
 ### Production (Phase 11)
 
 _Filled in during Phase 11._
+
+## Phase 7 regression sweep
+
+Every line below already passed against the existing suite (no fix needed in this phase);
+each was re-run individually to confirm, not inferred from the full-suite pass alone.
+
+1. Inverse scoring, lowest total wins, non-submitter takes the max penalty and cannot win: PASS
+   (`test_scoring.py::test_inverse_no_show_takes_the_maximum_penalty_and_is_flagged`,
+   `test_weekly_winner_ids_inverse_lowest_wins`,
+   `test_weekly_winner_ids_inverse_excludes_no_shows_from_the_eligible_pool`).
+2. 15 of 20 validation, 14 and 16 rejected, 15 saves: PASS (`test_scoring.py`,
+   `test_validate_picks_one_pick_short_of_required`, `test_validate_picks_one_pick_over_required`,
+   `test_validate_picks_valid_submission_of_15_of_20`).
+3. Two-step pick entry, Tab/arrow navigation, Lock picks: PASS (`npm test`, all 22 cases in
+   `tests/js/pick_navigation.test.js` and `tests/js/sorting.test.js`, run against Node's
+   built-in test runner with jsdom).
+4. Player-major results grid: PASS
+   (`test_app.py::test_results_grid_is_player_major_with_confidence_columns_and_game_major_toggle`).
+5. Payout ladder totals 2775/400/1155/620, grand total 4950: PASS
+   (`test_payouts.py::test_fatrunner_ladder_resolves_to_known_totals`).
+6. Payout snapshots do not move when the pot changes: PASS
+   (`test_payout_service.py::test_snapshot_amounts_survive_the_pot_growing_after_the_fact`).
+7. Weekly wins tiebreak and season tiebreaks: PASS (`test_weekly_tiebreak.py`, e.g.
+   `test_more_prior_wins_takes_the_higher_place_on_a_points_tie`; `test_standings.py`, e.g.
+   `test_season_points_ranking_breaks_a_tie_on_weekly_wins`,
+   `test_season_wins_ranking_ties_break_on_points_in_the_pools_own_direction`).
+8. Scenarios open at five final games: PASS (`test_scenarios_service.py`,
+   `test_week_scenario_panel_not_visible_below_threshold`,
+   `test_week_scenario_panel_visible_computes_a_real_report`). Ranking-direction parity with
+   standings is exercised implicitly through `app.scoring.score_week` reuse (Section 9a), not
+   as a single standalone test; no gap found worth a new test for this sweep.
+9. Week resolution, no more than 8 days, no duplicate teams: PASS (`test_ingest.py`,
+   `test_publish_week_refuses_a_slate_spanning_more_than_eight_days`,
+   `test_duplicate_team_warnings_explains_a_dropped_game_with_real_names`).
+10. Test weeks contribute nothing to standings, payouts or any tiebreak: PASS
+    (`test_standings.py::test_season_standings_excludes_a_test_weeks_entries`,
+    `test_weekly_tiebreak.py::test_a_test_weeks_win_does_not_count_toward_the_weekly_tiebreak`,
+    `test_standings.py::test_a_test_weeks_win_never_decides_the_season_wins_tiebreak`,
+    `test_payout_service.py::test_a_test_week_scores_normally_but_never_generates_a_payout_award`).
+11. No "admin" wording for a real commissioner, `/site` 403s for a commissioner: PASS
+    (`test_app.py::test_league_pages_never_render_the_word_admin_for_a_real_commissioner`,
+    extended this phase to cover the new `/league/chat` page;
+    `test_site_dashboard_refused_for_a_pool_commissioner_who_is_not_a_site_admin`). Also added
+    `test_slate_rebuild_confirm_page_never_renders_the_word_admin_for_a_real_commissioner` for
+    Phase 2's own new page, since it did not exist before this incident's work.
+12. Email sends invites and resets, fails loudly when disabled: PASS
+    (`test_app.py::test_forgot_password_full_round_trip`,
+    `test_player_invite_email_sends_to_multiple_addresses`,
+    `test_commissioner_invite_email_sends_for_the_site_admin`; `test_mail.py`,
+    `test_send_raises_mail_disabled_when_not_enabled`,
+    `test_send_raises_mail_disabled_when_enabled_but_unconfigured`).
+13. Table sorting works everywhere built: PASS (`test_sorting_markup.py`,
+    `test_slate_editor_tables_carry_sortable_columns_and_mobile_selects`,
+    `test_picks_page_has_a_sort_control_and_per_dimension_data_attributes`;
+    `tests/js/sorting.test.js`, all cases).
+
+Two small additions made in this phase, not fixes but coverage extended to this incident's own
+new pages: `/league/chat` added to the parametrized admin-wording sweep, and a dedicated test
+for the rebuild confirmation page's own admin-wording.
 
 ## Ambiguity decisions
 

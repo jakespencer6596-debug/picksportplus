@@ -229,7 +229,8 @@ The tool always proposes a slate. The commissioner can override it from `/league
 - Set a line by hand for a game the feeds could not price, which rescues it for selection.
 - Override the lock time, or clear the override to go back to the first kickoff.
 - Void a game (a cancellation, or a game moved out of the week). Nobody scores a void and it
-  leaves the possible count.
+  leaves the possible count, and the effect is explained right on the void button before you
+  click it. Unvoiding restores normal scoring at any time while the week is still live.
 
 Timing rules:
 
@@ -239,6 +240,27 @@ Timing rules:
   still change the size and the games at any time until the first player submits a pick.
 - **Once any pick exists the game count is fixed for that week** and only voiding remains, so
   scoring stays consistent for everyone.
+- **A published week's game selection never moves again once you publish it**, whether or not
+  anyone has picked yet. The hourly automation still refreshes scores, statuses and lines, it
+  never reselects a published week's games. If a published slate genuinely needs to change,
+  use "Amend this game" (one game at a time, even after picks exist) or "Rebuild this week and
+  reopen picks" (a full reset behind a three step confirmation, every pick archived first,
+  never destroyed) from the slate editor. Every mutation to a week's games shows up in the
+  slate editor's Change history panel, and `python -m app.cli doctor` reports whether any
+  published week's game set has drifted from its earliest recorded state.
+- A midweek (Monday through Friday) game is still eligible for the slate, but publishing is
+  blocked behind an acknowledgement naming it and the lock time it produces. `Pool.lock_policy`
+  (`/league/settings`) can instead lock the pool only at the first Saturday kickoff, or leave
+  the lock time entirely to you.
+
+### League chat and member emails
+
+`/league/chat` is a simple, scoped message board for the league: members post, edit and delete
+their own messages, the commissioner can delete any message and pin one to the top (a lock
+time announcement, for example). It polls for new messages, no real time connection. Content
+is always plain text, escaped and linkified, never HTML or markdown. `/league/members` also
+has a copyable, comma separated list of every member's email plus a CSV download, for mailing
+the league from your own email client instead.
 
 ### Payouts
 
