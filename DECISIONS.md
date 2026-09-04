@@ -4357,3 +4357,155 @@ POST body to keep reaching its own in-route validation rather than 422ing on Fas
 missing-field check first; `test_season_tiebreak_mode_is_saved` and
 `test_unknown_season_tiebreak_mode_is_rejected` (`tests/test_payout_routes.py`) cover the
 new field itself.
+
+## Slate drift incident
+
+See `INCIDENT-REPORT.md` for the full post-mortem, the phase checklist and commit SHAs. This
+section only records the ambiguous calls made while fixing it.
+
+**Phase 1, the freeze trigger stays separate from `can_resize_slate`.** The obvious first
+instinct is to key everything off one flag. Rejected: SPEC.md Section 6a's rule ("once any
+pick exists the game count is fixed, only voiding remains") and the incident's own freeze rule
+("frozen at publish") are two different rules answering two different questions, one about
+picks, one about publish state, and they already disagreed with each other under the old
+buggy code (a picked-but-still-draft week froze; a published-but-unpicked week did not,
+backwards from what should happen). Collapsing them into one flag would have meant picking a
+side and quietly changing the other rule's behavior as a side effect. `_build_slate_impl`'s
+freeze now reads `week.status != "draft"`; `can_resize_slate` (gating the commissioner's own
+manual add/remove/swap buttons) is untouched, still `week_has_picks`. A published week with no
+picks yet is a real, common state (a commissioner who publishes early to give players time):
+under the fix its automated selection is frozen but a commissioner can still resize it by
+hand, which is correct, and could not be expressed with a single shared flag.
+
+**Phase 1, "voided" and "pinned" cover both directions of the same toggle.** `SlateChange`'s
+`action` column has no `"unvoided"`/`"unpinned"` values, even though the router lets a
+commissioner do both. The action names the dimension that changed (this game's void-ness,
+this game's pinned-ness); `before`/`after` carry which direction. Doubling the enum for every
+reversible boolean did not seem worth it against `INCIDENT-REPORT.md`'s own consumers (the
+change history panel and the drift-detection doctor check), both of which read before/after
+anyway to build their sentence or comparison, never the action name alone.
+
+**Phase 1, a swap writes one `SlateChange` row, keyed to the incoming game.** The spec's own
+action list only has `"swapped"`, singular, not a pair of `"removed"`/`"added"` rows. `game_id`
+names the game that just joined the slate; `before`/`after` both carry `{"out": ..., "in":
+...}` so the change history sentence ("X replaced Y") and the drift doctor check both have
+everything they need from the one row, without a second row that would double-count a single
+commissioner action in any count of "how many changes happened."
+
+**Phase 1, the doctor drift check only trusts `"rebuilt"` rows for "earliest recorded
+state."** `"added"`/`"removed"`/`"swapped"` rows only carry the one or two games they touched,
+not the week's whole selected set, so they cannot answer "does the current set differ from the
+earliest known one" on their own. Only `"rebuilt"` (written whenever `apply_slate` actually
+changes the selection, draft-time reselection included) carries a full before/after set. A
+published week that was rebuilt at least once before this fix shipped gets a real comparison;
+one that was never rebuilt (or predates the audit trail entirely, which is true of every real
+week from before this deploy) is reported as "no history, cannot confirm," never as "clean."
+Reporting it as clean would have been a false negative on the exact thing this incident is
+about: a slate that could have already drifted with nobody able to prove it either way.
+
+**Phase 1, a real draft-time rebuild still writes a `"rebuilt"` row.** The spec's own worry is
+about a *published* slate moving; a draft week reselecting on every cron pass right up until
+publish is normal, expected behavior, not a bug. It still gets an audit row when the selection
+actually changes (skipped only on the very first build of a brand new week, which has no prior
+selection to have changed from): a commissioner who publishes a week and later asks "did this
+week ever get rebuilt before I published it" deserves a real answer, and the doctor check
+above needs at least one `"rebuilt"` row to exist before it can say anything useful about a
+week that gets published without ever having a picks-based freeze accidentally save it.
+
+**Phase 2, "amend a single game" bypasses `can_resize_slate` rather than replacing it.** The
+commissioner's literal complaint was "since people have locked already, I am unable to remove
+games," which is `can_resize_slate` (SPEC.md Section 6a) doing exactly what it was built to
+do. Weakening that rule outright for everyone would defeat its own purpose (keeping every
+player scored against the same slate by default). Instead `remove_from_slate`/
+`swap_slate_game` gained a `bypass_lock` keyword, `False` everywhere except the one new
+`amend_published_game` caller, so the ordinary Remove/Swap buttons on the slate editor are
+untouched and still refuse post-pick, while a deliberate, separately confirmed "Amend" action
+can override it one game at a time.
+
+**Phase 2, an amended pick is left in the `picks` table, not deleted or specially marked.**
+`app/scoring.py`'s own module docstring already states the rule this leans on: "Picks
+referring to a game_id not in outcomes are ignored (the game left the slate)." Once
+`amend_published_game` sets `Game.in_slate = False`, every pick on that game already stops
+counting the next time the week is scored, with the exact effect the spec describes (scores
+zero, drops from that player's own possible count, every other pick untouched) for free, no
+new column or deletion path needed. Deleting the pick row outright was rejected: nothing else
+in this codebase deletes a real submission a player actually made, and the "archive, never
+silently delete" instinct that governs the bigger rebuild tool applies here too, just via a
+different, already-existing mechanism (the pick row itself, quietly excluded, rather than a
+copy in a separate archive table).
+
+**Phase 2, the rebuild confirmation shows the CURRENT slate, not a live preview of the
+proposed new one.** Computing a genuine preview would mean either running a real ESPN
+fetch/spread-resolution pass with no commit (extra complexity for a confirmation screen, and
+still spends whatever metered budget the real rebuild would) or duplicating slate.py's
+selection logic against stale, already-written Game rows (which could show a preview that
+does not match what the real rebuild actually produces a moment later, and lines move between
+confirming and clicking Rebuild regardless). The page instead shows the exact games about to
+be archived away plus the archive/rebuild/redraft/notify sequence in plain language, which is
+what the commissioner actually needs to make an informed choice, and is honest about the one
+thing it cannot promise: "The exact replacement slate cannot be shown until the rebuild
+actually runs."
+
+**Phase 2, the rebuild-republished notification ignores `Pool.notify_week_published`.** The
+routine "week is open" email is opt-in, off by default (Phase 7 remediation), because most
+commissioners publish routinely and do not want an email every single week. A rebuild
+republish is a different, much rarer event: it exists specifically because something already
+went wrong once (a bad slate, or the commissioner correcting a mistake) and every affected
+player's picks were just deleted out from under them. Gating that behind the same opt-in
+would mean a pool that never turned the routine notice on could silently clear everyone's
+picks with no one finding out except by opening the app, exactly the kind of silent failure
+this whole incident is about. `publish_week` branches on `Week.rebuilt_at` instead, which is
+only ever set by an actual "rebuild and reopen," never by an ordinary build.
+
+**Phase 6, the chat unread badge shows only on This Week and the commissioner dashboard, not
+in the global nav on every single page.** Computing it requires a real query
+(`unread_chat_count`), and `app.templating.render()` is the one shared function every page in
+this codebase renders through with no database session of its own; adding a query there would
+add DB I/O to every request regardless of whether that page has anything to do with chat, a
+cost this app's own performance work (PERF-REPORT.md) has been deliberately careful about
+elsewhere. Threading it through instead required touching the two highest-traffic entry
+points a real player and a real commissioner actually land on, which is a reasonable proxy for
+"noticed soon" without paying that cost on every page. Documented here as a scope choice, not
+an oversight: a future pass could promote it to every page if the product actually needs that.
+
+**Phase 4, the auto_publish path never blocks on the midweek acknowledgement.** A manual
+"Publish this week" click is exactly where a human is present to read and accept the warning;
+`auto_publish` is a commissioner's own standing choice to remove the human from that loop
+entirely (Section 7). Blocking an automated publish on an acknowledgement nobody is present to
+give would either silently strand the week in draft forever (defeating the whole point of
+`auto_publish`) or require inventing a second, different automatic-acknowledgement rule that
+would just be a more complicated way of saying "publish anyway." The warning still reaches the
+commissioner, in the build's own report, so the information is not lost, only the blocking gate
+is skipped for the one setting that already means "I trust this to run without me."
+
+**Phase 4, `first_saturday_kickoff`'s weekday check runs in the pool's own timezone, computed
+in `app/services/ingest.py`, never inside the pure `app/slate.py` module.** `compute_lock_at`
+(the pure function `select_slate_by_targets` and the rest of `app/slate.py` already lean on)
+stays exactly what it was, `min()` over a sequence of datetimes, with no new timezone-awareness
+or policy parameter added to a module SPEC.md Section 6 requires stay a deterministic pure
+function. `recompute_lock` instead filters the candidate kickoff list down to Saturday-only
+(in the pool's zone) before ever calling `compute_lock_at`, so the pure module's own contract
+and existing unit tests needed no change at all.
+
+**Phase 5, the row action menu is a native `<details>`/`<summary>` disclosure, not a
+JavaScript dropdown.** SPEC.md Section 6a already requires every slate action to keep working
+as a plain POST with no JavaScript (the no-JS fallback the rest of the slate editor already
+guarantees); a JS-driven dropdown (a `<select>`-triggered menu, or a click-to-toggle `<div>`)
+would have needed new `app.js` wiring just to open and close, and would not degrade to
+anything usable without it. `<details>` is native, keyboard operable, and requires zero script
+to open, so the no-JS guarantee extends to the menu itself, not just the actions inside it.
+
+**Phase 5, bare tag CSS selectors (`.cell-actions > details > summary`), no new class on the
+`<details>` element itself.** The slate editor's own 150KB/60-form budget (Section 6a, enforced
+by a failing test) is razor thin by design; the first version of this menu, with a `class=
+"row-actions"` on every row's `<details>` and `<summary>`, pushed a 20-row/100-candidate page
+over budget by about 2.8KB purely from the added attribute text repeated 40 times a page.
+Removing the class and targeting the existing `.cell-actions` column instead recovered that
+margin without changing anything visual.
+
+**Phase 6, league chat messages are soft-deleted (`LeagueMessage.deleted_at`), not removed
+outright.** A member's or commissioner's "delete" hides a message from every list query (all
+of them already filter `deleted_at.is_(None)`) without erasing the row, matching this
+codebase's existing bias toward archiving over destroying (`PickArchive`, `SlateChange`'s own
+audit trail). Nothing today ever reads a deleted row back, but the option to add a moderation
+view later needs no migration, only a new query.

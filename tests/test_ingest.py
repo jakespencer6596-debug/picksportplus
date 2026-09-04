@@ -931,12 +931,14 @@ def test_set_pinned_does_not_require_can_resize_slate(db):
     assert unpinned.in_slate is True
 
 
-def test_a_new_rivalry_game_does_not_resize_a_frozen_slate(db, monkeypatch):
-    """Freeze rule check (spec point 7): once any pick exists, build_slate's locked-out
-    branch still runs upsert_games (a genuinely brand new game can still auto-pin itself,
-    for example a rivalry matchup that was not part of the original candidate pool), but it
-    never calls apply_slate. So that pin can mark itself pinned for a future week, but it
-    cannot grow or reshuffle the slate players have already picked against right now."""
+def test_a_new_rivalry_game_does_not_resize_a_published_frozen_slate(db, monkeypatch):
+    """Freeze rule check, updated for the slate drift incident fix (see INCIDENT-REPORT.md):
+    the trigger is week.status, not week_has_picks, so this same scenario is set up on an
+    OPEN (published) week rather than a draft one with a stray pick. Once a week is published,
+    build_slate's frozen branch still runs upsert_games (a genuinely brand new game can still
+    auto-pin itself, for example a rivalry matchup that was not part of the original candidate
+    pool), but it never calls apply_slate. So that pin can mark itself pinned for a future
+    rebuild, but it cannot grow or reshuffle the slate players are already picking against."""
     pool = _pool(
         db,
         rivalries=_OSU_MICHIGAN,
@@ -946,6 +948,7 @@ def test_a_new_rivalry_game_does_not_resize_a_frozen_slate(db, monkeypatch):
         sports=["ncaaf"],
     )
     week = _week_row(db, pool)
+    week.status = "open"
     on_slate = Game(
         week_id=week.id,
         league="ncaaf",
@@ -997,6 +1000,342 @@ def test_a_new_rivalry_game_does_not_resize_a_frozen_slate(db, monkeypatch):
     assert new_row.pinned is True  # auto-pin still fires the moment the row is created
     assert new_row.in_slate is False  # but the live, frozen slate itself is untouched
     assert report.selected == 1  # the game count genuinely did not move
+
+
+# Slate drift incident, Phase 1: freeze at publish, not at first pick -------------------------
+# See INCIDENT-REPORT.md for the full post-mortem. These pin the actual fix: the freeze
+# trigger is week.status, never week_has_picks, and it holds through sync_week (the real cron
+# path) as well as a direct build_slate call.
+
+
+def test_draft_week_still_rebuilds_normally_on_cron(db, monkeypatch):
+    """A draft week is unaffected by the fix: cron may still freely reselect it right up until
+    the commissioner publishes."""
+    pool = _pool(db, num_games_per_week=1, target_nfl=0, target_ncaaf=1, sports=["ncaaf"])
+    week = _week_row(db, pool)
+    assert week.status == "draft"
+    new_game = _rivalry_game("evt-new", "Duke", "Wake Forest")
+    monkeypatch.setattr(
+        ingest, "fetch_candidates", lambda db, pool, week, **kwargs: ([new_game], [])
+    )
+
+    report = ingest.sync_week(
+        db, pool, now=dt.datetime(2026, 9, 10, tzinfo=UTC), allow_metered=False
+    )
+
+    assert report.locked_out is False
+    row = db.scalar(select(Game).where(Game.week_id == week.id, Game.espn_event_id == "evt-new"))
+    assert row is not None and row.in_slate is True
+
+
+def test_cron_never_moves_a_published_slates_game_selection(db, monkeypatch):
+    """THE regression test for the slate drift incident: once a week is published, a wildly
+    different candidate pool coming back from ESPN (simulating betting lines moving, exactly
+    the reported symptom, "pulling in Wednesday and Thursday NFL games along with all these
+    blowout college games") must never change which games are selected. Zero picks exist on
+    this week, proving the bug is genuinely fixed rather than merely re-triggering the old,
+    wrong week_has_picks guard by coincidence."""
+    pool = _pool(db, num_games_per_week=1, target_nfl=0, target_ncaaf=1, sports=["ncaaf"])
+    week = _week_row(db, pool)
+    week.status = "open"
+    original = Game(
+        week_id=week.id,
+        league="ncaaf",
+        espn_event_id="original-game",
+        start_time=dt.datetime(2026, 9, 12, 17, 0, tzinfo=UTC),
+        home_team="Duke",
+        away_team="Wake Forest",
+        home_abbr="DUKE",
+        away_abbr="WAKE",
+        canonical_home_key=canonical_key("Duke", "ncaaf"),
+        canonical_away_key=canonical_key("Wake Forest", "ncaaf"),
+        spread_home=1.0,
+        closeness=1.0,
+        in_slate=True,
+        slate_rank=1,
+    )
+    db.add(original)
+    db.flush()
+    assert not ingest.week_has_picks(db, week)  # the exact case the old guard could not catch
+
+    new_candidates = [
+        _rivalry_game("evt-new-1", "Ohio State", "Michigan"),
+        _rivalry_game("evt-new-2", "Alabama", "Auburn"),
+    ]
+    monkeypatch.setattr(
+        ingest, "fetch_candidates", lambda db, pool, week, **kwargs: (new_candidates, [])
+    )
+
+    report = ingest.sync_week(
+        db, pool, now=dt.datetime(2026, 9, 10, tzinfo=UTC), allow_metered=False
+    )
+
+    after_ids = {
+        g.espn_event_id
+        for g in db.scalars(select(Game).where(Game.week_id == week.id, Game.in_slate.is_(True)))
+    }
+    assert after_ids == {"original-game"}
+    assert report.locked_out is True
+
+
+def test_published_week_still_refreshes_scores_status_and_lines_on_cron(db, monkeypatch):
+    """What the freeze does NOT stop: game status, scores and (via a real resolve_spreads
+    pass) display-only spread lines all still refresh every cron run."""
+    pool = _pool(db, num_games_per_week=1, target_nfl=0, target_ncaaf=1, sports=["ncaaf"])
+    week = _week_row(db, pool)
+    week.status = "open"
+    game = Game(
+        week_id=week.id,
+        league="ncaaf",
+        espn_event_id="evt1",
+        start_time=dt.datetime(2026, 9, 12, 17, 0, tzinfo=UTC),
+        home_team="Duke",
+        away_team="Wake Forest",
+        home_abbr="DUKE",
+        away_abbr="WAKE",
+        canonical_home_key=canonical_key("Duke", "ncaaf"),
+        canonical_away_key=canonical_key("Wake Forest", "ncaaf"),
+        spread_home=1.0,
+        closeness=1.0,
+        in_slate=True,
+        slate_rank=1,
+        status="scheduled",
+    )
+    db.add(game)
+    db.flush()
+
+    updated = espn.EspnGame(
+        event_id="evt1",
+        league="ncaaf",
+        kickoff=dt.datetime(2026, 9, 12, 17, 0, tzinfo=UTC),
+        home=espn.TeamSide(
+            name="Duke", abbr="DUKE", canonical=canonical_key("Duke", "ncaaf"), score=27
+        ),
+        away=espn.TeamSide(
+            name="Wake Forest",
+            abbr="WAKE",
+            canonical=canonical_key("Wake Forest", "ncaaf"),
+            score=10,
+        ),
+        status="final",
+        winner="home",
+    )
+    monkeypatch.setattr(
+        ingest, "fetch_candidates", lambda db, pool, week, **kwargs: ([updated], [])
+    )
+
+    ingest.build_slate(db, pool, pool.season_year, week.week_number, allow_metered=False)
+
+    db.refresh(game)
+    assert game.status == "final"
+    assert game.home_score == 27
+    assert game.away_score == 10
+    assert game.winner == "home"
+    assert game.in_slate is True  # the selection itself never moved
+    assert game.slate_rank == 1
+
+
+def test_locked_week_does_not_change_selection(db, monkeypatch):
+    pool = _pool(db, num_games_per_week=1, target_nfl=0, target_ncaaf=1, sports=["ncaaf"])
+    week = _week_row(db, pool)
+    week.status = "locked"
+    original = Game(
+        week_id=week.id,
+        league="ncaaf",
+        espn_event_id="original-game",
+        start_time=dt.datetime(2026, 9, 12, 17, 0, tzinfo=UTC),
+        home_team="Duke",
+        away_team="Wake Forest",
+        home_abbr="DUKE",
+        away_abbr="WAKE",
+        canonical_home_key=canonical_key("Duke", "ncaaf"),
+        canonical_away_key=canonical_key("Wake Forest", "ncaaf"),
+        spread_home=1.0,
+        closeness=1.0,
+        in_slate=True,
+        slate_rank=1,
+    )
+    db.add(original)
+    db.flush()
+
+    new_game = _rivalry_game("evt-new", "Ohio State", "Michigan")
+    monkeypatch.setattr(
+        ingest, "fetch_candidates", lambda db, pool, week, **kwargs: ([new_game], [])
+    )
+
+    report = ingest.build_slate(db, pool, pool.season_year, week.week_number, allow_metered=False)
+
+    assert report.locked_out is True
+    after_ids = {
+        g.espn_event_id
+        for g in db.scalars(select(Game).where(Game.week_id == week.id, Game.in_slate.is_(True)))
+    }
+    assert after_ids == {"original-game"}
+
+
+def test_sync_week_skips_a_non_draft_week_and_logs_the_reason(db, monkeypatch, caplog):
+    """Defense in depth (Phase 1): sync_week checks the target week's own status before ever
+    calling build_slate, a structurally separate guard from _build_slate_impl's own."""
+    import logging
+
+    pool = _pool(db, num_games_per_week=1, target_nfl=0, target_ncaaf=1, sports=["ncaaf"])
+    week = _week_row(db, pool)
+    week.status = "open"
+    db.flush()
+
+    called = {"build_slate": False}
+    real_build_slate = ingest.build_slate
+
+    def _spy(*args, **kwargs):
+        called["build_slate"] = True
+        return real_build_slate(*args, **kwargs)
+
+    monkeypatch.setattr(ingest, "build_slate", _spy)
+    monkeypatch.setattr(ingest, "fetch_candidates", lambda db, pool, week, **kwargs: ([], []))
+
+    with caplog.at_level(logging.INFO, logger="picksportplus.ingest"):
+        report = ingest.sync_week(
+            db, pool, now=dt.datetime(2026, 9, 10, tzinfo=UTC), allow_metered=False
+        )
+
+    assert called["build_slate"] is False  # build_slate was never even called
+    assert report.locked_out is True
+    assert any("skipping rebuild" in record.message for record in caplog.records)
+
+
+# Slate drift incident, Phase 1: the SlateChange audit trail -----------------------------------
+
+
+def test_every_mutation_writes_a_slate_change_row_with_actor_and_source(db):
+    from app.models import SlateChange
+
+    pool = _pool(db, num_games_per_week=2, target_nfl=1, target_ncaaf=1, sports=["nfl", "ncaaf"])
+    week = _week_row(db, pool)
+    on_slate = _picked_game(db, week)
+    _candidate_game(db, week, "evtB")
+    boss = User(email="boss@example.com", password_hash="x", display_name="Boss", role="admin")
+    site_admin = User(
+        email="admin@example.com", password_hash="x", display_name="Admin", role="admin"
+    )
+    db.add_all([boss, site_admin])
+    db.flush()
+
+    ingest.set_pinned(db, week, on_slate.id, True, actor_user_id=boss.id, source="commissioner")
+    ingest.set_manual_spread(
+        db, week, on_slate.id, -3.5, actor_user_id=boss.id, source="commissioner"
+    )
+    ingest.set_void(db, week, on_slate.id, True, actor_user_id=boss.id, source="commissioner")
+    ingest.set_void(db, week, on_slate.id, False, actor_user_id=boss.id, source="commissioner")
+    ingest.remove_from_slate(db, week, on_slate.id, actor_user_id=boss.id, source="commissioner")
+    ingest.add_to_slate(db, week, on_slate.id, actor_user_id=boss.id, source="commissioner")
+    ingest.remove_from_slate(db, week, on_slate.id, actor_user_id=None, source="cron")
+
+    rows = list(db.scalars(select(SlateChange).where(SlateChange.week_id == week.id)))
+    actions = [r.action for r in rows]
+    assert actions.count("pinned") == 1
+    assert actions.count("line_set") == 1
+    assert actions.count("voided") == 2
+    assert actions.count("removed") == 2
+    assert actions.count("added") == 1
+    assert all(r.actor_user_id == boss.id for r in rows if r.source == "commissioner")
+    assert any(r.actor_user_id is None and r.source == "cron" for r in rows)
+
+    # swap gets its own row too, using a fresh pair of games so it is a legal swap.
+    on2 = _candidate_game(db, week, "evtC", in_slate=True, slate_rank=1)
+    off2 = _candidate_game(db, week, "evtD")
+    ingest.swap_slate_game(db, week, on2.id, off2.id, actor_user_id=site_admin.id, source="admin")
+    swap_row = db.scalar(
+        select(SlateChange).where(SlateChange.week_id == week.id, SlateChange.action == "swapped")
+    )
+    assert swap_row is not None
+    assert swap_row.actor_user_id == site_admin.id
+    assert swap_row.source == "admin"
+
+
+def test_a_real_rebuild_that_changes_selection_writes_a_rebuilt_row(db, monkeypatch):
+    from app.models import SlateChange
+
+    pool = _pool(db, num_games_per_week=1, target_nfl=0, target_ncaaf=1, sports=["ncaaf"])
+    week = _week_row(db, pool)
+    first = _rivalry_game("evt-first", "Duke", "Wake Forest")
+    monkeypatch.setattr(ingest, "fetch_candidates", lambda db, pool, week, **kwargs: ([first], []))
+    ingest.build_slate(
+        db, pool, pool.season_year, week.week_number, allow_metered=False, source="commissioner"
+    )
+    assert (
+        db.scalar(
+            select(func.count(SlateChange.id)).where(
+                SlateChange.week_id == week.id, SlateChange.action == "rebuilt"
+            )
+        )
+        == 0
+    )  # the very first build has nothing to have "changed" from
+
+    second = _rivalry_game("evt-second", "Ohio State", "Michigan")
+    monkeypatch.setattr(ingest, "fetch_candidates", lambda db, pool, week, **kwargs: ([second], []))
+    ingest.build_slate(
+        db, pool, pool.season_year, week.week_number, allow_metered=False, source="commissioner"
+    )
+
+    rebuilt = db.scalar(
+        select(SlateChange).where(SlateChange.week_id == week.id, SlateChange.action == "rebuilt")
+    )
+    assert rebuilt is not None
+    assert rebuilt.source == "commissioner"
+    assert "evt-first" in rebuilt.before["selected"]
+    assert "evt-second" in rebuilt.after["selected"]
+
+
+def test_published_slate_drift_report_flags_a_week_with_no_history_as_unknown(db):
+    """A week published before this fix shipped has no SlateChange rows at all: the doctor
+    check reports that honestly rather than claiming it is clean."""
+    pool = _pool(db, num_games_per_week=1, target_nfl=0, target_ncaaf=1, sports=["ncaaf"])
+    week = _week_row(db, pool)
+    week.status = "open"
+    db.add(
+        Game(
+            week_id=week.id,
+            league="ncaaf",
+            espn_event_id="evt1",
+            start_time=dt.datetime(2026, 9, 12, 17, 0, tzinfo=UTC),
+            home_team="Duke",
+            away_team="Wake Forest",
+            home_abbr="DUKE",
+            away_abbr="WAKE",
+            canonical_home_key=canonical_key("Duke", "ncaaf"),
+            canonical_away_key=canonical_key("Wake Forest", "ncaaf"),
+            in_slate=True,
+            slate_rank=1,
+        )
+    )
+    db.flush()
+
+    findings = ingest.published_slate_drift_report(db, pool)
+
+    assert len(findings) == 1
+    assert findings[0].has_history is False
+    assert findings[0].drifted is False
+
+
+def test_published_slate_drift_report_detects_real_drift(db, monkeypatch):
+    pool = _pool(db, num_games_per_week=1, target_nfl=0, target_ncaaf=1, sports=["ncaaf"])
+    week = _week_row(db, pool)
+    first = _rivalry_game("evt-first", "Duke", "Wake Forest")
+    monkeypatch.setattr(ingest, "fetch_candidates", lambda db, pool, week, **kwargs: ([first], []))
+    ingest.build_slate(db, pool, pool.season_year, week.week_number, allow_metered=False)
+    second = _rivalry_game("evt-second", "Ohio State", "Michigan")
+    monkeypatch.setattr(ingest, "fetch_candidates", lambda db, pool, week, **kwargs: ([second], []))
+    ingest.build_slate(db, pool, pool.season_year, week.week_number, allow_metered=False)
+    week.status = "open"
+    db.flush()
+
+    findings = ingest.published_slate_drift_report(db, pool)
+
+    assert len(findings) == 1
+    assert findings[0].has_history is True
+    assert findings[0].drifted is True
+    assert "evt-second" in findings[0].detail
+    assert "evt-first" in findings[0].detail
 
 
 # Phase 6 remediation: idempotency guard and hard timeout ---------------------
@@ -1233,3 +1572,144 @@ def test_the_build_fetch_score_pipeline_is_idempotent_across_three_runs(db, load
     # Run 2 to run 3, against unchanged upstream data, is a true no-op.
     assert games_3 == games_2
     assert entries_3 == entries_2
+
+
+# Phase 4, slate drift incident: midweek kickoff warnings and lock policy --------------------
+
+
+def _slate_game(db, week, event_id, *, weekday_offset, **overrides):
+    """A slate game kicking off at 2026-09-{14+weekday_offset} 20:00 UTC. September 12, 2026
+    is a Saturday, so offset 0 is Saturday, 1 Sunday, 2 Monday, and so on, matching this
+    module's own week1_anchor_date convention."""
+    base = dt.datetime(2026, 9, 12, 20, 0, tzinfo=UTC) + dt.timedelta(days=weekday_offset)
+    defaults = {
+        "week_id": week.id,
+        "league": "nfl",
+        "espn_event_id": event_id,
+        "start_time": base,
+        "home_team": "Home",
+        "away_team": "Away",
+        "home_abbr": "HOM",
+        "away_abbr": "AWY",
+        "canonical_home_key": f"nfl:home-{event_id}",
+        "canonical_away_key": f"nfl:away-{event_id}",
+        "spread_home": 1.0,
+        "closeness": 1.0,
+        "in_slate": True,
+        "slate_rank": 1,
+        "status": "scheduled",
+    }
+    defaults.update(overrides)
+    game = Game(**defaults)
+    db.add(game)
+    db.flush()
+    return game
+
+
+def test_midweek_games_finds_monday_through_friday_kickoffs_only(db):
+    pool = _pool(db, timezone="America/New_York")
+    week = _week_row(db, pool)
+    saturday = _slate_game(db, week, "sat", weekday_offset=0, slate_rank=1)
+    sunday = _slate_game(db, week, "sun", weekday_offset=1, slate_rank=2)
+    _slate_game(db, week, "wed", weekday_offset=4, slate_rank=3)
+
+    found = ingest.midweek_games(db, week)
+
+    assert [g.espn_event_id for g in found] == ["wed"]
+    assert saturday.espn_event_id not in [g.espn_event_id for g in found]
+    assert sunday.espn_event_id not in [g.espn_event_id for g in found]
+
+
+def test_midweek_games_excludes_a_voided_game(db):
+    pool = _pool(db, timezone="America/New_York")
+    week = _week_row(db, pool)
+    _slate_game(db, week, "wed", weekday_offset=4, status="void")
+
+    assert ingest.midweek_games(db, week) == []
+
+
+def test_midweek_warning_text_names_the_games_and_the_lock_time(db):
+    pool = _pool(db, timezone="America/New_York")
+    week = _week_row(db, pool)
+    game = _slate_game(db, week, "wed", weekday_offset=4)
+    week.lock_at = game.start_time
+
+    text = ingest.midweek_warning_text(week, [game])
+
+    assert "AWY at HOM" in text
+    assert "1 game kicks off before Saturday" in text
+
+
+def test_recompute_lock_first_kickoff_policy_is_unchanged_default(db):
+    """The default policy: earliest kickoff wins, whatever day it falls on, exactly the
+    pre-Phase-4 behavior."""
+    pool = _pool(db, lock_policy="first_kickoff")
+    week = _week_row(db, pool)
+    wednesday = _slate_game(db, week, "wed", weekday_offset=4, slate_rank=1)
+    _slate_game(db, week, "sat", weekday_offset=7, slate_rank=2)
+
+    ingest.recompute_lock(db, week)
+
+    assert week.lock_at == wednesday.start_time
+
+
+def test_recompute_lock_first_saturday_kickoff_policy_skips_midweek_games(db):
+    pool = _pool(db, lock_policy="first_saturday_kickoff", timezone="America/New_York")
+    week = _week_row(db, pool)
+    wednesday = _slate_game(db, week, "wed", weekday_offset=4, slate_rank=1)
+    saturday = _slate_game(db, week, "sat", weekday_offset=7, slate_rank=2)  # next Saturday
+
+    ingest.recompute_lock(db, week)
+
+    assert week.lock_at == saturday.start_time
+    assert week.lock_at != wednesday.start_time
+
+
+def test_recompute_lock_first_saturday_kickoff_falls_back_when_no_saturday_game(db):
+    """A slate with nothing on a Saturday still needs a real lock time, so this policy falls
+    back to the ordinary first-kickoff rule rather than leaving lock_at unset."""
+    pool = _pool(db, lock_policy="first_saturday_kickoff", timezone="America/New_York")
+    week = _week_row(db, pool)
+    wednesday = _slate_game(db, week, "wed", weekday_offset=4, slate_rank=1)
+
+    ingest.recompute_lock(db, week)
+
+    assert week.lock_at == wednesday.start_time
+
+
+def test_recompute_lock_manual_policy_never_computes_from_kickoffs(db):
+    pool = _pool(db, lock_policy="manual")
+    week = _week_row(db, pool)
+    _slate_game(db, week, "sat", weekday_offset=0, slate_rank=1)
+    assert week.lock_at is None
+
+    ingest.recompute_lock(db, week)
+
+    assert week.lock_at is None
+
+
+def test_acknowledge_midweek_records_the_acknowledgement(db):
+    pool = _pool(db)
+    week = _week_row(db, pool)
+    boss = User(email="boss@example.com", password_hash="x", display_name="Boss")
+    db.add(boss)
+    db.flush()
+
+    ingest.acknowledge_midweek(db, week, boss.id, "some warning text")
+
+    assert week.midweek_ack_at is not None
+    assert week.midweek_ack_by_user_id == boss.id
+    assert week.midweek_ack_note == "some warning text"
+
+
+def test_adding_a_game_clears_a_stale_midweek_acknowledgement(db):
+    pool = _pool(db, num_games_per_week=2, target_nfl=2, target_ncaaf=0, sports=["nfl"])
+    week = _week_row(db, pool)
+    _picked_game(db, week)
+    candidate = _candidate_game(db, week, "evtB")
+    ingest.acknowledge_midweek(db, week, None, "stale")
+
+    ingest.add_to_slate(db, week, candidate.id)
+
+    assert week.midweek_ack_at is None
+    assert week.midweek_ack_note is None

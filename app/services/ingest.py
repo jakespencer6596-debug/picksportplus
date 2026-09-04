@@ -28,14 +28,25 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.config import settings
-from app.models import Game, Pick, Pool, PoolMember, User, Week, utcnow
+from app.models import (
+    Game,
+    Pick,
+    PickArchive,
+    Pool,
+    PoolMember,
+    SlateChange,
+    User,
+    Week,
+    WeekEntry,
+    utcnow,
+)
 from app.providers import cfbd, espn, odds_api
 from app.providers.http import BudgetExceeded, ProviderError, get_platform_settings
 from app.providers.teams import match_by_teams_and_date
 from app.services import calendar as calendar_svc
 from app.services import mail
 from app.slate import Candidate, compute_lock_at, select_slate_by_targets
-from app.templating import fmt_kickoff_long
+from app.templating import fmt_kickoff_long, get_zone
 
 log = logging.getLogger("picksportplus.ingest")
 
@@ -252,6 +263,54 @@ TEST_WEEK_NUMBER = 0
 
 def week_has_picks(db: Session, week: Week) -> bool:
     return bool(db.scalar(select(func.count(Pick.id)).where(Pick.week_id == week.id)))
+
+
+# Audit trail (Phase 1 remediation, slate drift incident, see INCIDENT-REPORT.md) -----------
+#
+# "Since people have locked already, I am unable to remove games... it's pulling in Wednesday
+# and Thursday NFL games along with all these blowout college games." A commissioner needs to
+# be able to see for himself whether the app touched his slate, not take it on faith, so every
+# mutation to a week's game set writes one of these rows. Written from inside this module,
+# never reconstructed from game rows after the fact, and never from app.routers.admin directly:
+# the router passes actor_user_id/source through, this module is the one place that actually
+# knows what changed.
+
+
+def _record_slate_change(
+    db: Session,
+    week: Week,
+    *,
+    action: str,
+    game_id: int | None,
+    before: dict | None,
+    after: dict | None,
+    actor_user_id: int | None,
+    source: str,
+) -> SlateChange:
+    row = SlateChange(
+        week_id=week.id,
+        game_id=game_id,
+        action=action,
+        actor_user_id=actor_user_id,
+        source=source,
+        before=before,
+        after=after,
+    )
+    db.add(row)
+    db.flush()
+    return row
+
+
+def _game_snapshot(game: Game) -> dict:
+    """The handful of fields worth showing on a change history row, never a full ORM dump."""
+    return {
+        "matchup": f"{game.away_abbr} at {game.home_abbr}",
+        "league": game.league,
+        "start_time": game.start_time.isoformat() if game.start_time else None,
+        "spread_home": game.spread_home,
+        "pinned": game.pinned,
+        "status": game.status,
+    }
 
 
 # Candidates -----------------------------------------------------------------
@@ -812,6 +871,44 @@ def slate_span(db: Session, week: Week) -> tuple[int, dt.datetime, dt.datetime] 
     return (latest - earliest).days, earliest, latest
 
 
+# Midweek kickoff warnings (Phase 4, slate drift incident) -----------------------------------
+#
+# "Midweek games pulled the lock time to Wednesday morning, which is unacceptable because it
+# silently moved his deadline." Midweek games stay eligible for the slate, closest games first
+# exactly as before; what changes is that a commissioner can no longer publish one without
+# seeing, and deliberately acknowledging, exactly which games and what lock time it produces.
+
+
+def midweek_games(db: Session, week: Week) -> list[Game]:
+    """Every live slate game (not void) that kicks off Monday through Friday, in the pool's
+    own timezone, earliest first. Weekday 0-4 is Monday-Friday; Saturday (5) and Sunday (6)
+    are never midweek. An empty list means nothing to warn about."""
+    tz = get_zone(week.pool.timezone) if week.pool is not None else dt.UTC
+    games = list(
+        db.scalars(
+            select(Game).where(
+                Game.week_id == week.id, Game.in_slate.is_(True), Game.status != "void"
+            )
+        )
+    )
+    midweek = [g for g in games if _aware(g.start_time).astimezone(tz).weekday() < 5]
+    midweek.sort(key=lambda g: _aware(g.start_time))
+    return midweek
+
+
+def midweek_warning_text(week: Week, games: list[Game]) -> str:
+    """The exact sentence the commissioner sees, naming the games, their kickoff times, and
+    the resulting lock time (SPEC Phase 4's own worked example)."""
+    tz = week.pool.timezone if week.pool is not None else "UTC"
+    names = "; ".join(
+        f"{g.away_abbr} at {g.home_abbr}, {fmt_kickoff_long(g.start_time, tz)}" for g in games
+    )
+    lock_text = fmt_kickoff_long(week.lock_at, tz) if week.lock_at else "at the earliest kickoff"
+    count = len(games)
+    noun = "game kicks" if count == 1 else "games kick"
+    return f"Picks will lock {lock_text} because of {names}. {count} {noun} off before " "Saturday."
+
+
 def _span_too_wide_message(
     week: Week, span_days: int, earliest: dt.datetime, latest: dt.datetime
 ) -> str:
@@ -834,7 +931,17 @@ def _span_too_wide_message(
 
 
 def recompute_lock(db: Session, week: Week) -> None:
-    """Lock at the earliest kickoff on the slate, unless the commissioner pinned a time."""
+    """Lock at the earliest kickoff on the slate, unless the commissioner pinned a time, or
+    the pool's Pool.lock_policy (Phase 4, slate drift incident) says otherwise.
+
+    "first_kickoff" (default): unchanged, the earliest kickoff on the slate, whatever day it
+    falls on. "first_saturday_kickoff": the earliest kickoff that falls on a Saturday in the
+    pool's own timezone, so a Wednesday or Thursday game no longer pulls the whole pool's
+    deadline earlier; falls back to the ordinary first-kickoff rule when nothing on the slate
+    is a Saturday game, since a slate cannot lock before its own earliest game exists.
+    "manual": never computed from kickoffs at all, left exactly as it is for the commissioner
+    to set by hand from the slate editor.
+    """
     if week.lock_at_override:
         return
     db.flush()  # autoflush is off, so read back only what is already written
@@ -846,6 +953,14 @@ def recompute_lock(db: Session, week: Week) -> None:
             )
         )
     ]
+    policy = week.pool.lock_policy if week.pool is not None else "first_kickoff"
+    if policy == "manual":
+        return
+    if policy == "first_saturday_kickoff" and kickoffs:
+        tz = get_zone(week.pool.timezone) if week.pool is not None else dt.UTC
+        saturday_kickoffs = [k for k in kickoffs if k.astimezone(tz).weekday() == 5]
+        if saturday_kickoffs:
+            kickoffs = saturday_kickoffs
     week.lock_at = compute_lock_at(kickoffs)
     db.flush()
 
@@ -866,6 +981,172 @@ def reseat_ranks(db: Session, week: Week) -> None:
     db.flush()
 
 
+# Backfill drift detection (Phase 1 remediation, slate drift incident) ------------------------
+#
+# "Add a doctor check that reports, for every published week in the current season, whether
+# its game set differs from the earliest recorded state." The audit trail (SlateChange) only
+# exists from this fix forward, so "earliest recorded state" means the earliest "rebuilt"
+# SlateChange row's own "before" snapshot when one exists, the only action whose before/after
+# carries the whole selected set rather than a single game, never a guess about what happened
+# before this deploy. A week with no such row is reported honestly as unknown, not as clean,
+# since the whole point of this incident is that a slate could drift silently with no record.
+
+
+@dataclass
+class SlateDriftFinding:
+    week_number: int
+    status: str
+    has_history: bool
+    drifted: bool
+    detail: str
+
+
+def published_slate_drift_report(db: Session, pool: Pool) -> list[SlateDriftFinding]:
+    weeks = list(
+        db.scalars(
+            select(Week)
+            .where(
+                Week.pool_id == pool.id,
+                Week.season_year == pool.season_year,
+                Week.status != "draft",
+                Week.is_test_week.is_(False),
+            )
+            .order_by(Week.week_number)
+        )
+    )
+    findings: list[SlateDriftFinding] = []
+    for week in weeks:
+        earliest = db.scalar(
+            select(SlateChange)
+            .where(SlateChange.week_id == week.id, SlateChange.action == "rebuilt")
+            .order_by(SlateChange.created_at.asc(), SlateChange.id.asc())
+        )
+        current = sorted(
+            g.espn_event_id
+            for g in db.scalars(
+                select(Game).where(Game.week_id == week.id, Game.in_slate.is_(True))
+            )
+        )
+        if earliest is None:
+            findings.append(
+                SlateDriftFinding(
+                    week_number=week.week_number,
+                    status=week.status,
+                    has_history=False,
+                    drifted=False,
+                    detail=(
+                        "No slate-change history recorded for this week (predates the audit "
+                        "trail, or has not been touched since publish). Cannot confirm whether "
+                        "it drifted before this fix shipped."
+                    ),
+                )
+            )
+            continue
+
+        before = earliest.before or {}
+        earliest_set = sorted((before.get("selected") or before).keys()) if before else []
+        if earliest_set == current:
+            findings.append(
+                SlateDriftFinding(
+                    week_number=week.week_number,
+                    status=week.status,
+                    has_history=True,
+                    drifted=False,
+                    detail="No drift: the game set matches the earliest recorded state.",
+                )
+            )
+        else:
+            added = sorted(set(current) - set(earliest_set))
+            removed = sorted(set(earliest_set) - set(current))
+            findings.append(
+                SlateDriftFinding(
+                    week_number=week.week_number,
+                    status=week.status,
+                    has_history=True,
+                    drifted=True,
+                    detail=(
+                        f"Drift detected: {len(added)} game(s) added, {len(removed)} removed "
+                        f"since the earliest recorded state (event ids added={added}, "
+                        f"removed={removed})."
+                    ),
+                )
+            )
+    return findings
+
+
+# Change history panel (Phase 1 remediation, slate drift incident) --------------------------
+#
+# "A commissioner must be able to see for himself whether the app touched his slate." Plain
+# sentences, not a raw dump of the SlateChange table, in the exact voice the incident report's
+# own example uses: "Cron replaced Michigan at Ohio State with Duke at Wake Forest, 3:14 AM."
+
+
+def _change_actor_label(db: Session, change: SlateChange) -> str:
+    if change.actor_user_id is None:
+        return "Cron"
+    user = db.get(User, change.actor_user_id)
+    return user.display_name if user is not None else "A commissioner"
+
+
+def _change_sentence(db: Session, change: SlateChange) -> str:
+    who = _change_actor_label(db, change)
+    before, after = change.before or {}, change.after or {}
+
+    if change.action == "swapped":
+        out_matchup = (before.get("out") or {}).get("matchup", "a game")
+        in_matchup = (after.get("in") or before.get("in") or {}).get("matchup", "a game")
+        return f"{who} replaced {out_matchup} with {in_matchup}"
+    if change.action == "added":
+        return f"{who} added {after.get('matchup', 'a game')} to the slate"
+    if change.action == "removed":
+        return f"{who} removed {before.get('matchup', 'a game')} from the slate"
+    if change.action == "voided":
+        matchup = after.get("matchup") or before.get("matchup") or "a game"
+        return (
+            f"{who} voided {matchup}"
+            if after.get("status") == "void"
+            else f"{who} restored {matchup} after voiding it"
+        )
+    if change.action == "pinned":
+        matchup = after.get("matchup") or before.get("matchup") or "a game"
+        return f"{who} pinned {matchup}" if after.get("pinned") else f"{who} unpinned {matchup}"
+    if change.action == "line_set":
+        matchup = after.get("matchup") or before.get("matchup") or "a game"
+        line = after.get("spread_home")
+        return (
+            f"{who} set the line for {matchup} to {line:+g} by hand"
+            if line is not None
+            else f"{who} cleared the hand set line for {matchup}"
+        )
+    if change.action == "rebuilt":
+        before_ids = set((before.get("selected") or {}).keys())
+        after_ids = set((after.get("selected") or {}).keys())
+        added = len(after_ids - before_ids)
+        removed = len(before_ids - after_ids)
+        return f"{who} rebuilt the slate: {added} game(s) added, {removed} removed"
+    return f"{who} changed the slate"
+
+
+def slate_change_history(db: Session, week: Week, limit: int = 50) -> list[dict]:
+    """Newest first, plain language, for the slate editor's "Change history" panel."""
+    changes = list(
+        db.scalars(
+            select(SlateChange)
+            .where(SlateChange.week_id == week.id)
+            .order_by(SlateChange.created_at.desc(), SlateChange.id.desc())
+            .limit(limit)
+        )
+    )
+    return [
+        {
+            "created_at": change.created_at,
+            "source": change.source,
+            "text": _change_sentence(db, change),
+        }
+        for change in changes
+    ]
+
+
 # Commissioner slate editing -------------------------------------------------
 
 
@@ -878,7 +1159,14 @@ def can_resize_slate(db: Session, week: Week) -> bool:
     return not week_has_picks(db, week)
 
 
-def add_to_slate(db: Session, week: Week, game_id: int) -> Game:
+def add_to_slate(
+    db: Session,
+    week: Week,
+    game_id: int,
+    *,
+    actor_user_id: int | None = None,
+    source: str = "commissioner",
+) -> Game:
     game = _game_in_week(db, week, game_id)
     if not can_resize_slate(db, week):
         raise SlateLocked(
@@ -888,28 +1176,74 @@ def add_to_slate(db: Session, week: Week, game_id: int) -> Game:
     game.in_slate = True
     reseat_ranks(db, week)
     recompute_lock(db, week)
+    _clear_midweek_ack(week)
+    _record_slate_change(
+        db,
+        week,
+        action="added",
+        game_id=game.id,
+        before=None,
+        after=_game_snapshot(game),
+        actor_user_id=actor_user_id,
+        source=source,
+    )
     return game
 
 
-def remove_from_slate(db: Session, week: Week, game_id: int) -> Game:
+def remove_from_slate(
+    db: Session,
+    week: Week,
+    game_id: int,
+    *,
+    actor_user_id: int | None = None,
+    source: str = "commissioner",
+    bypass_lock: bool = False,
+) -> Game:
+    """bypass_lock (Phase 2, slate drift incident) is only ever True from amend_published_game
+    below, the commissioner's deliberate, explained "amend a single game" tool: the ordinary
+    Remove button on the slate editor still refuses once picks exist (SPEC.md Section 6a),
+    this is the one path that is allowed to override that."""
     game = _game_in_week(db, week, game_id)
-    if not can_resize_slate(db, week):
+    if not bypass_lock and not can_resize_slate(db, week):
         raise SlateLocked(
             "Picks already exist for this week, so the game count is fixed. "
             "Void the game instead."
         )
+    before = _game_snapshot(game)
     game.in_slate = False
     game.slate_rank = None
     reseat_ranks(db, week)
     recompute_lock(db, week)
+    _clear_midweek_ack(week)
+    _record_slate_change(
+        db,
+        week,
+        action="removed",
+        game_id=game.id,
+        before=before,
+        after=None,
+        actor_user_id=actor_user_id,
+        source=source,
+    )
     return game
 
 
 def swap_slate_game(
-    db: Session, week: Week, out_game_id: int, in_game_id: int
+    db: Session,
+    week: Week,
+    out_game_id: int,
+    in_game_id: int,
+    *,
+    actor_user_id: int | None = None,
+    source: str = "commissioner",
+    bypass_lock: bool = False,
 ) -> tuple[Game, Game]:
-    """Take one game off the slate and put another on, keeping the count the same."""
-    if not can_resize_slate(db, week):
+    """Take one game off the slate and put another on, keeping the count the same.
+
+    bypass_lock: see remove_from_slate's own docstring, same rule, same one caller
+    (amend_published_game).
+    """
+    if not bypass_lock and not can_resize_slate(db, week):
         raise SlateLocked(
             "Picks already exist for this week, so the slate cannot be changed. "
             "You can still void a game."
@@ -920,17 +1254,39 @@ def swap_slate_game(
         raise ValueError("That game is not on the slate.")
     if in_game.in_slate:
         raise ValueError("That game is already on the slate.")
+    before = {"out": _game_snapshot(out_game), "in": _game_snapshot(in_game)}
     out_game.in_slate = False
     out_game.slate_rank = None
     in_game.in_slate = True
     reseat_ranks(db, week)
     recompute_lock(db, week)
+    _clear_midweek_ack(week)
+    _record_slate_change(
+        db,
+        week,
+        action="swapped",
+        game_id=in_game.id,
+        before=before,
+        after={"out": _game_snapshot(out_game), "in": _game_snapshot(in_game)},
+        actor_user_id=actor_user_id,
+        source=source,
+    )
     return out_game, in_game
 
 
-def set_void(db: Session, week: Week, game_id: int, void: bool) -> Game:
-    """Voiding is always allowed, including after picks exist."""
+def set_void(
+    db: Session,
+    week: Week,
+    game_id: int,
+    void: bool,
+    *,
+    actor_user_id: int | None = None,
+    source: str = "commissioner",
+) -> Game:
+    """Voiding (and un-voiding, Phase 3, slate drift incident) is always allowed, including
+    after picks exist."""
     game = _game_in_week(db, week, game_id)
+    before = _game_snapshot(game)
     if void:
         game.status = "void"
         game.winner = None
@@ -948,11 +1304,29 @@ def set_void(db: Session, week: Week, game_id: int, void: bool) -> Game:
             game.status = "scheduled"
             game.winner = None
     recompute_lock(db, week)
+    _record_slate_change(
+        db,
+        week,
+        action="voided",
+        game_id=game.id,
+        before=before,
+        after=_game_snapshot(game),
+        actor_user_id=actor_user_id,
+        source=source,
+    )
     db.flush()
     return game
 
 
-def set_pinned(db: Session, week: Week, game_id: int, pinned: bool) -> Game:
+def set_pinned(
+    db: Session,
+    week: Week,
+    game_id: int,
+    pinned: bool,
+    *,
+    actor_user_id: int | None = None,
+    source: str = "commissioner",
+) -> Game:
     """Pin or unpin a game. Always allowed, including after picks exist.
 
     A pin never resizes or reorders the current slate by itself, it only changes what the
@@ -962,8 +1336,19 @@ def set_pinned(db: Session, week: Week, game_id: int, pinned: bool) -> Game:
     change slate membership right now, this one only changes a future proposal.
     """
     game = _game_in_week(db, week, game_id)
+    before = _game_snapshot(game)
     game.pinned = pinned
     db.flush()
+    _record_slate_change(
+        db,
+        week,
+        action="pinned",
+        game_id=game.id,
+        before=before,
+        after=_game_snapshot(game),
+        actor_user_id=actor_user_id,
+        source=source,
+    )
     return game
 
 
@@ -999,9 +1384,18 @@ def slate_reason(game: Game, pool: Pool) -> str:
     return f"Closest (spread {game.closeness:.1f}, source {source})"
 
 
-def set_manual_spread(db: Session, week: Week, game_id: int, spread_home: float | None) -> Game:
+def set_manual_spread(
+    db: Session,
+    week: Week,
+    game_id: int,
+    spread_home: float | None,
+    *,
+    actor_user_id: int | None = None,
+    source: str = "commissioner",
+) -> Game:
     """A commissioner line. Marked as manual so no feed overwrites it."""
     game = _game_in_week(db, week, game_id)
+    before = _game_snapshot(game)
     if spread_home is None:
         game.spread_home = None
         game.closeness = None
@@ -1011,7 +1405,27 @@ def set_manual_spread(db: Session, week: Week, game_id: int, spread_home: float 
         game.closeness = abs(float(spread_home))
         game.spread_source = "manual"
     db.flush()
+    _record_slate_change(
+        db,
+        week,
+        action="line_set",
+        game_id=game.id,
+        before=before,
+        after=_game_snapshot(game),
+        actor_user_id=actor_user_id,
+        source=source,
+    )
     return game
+
+
+def _clear_midweek_ack(week: Week) -> None:
+    """A commissioner's midweek kickoff acknowledgement (Phase 4) is only ever valid for the
+    exact slate it was given for. Any membership change invalidates it, so publish must ask
+    again rather than let a stale ack from a slate that has since changed wave through one the
+    commissioner never actually saw the warning for."""
+    week.midweek_ack_at = None
+    week.midweek_ack_by_user_id = None
+    week.midweek_ack_note = None
 
 
 def _game_in_week(db: Session, week: Week, game_id: int) -> Game:
@@ -1019,6 +1433,148 @@ def _game_in_week(db: Session, week: Week, game_id: int) -> Game:
     if game is None or game.week_id != week.id:
         raise ValueError("That game is not part of this week.")
     return game
+
+
+# Rebuild and reopen a published week (Phase 2, slate drift incident) ------------------------
+#
+# The commissioner's own chosen remedy for Week 1: "It's pulling in Wednesday and Thursday NFL
+# games... Since people have locked already, I am unable to remove games." A clean rebuild
+# with everyone re-picking, but destructive to live player data, so it gets real guardrails: a
+# three-step confirmation in the router/template (app/routers/admin.py), and here, an archive
+# that never silently deletes.
+
+
+@dataclass
+class RebuildResult:
+    picks_archived: int
+    build_report: IngestReport
+
+
+def amend_published_game(
+    db: Session,
+    week: Week,
+    game_id: int,
+    action: str,
+    *,
+    swap_with_id: int | None = None,
+    actor_user_id: int | None = None,
+) -> tuple[Game, int]:
+    """The narrower tool a full rebuild should not have to be the only option for: swap or
+    remove ONE game on a slate that already has picks, which the ordinary Remove/Swap buttons
+    on the slate editor refuse outright (SPEC.md Section 6a, can_resize_slate). Reuses
+    remove_from_slate/swap_slate_game with bypass_lock=True, so the audit trail, lock recompute
+    and midweek-ack clearing all stay identical to an ordinary edit; the only thing different
+    is that the lock is bypassed. A pick on the removed game is not deleted and not specially
+    marked: app.scoring.score_week already ignores a pick whose game_id has left the slate
+    ("the game left the slate"), which is exactly the described effect, scores zero and drops
+    out of that player's own possible count, every other pick of theirs untouched. Returns the
+    affected game and how many picks were on it (before the change), purely for the
+    commissioner-facing flash message.
+    """
+    game = _game_in_week(db, week, game_id)
+    affected = int(db.scalar(select(func.count(Pick.id)).where(Pick.game_id == game.id)) or 0)
+    if action == "remove":
+        remove_from_slate(
+            db, week, game_id, actor_user_id=actor_user_id, source="commissioner", bypass_lock=True
+        )
+    elif action == "swap":
+        if swap_with_id is None:
+            raise ValueError("Choose a game to swap in.")
+        swap_slate_game(
+            db,
+            week,
+            game_id,
+            swap_with_id,
+            actor_user_id=actor_user_id,
+            source="commissioner",
+            bypass_lock=True,
+        )
+    else:
+        raise ValueError("Unknown amend action.")
+    return game, affected
+
+
+def rebuild_and_reopen_week(
+    db: Session,
+    pool: Pool,
+    week: Week,
+    *,
+    actor_user_id: int,
+) -> RebuildResult:
+    """Archive every pick, delete the live picks and week entries, rebuild the slate from
+    current data, and return the week to draft for the commissioner to review before
+    republishing (never auto-published, see app/routers/admin.py). Safe to call on a week with
+    zero picks: the archive loop is simply empty and Week.rebuilt_at is left untouched, since
+    there is nothing for a player to be notified about and no "your picks were cleared" banner
+    to show when nobody had picked yet.
+    """
+    picks = list(db.scalars(select(Pick).where(Pick.week_id == week.id)))
+    archived = 0
+    for pick in picks:
+        db.add(
+            PickArchive(
+                week_id=week.id,
+                user_id=pick.user_id,
+                game_id=pick.game_id,
+                picked_team=pick.picked_team,
+                confidence=pick.confidence,
+                original_submitted_at=pick.created_at,
+                reason="rebuild",
+            )
+        )
+        archived += 1
+    db.flush()
+    for pick in picks:
+        db.delete(pick)
+    for entry in db.scalars(select(WeekEntry).where(WeekEntry.week_id == week.id)):
+        db.delete(entry)
+    db.flush()
+
+    week.status = "draft"
+    if archived:
+        week.rebuilt_at = utcnow()
+    db.flush()
+
+    build_report = build_slate(
+        db,
+        pool,
+        pool.season_year,
+        week.week_number,
+        publish=False,
+        actor_user_id=actor_user_id,
+        source="commissioner",
+    )
+
+    # A deliberate, explicit audit row for the rebuild action itself (in addition to whatever
+    # build_slate's own selection-diff logic above may have already written): the action of
+    # archiving picks and resetting the week to draft is significant on its own, even in the
+    # rare case the fresh candidate pool happens to select the exact same games again.
+    _record_slate_change(
+        db,
+        week,
+        action="rebuilt",
+        game_id=None,
+        before={"picks_archived": archived},
+        after={"games_selected": build_report.selected},
+        actor_user_id=actor_user_id,
+        source="commissioner",
+    )
+    return RebuildResult(picks_archived=archived, build_report=build_report)
+
+
+def player_needs_repick_after_rebuild(db: Session, week: Week, user_id: int) -> bool:
+    """True when this player should see the "your picks were cleared" banner on /picks
+    (Phase 2): the week carries a rebuild timestamp and this player has not yet submitted a
+    fresh pick since. Once they save any pick, this naturally goes False again without needing
+    to explicitly clear Week.rebuilt_at anywhere, which stays as a permanent, honest record
+    that the week was rebuilt at least once."""
+    if week.rebuilt_at is None:
+        return False
+    return not bool(
+        db.scalar(
+            select(func.count(Pick.id)).where(Pick.week_id == week.id, Pick.user_id == user_id)
+        )
+    )
 
 
 def _aware(value: dt.datetime) -> dt.datetime:
@@ -1041,6 +1597,8 @@ def build_slate(
     now: dt.datetime | None = None,
     is_test_week: bool = False,
     time_budget_seconds: float | None = None,
+    actor_user_id: int | None = None,
+    source: str = "cron",
 ) -> IngestReport:
     """Build or rebuild one week. Idempotent and safe to re-run.
 
@@ -1048,9 +1606,15 @@ def build_slate(
     level owns only the two things a caller cannot opt out of, the concurrent-build guard
     (slate_build_guard, raises BuildInProgress rather than letting a second build for the same
     pool week run alongside the first) and a wall-clock duration log line, so every real code
-    path (a normal build, the picks-already-exist early return, the dead-end early return) is
-    timed and guarded identically without duplicating that logic at each return point inside
-    the implementation. See _build_slate_impl's own docstring for what the parameters mean.
+    path (a normal build, the frozen-week early return, the dead-end early return) is timed
+    and guarded identically without duplicating that logic at each return point inside the
+    implementation. See _build_slate_impl's own docstring for what the parameters mean.
+
+    actor_user_id/source (Phase 1 remediation, slate drift incident) identify who asked for
+    this build, for the SlateChange audit trail a real selection change writes. Defaults match
+    the unattended cron path (app/cli.py's run-cron, this function's own most frequent caller);
+    app/routers/admin.py's build and test-week routes pass the signed in commissioner through
+    instead.
     """
     started = time.monotonic()
     with slate_build_guard(pool.id, week_number):
@@ -1064,6 +1628,8 @@ def build_slate(
             now=now,
             is_test_week=is_test_week,
             time_budget_seconds=time_budget_seconds,
+            actor_user_id=actor_user_id,
+            source=source,
         )
     elapsed = time.monotonic() - started
     log.info(
@@ -1074,6 +1640,48 @@ def build_slate(
         report.selected,
     )
     return report
+
+
+def _refresh_frozen_week(
+    db: Session,
+    pool: Pool,
+    week: Week,
+    report: IngestReport,
+    *,
+    allow_metered: bool = True,
+    deadline: _Deadline | None = None,
+) -> None:
+    """A published (or later) week's selection is frozen (Phase 1 remediation, slate drift
+    incident: see INCIDENT-REPORT.md). This is the one function that ever touches a frozen
+    week's Game rows, and it deliberately never calls apply_slate: status, scores and (via a
+    real resolve_spreads pass, not just whatever was already stored) display-only spread lines
+    still refresh every pass, but which games are on the slate, their order, their rank and the
+    lock time never move again once week.status leaves "draft". Called from two independent
+    places (_build_slate_impl's own status check, and sync_week's defense-in-depth check
+    before it ever calls build_slate at all), on purpose: a future bug in either caller's own
+    guard still leaves the other one standing between a cron pass and a published slate.
+    """
+    report.locked_out = True
+    report.warnings.append(
+        f"Week {week.week_number} is already {week.status}, so its game selection was left "
+        'alone. Scores, status and lines still refreshed. Use "Rebuild this week and reopen '
+        'picks" or amend a single game if the slate itself needs to change.'
+    )
+    games, _attempts = fetch_candidates(db, pool, week, deadline=deadline)
+    report.candidates = len(games)
+    if games:
+        effective_allow_metered = allow_metered and not get_platform_settings(db).espn_only
+        spreads, warnings = resolve_spreads(
+            db, week, games, allow_metered=effective_allow_metered, deadline=deadline
+        )
+        report.warnings.extend(warnings)
+        upsert_games(db, week, games, spreads, pool)
+    report.selected = int(
+        db.scalar(
+            select(func.count(Game.id)).where(Game.week_id == week.id, Game.in_slate.is_(True))
+        )
+        or 0
+    )
 
 
 def _build_slate_impl(
@@ -1087,6 +1695,8 @@ def _build_slate_impl(
     now: dt.datetime | None = None,
     is_test_week: bool = False,
     time_budget_seconds: float | None = None,
+    actor_user_id: int | None = None,
+    source: str = "cron",
 ) -> IngestReport:
     """The real build, run inside build_slate's guard and timing wrapper above.
 
@@ -1144,27 +1754,19 @@ def _build_slate_impl(
 
         week = ensure_week(db, pool, year, week_number)
 
-    # Once picks exist the slate is settled. Scores still refresh, the selection does not move.
-    if week_has_picks(db, week):
-        report.locked_out = True
-        report.warnings.append(
-            "Picks have already been made for this week, so the slate was left alone. "
-            "You can still void a game."
-        )
-        games, _attempts = fetch_candidates(db, pool, week, deadline=deadline)
-        existing_spreads = {
-            g.espn_event_id: (g.spread_home, g.spread_source or "espn")
-            for g in db.scalars(select(Game).where(Game.week_id == week.id))
-            if g.spread_home is not None
-        }
-        upsert_games(db, week, games, existing_spreads, pool)
-        report.candidates = len(games)
-        report.selected = int(
-            db.scalar(
-                select(func.count(Game.id)).where(Game.week_id == week.id, Game.in_slate.is_(True))
-            )
-            or 0
-        )
+    # A published slate is a promise to the league (Phase 1 remediation, slate drift incident:
+    # see INCIDENT-REPORT.md for the full post-mortem). The freeze trigger is week.status, NOT
+    # week_has_picks any more: the old trigger froze on first pick, which left the selection
+    # itself free to keep moving between publish and that first pick, exactly the window in
+    # which the reported slate silently changed as betting lines moved hour to hour. A
+    # commissioner never sees a moving slate again once he has published it, whether or not a
+    # single player has picked yet. Game status, scores and (below) display-only spread lines
+    # still refresh every cron pass; only the selection, order, rank and lock time are frozen.
+    # can_resize_slate (which gates the commissioner's own manual add/remove/swap buttons) is a
+    # separate, still-picks-based rule (SPEC.md Section 6a: "Once any pick exists... only
+    # voiding remains"), deliberately untouched by this fix.
+    if week.status != "draft":
+        _refresh_frozen_week(db, pool, week, report, allow_metered=allow_metered, deadline=deadline)
         return report
 
     games, attempts = fetch_candidates(db, pool, week, deadline=deadline)
@@ -1190,8 +1792,35 @@ def _build_slate_impl(
         report.sources[source] = report.sources.get(source, 0) + 1
 
     upsert_games(db, week, games, spreads, pool)
+    before_selection = {
+        g.espn_event_id: _game_snapshot(g)
+        for g in db.scalars(select(Game).where(Game.week_id == week.id, Game.in_slate.is_(True)))
+    }
     result = apply_slate(db, pool, week, now=now)
     report.selected = len(result.selected)
+    if before_selection:
+        # Only when there was a real prior selection to compare against: the very first build
+        # of a brand new week has nothing to have "changed" from (Phase 1, slate drift
+        # incident). A draft week's own rebuild reselecting games is normal, expected behavior
+        # right up until publish, but it is still a real mutation to the week's game set, so it
+        # still gets its own audit row, exactly like every other action in this module.
+        after_selection = {
+            g.espn_event_id: _game_snapshot(g)
+            for g in db.scalars(
+                select(Game).where(Game.week_id == week.id, Game.in_slate.is_(True))
+            )
+        }
+        if before_selection != after_selection:
+            _record_slate_change(
+                db,
+                week,
+                action="rebuilt",
+                game_id=None,
+                before={"selected": before_selection},
+                after={"selected": after_selection},
+                actor_user_id=actor_user_id,
+                source=source,
+            )
     # Of the games actually selected, how many still have no spread (Phase 6 remediation): the
     # "Week N built" flash names this so a commissioner does not have to open the slate editor
     # to see whether anything needs a line set by hand. Selected (app/slate.py) carries
@@ -1208,6 +1837,15 @@ def _build_slate_impl(
 
     should_publish = pool.auto_publish if publish is None else publish
     if should_publish and report.selected > 0 and week.status == "draft":
+        # A commissioner who has opted into auto_publish has already chosen "no human in the
+        # loop"; blocking that on an unacknowledged midweek warning would defeat the feature
+        # they explicitly turned on. It still publishes, but the warning is surfaced here so
+        # it reaches the same flash/log the rest of a build's warnings do (Phase 4, slate
+        # drift incident). A manual "Publish this week" click still gets the real, blocking
+        # acknowledgement gate; see app/routers/admin.py's slate_publish.
+        midweek = midweek_games(db, week)
+        if midweek:
+            report.warnings.append(midweek_warning_text(week, midweek))
         try:
             report.warnings.extend(publish_week(db, week))
             report.published = True
@@ -1267,6 +1905,69 @@ def _notify_week_published(db: Session, week: Week) -> list[str]:
     return warnings
 
 
+def _notify_rebuilt_week_republished(db: Session, week: Week) -> list[str]:
+    """The email Phase 2's "rebuild and reopen" tool promises every member, unconditionally,
+    never gated on Pool.notify_week_published the way an ordinary publish is: a player whose
+    picks were just deleted out from under them needs to hear about it regardless of whether
+    the commissioner has opted into the routine "week is open" notice. On any send failure
+    this returns a final, clearly marked warning carrying the whole subject and body so the
+    commissioner has real copyable text to send by hand, never a silent gap (see
+    INCIDENT-REPORT.md: a silent failure mode is exactly what caused the original incident).
+    """
+    pool = week.pool
+    rows = db.execute(
+        select(PoolMember, User)
+        .join(User, User.id == PoolMember.user_id)
+        .where(PoolMember.pool_id == pool.id, User.is_active.is_(True))
+    ).all()
+    if not rows:
+        return []
+
+    lock_text = fmt_kickoff_long(week.lock_at, pool.timezone) if week.lock_at else "soon"
+    subject = f"Updated: the Week {week.week_number} slate changed, {pool.name}"
+    body = (
+        "Hey,\n\n"
+        f"The Week {week.week_number} slate for {pool.name} was amended and your previous "
+        f"picks for it were cleared. Submit new picks before the new lock time.\n\n"
+        f"Picks lock {lock_text}.\n\n"
+        f"{settings.base_url}/picks"
+    )
+    warnings: list[str] = []
+    any_failed = False
+    for _member, player in rows:
+        try:
+            mail.send(
+                db,
+                to=player.email,
+                subject=subject,
+                html=mail.text_to_html(body),
+                text=body,
+                kind="week_rebuilt",
+                actor_key=f"user:{player.id}",
+            )
+        except mail.MailError as exc:
+            any_failed = True
+            warnings.append(f"Could not email {player.email} about week {week.week_number}: {exc}")
+    if any_failed:
+        warnings.append(
+            "Mail did not reach everyone. Copy this message and send it yourself:\n\n"
+            f"Subject: {subject}\n\n{body}"
+        )
+    return warnings
+
+
+def acknowledge_midweek(db: Session, week: Week, actor_user_id: int | None, note: str) -> None:
+    """Records the commissioner's deliberate acknowledgement of a midweek kickoff warning
+    (Phase 4) for the EXACT slate currently on the week. Cleared automatically the moment
+    slate membership changes again (_clear_midweek_ack, called by every add/remove/swap/
+    rebuild), so a stale acknowledgement of an earlier slate can never wave through a publish
+    of a slate the commissioner never actually saw the warning for."""
+    week.midweek_ack_at = utcnow()
+    week.midweek_ack_by_user_id = actor_user_id
+    week.midweek_ack_note = note
+    db.flush()
+
+
 def publish_week(db: Session, week: Week) -> list[str]:
     span = slate_span(db, week)
     if span is not None:
@@ -1276,6 +1977,13 @@ def publish_week(db: Session, week: Week) -> list[str]:
     week.status = "open"
     week.published_at = utcnow()
     db.flush()
+    # A week carrying Week.rebuilt_at (Phase 2, slate drift incident) is being republished
+    # after a "rebuild and reopen" that actually archived picks: every member gets the amended-
+    # slate notice instead of, never in addition to, the routine opt-in week-published one,
+    # since the two would otherwise double up the moment a rebuilt pool also has
+    # notify_week_published on.
+    if week.rebuilt_at is not None:
+        return _notify_rebuilt_week_republished(db, week)
     return _notify_week_published(db, week)
 
 
@@ -1345,6 +2053,16 @@ def sync_week(
 
     Only builds when the week is close enough to matter, so an idle hourly cron in July
     does no work and spends nothing.
+
+    Defense in depth (Phase 1 remediation, slate drift incident, see INCIDENT-REPORT.md): this
+    function checks the target week's own status BEFORE ever calling build_slate, and takes an
+    entirely separate code path (_refresh_frozen_week directly, never build_slate/apply_slate)
+    for a week that is not a draft. build_slate/_build_slate_impl carry the identical guard
+    (this is the cron path that made the original incident possible, so it is deliberately
+    checked twice, in two structurally different places): a future change to one guard cannot
+    silently reopen this exact bug on its own, the other still stands. A week that does not
+    exist yet, or is still a draft, is unaffected and flows through build_slate exactly as
+    before.
     """
     now = now or dt.datetime.now(dt.UTC)
     week_number = detect_week(db, pool, now=now)
@@ -1355,6 +2073,25 @@ def sync_week(
     if pool.current_week != week_number:
         pool.current_week = week_number
         db.flush()
+
+    existing = db.scalar(
+        select(Week).where(
+            Week.pool_id == pool.id,
+            Week.season_year == pool.season_year,
+            Week.week_number == week_number,
+        )
+    )
+    if existing is not None and existing.status != "draft":
+        log.info(
+            "sync_week: pool %s week %s is already %s, skipping rebuild (cron never reselects "
+            "a non-draft week), refreshing display data only",
+            pool.id,
+            week_number,
+            existing.status,
+        )
+        report = IngestReport(week_number=week_number, season_year=pool.season_year)
+        _refresh_frozen_week(db, pool, existing, report, allow_metered=allow_metered)
+        return report
 
     report = build_slate(
         db, pool, pool.season_year, week_number, allow_metered=allow_metered, now=now

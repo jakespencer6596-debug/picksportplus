@@ -12,7 +12,7 @@ import re
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import create_engine, select
+from sqlalchemy import create_engine, func, select
 from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
@@ -27,6 +27,7 @@ from app.models import (
     MailLog,
     PasswordResetToken,
     Pick,
+    PickArchive,
     PlatformSetting,
     Pool,
     PoolMember,
@@ -329,6 +330,18 @@ def test_how_it_works_page_renders(client, world):
     assert "Regular Player" in response.text
 
 
+def test_how_it_works_explains_what_voiding_does(client, world):
+    """Phase 3, slate drift incident: "There's an option to void but unsure what the effects
+    are." explained in plain language for players too, not only in the commissioner's own
+    confirmation dialog."""
+    response = client.get("/how-it-works")
+    assert response.status_code == 200
+    text = " ".join(response.text.lower().split())
+    assert "voiding a game scores it zero for everyone" in text
+    assert "drops out of everyone" in text
+    assert "not reassigned" in text
+
+
 def test_contact_page_renders(client, world):
     response = client.get("/contact")
     assert response.status_code == 200
@@ -586,6 +599,282 @@ def test_slate_build_route_no_longer_accepts_publish_or_no_metered(client, world
     response = client.post("/league/slate/build", data={"week_number": 9})
     assert response.status_code == 303
     assert response.headers["location"] == "/league/slate?week=9"
+
+
+def test_slate_rebuild_confirm_page_renders_for_commissioner(client, world):
+    _login(client, "boss@example.com")
+    response = client.get(f"/league/slate/rebuild?week_id={world['week_id']}")
+    assert response.status_code == 200
+    assert "Rebuild" in response.text
+
+
+def test_slate_rebuild_confirm_page_never_renders_the_word_admin_for_a_real_commissioner(
+    client, session_factory
+):
+    """Phase 7 regression sweep item 11, extended to this phase's own new page (SPEC Section
+    10c): a real, non-admin commissioner must never see the word "admin" anywhere."""
+    db = session_factory()
+    pool = Pool(
+        name="Regression Pool",
+        join_code="REGR2025",
+        season_year=2025,
+        num_games_per_week=4,
+        target_nfl=2,
+        target_ncaaf=2,
+        sports=["nfl", "ncaaf"],
+        timezone="America/New_York",
+        current_week=1,
+    )
+    db.add(pool)
+    db.flush()
+    commish = _make_user(db, "commish2@example.com", "League Commissioner")
+    db.add(PoolMember(pool_id=pool.id, user_id=commish.id, role_in_pool="commissioner"))
+    week = _make_week(db, pool)
+    db.commit()
+    week_id = week.id
+    db.close()
+
+    _login(client, "commish2@example.com")
+    response = client.get(f"/league/slate/rebuild?week_id={week_id}")
+    assert response.status_code == 200
+    assert "admin" not in response.text.lower()
+
+
+def test_slate_rebuild_confirm_page_refused_for_a_regular_player(client, world):
+    _login(client, "player@example.com")
+    response = client.get(f"/league/slate/rebuild?week_id={world['week_id']}")
+    assert response.status_code == 403
+
+
+def test_slate_rebuild_post_requires_exact_week_number_confirmation(client, world, session_factory):
+    """Step three of the confirmation (SPEC Phase 2): typing the wrong number changes
+    nothing at all, not even a partial rebuild."""
+    _login(client, "player@example.com")
+    client.post("/picks", data=_valid_submission(world["game_ids"]))
+    _login(client, "boss@example.com")
+
+    response = client.post(
+        "/league/slate/rebuild",
+        data={"week_id": world["week_id"], "confirm_week_number": "999"},
+    )
+    assert response.status_code == 303
+
+    db = session_factory()
+    week = db.get(Week, world["week_id"])
+    assert week.status == "open"  # untouched
+    assert db.scalar(select(func.count(Pick.id)).where(Pick.week_id == week.id)) > 0
+    db.close()
+
+
+def test_slate_rebuild_post_archives_picks_and_returns_week_to_draft(
+    client, world, session_factory
+):
+    db = session_factory()
+    week = db.get(Week, world["week_id"])
+    week_number = week.week_number
+    db.close()
+
+    _login(client, "player@example.com")
+    client.post("/picks", data=_valid_submission(world["game_ids"]))
+    _login(client, "boss@example.com")
+
+    response = client.post(
+        "/league/slate/rebuild",
+        data={"week_id": world["week_id"], "confirm_week_number": str(week_number)},
+    )
+    assert response.status_code == 303
+
+    db = session_factory()
+    week = db.get(Week, world["week_id"])
+    assert week.status == "draft"
+    assert db.scalar(select(func.count(Pick.id)).where(Pick.week_id == week.id)) == 0
+    assert db.scalar(select(func.count(PickArchive.id)).where(PickArchive.week_id == week.id)) > 0
+    db.close()
+
+
+def test_slate_rebuild_post_refused_for_a_regular_player(client, world):
+    _login(client, "player@example.com")
+    response = client.post(
+        "/league/slate/rebuild", data={"week_id": world["week_id"], "confirm_week_number": "5"}
+    )
+    assert response.status_code == 403
+
+
+def test_slate_amend_removes_a_game_even_with_picks_already_locked(client, world, session_factory):
+    """The direct fix for "Since people have locked already, I am unable to remove games.":
+    the ordinary remove button is locked once picks exist, amend still works."""
+    game_id = world["game_ids"][0]
+    _login(client, "player@example.com")
+    client.post("/picks", data=_valid_submission(world["game_ids"]))
+    _login(client, "boss@example.com")
+    response = client.post(
+        "/league/slate/amend",
+        data={"week_id": world["week_id"], "game_id": game_id, "action": "remove"},
+    )
+    assert response.status_code == 303
+
+    db = session_factory()
+    game = db.get(Game, game_id)
+    assert game.in_slate is False
+    db.close()
+
+
+def test_slate_amend_refused_for_a_regular_player(client, world):
+    _login(client, "player@example.com")
+    response = client.post(
+        "/league/slate/amend",
+        data={"week_id": world["week_id"], "game_id": world["game_ids"][0], "action": "remove"},
+    )
+    assert response.status_code == 403
+
+
+def test_slate_editor_void_button_explains_the_consequence_before_it_happens(client, world):
+    """Phase 3, slate drift incident: "There's an option to void but unsure what the effects
+    are." The consequence is spelled out in the confirmation itself (hx-confirm), not assumed
+    knowledge."""
+    _login(client, "boss@example.com")
+    response = client.get(f"/league/slate?week={5}")
+    assert response.status_code == 200
+    assert "scores zero for everyone" in response.text
+    assert "not reassigned" in response.text
+    assert "Restore" in response.text or "hx-confirm" in response.text
+
+
+# Phase 4, slate drift incident: midweek kickoff warnings and lock policy --------------------
+
+
+def _make_midweek_week(session_factory):
+    """A pool with one Wednesday kickoff on its slate, draft status, for the publish-gate
+    tests below. 2026-09-16 is a real Wednesday."""
+    db = session_factory()
+    pool = _make_pool(db)
+    boss = _make_user(db, "boss@example.com", "The Commissioner", role="admin")
+    db.add(PoolMember(pool_id=pool.id, user_id=boss.id, role_in_pool="commissioner"))
+    week = Week(
+        pool_id=pool.id,
+        season_year=pool.season_year,
+        week_number=1,
+        label="Week 1",
+        status="draft",
+    )
+    db.add(week)
+    db.flush()
+    game = Game(
+        week_id=week.id,
+        league="nfl",
+        espn_event_id="wed1",
+        start_time=dt.datetime(2026, 9, 16, 20, 0, tzinfo=UTC),
+        home_team="Home Team",
+        away_team="Away Team",
+        home_abbr="HOM",
+        away_abbr="AWY",
+        canonical_home_key="nfl:home",
+        canonical_away_key="nfl:away",
+        spread_home=1.0,
+        closeness=1.0,
+        in_slate=True,
+        slate_rank=1,
+        status="scheduled",
+    )
+    db.add(game)
+    db.commit()
+    week_id = week.id
+    db.close()
+    return week_id
+
+
+def test_slate_publish_blocked_by_unacknowledged_midweek_game(client, session_factory):
+    week_id = _make_midweek_week(session_factory)
+    _login(client, "boss@example.com")
+
+    response = client.post("/league/slate/publish", data={"week_id": week_id})
+    assert response.status_code == 303
+
+    db = session_factory()
+    week = db.get(Week, week_id)
+    assert week.status == "draft"  # publish was refused
+    db.close()
+
+
+def test_slate_publish_succeeds_once_midweek_ack_checked(client, session_factory):
+    week_id = _make_midweek_week(session_factory)
+    _login(client, "boss@example.com")
+
+    response = client.post("/league/slate/publish", data={"week_id": week_id, "ack_midweek": "1"})
+    assert response.status_code == 303
+
+    db = session_factory()
+    week = db.get(Week, week_id)
+    assert week.status == "open"
+    assert week.midweek_ack_at is not None
+    assert week.midweek_ack_by_user_id is not None
+    db.close()
+
+
+def test_slate_editor_shows_midweek_warning_as_soon_as_selected(client, session_factory):
+    _make_midweek_week(session_factory)
+    _login(client, "boss@example.com")
+
+    response = client.get("/league/slate?week=1")
+
+    assert response.status_code == 200
+    assert "kicks off before Saturday" in response.text
+
+
+def test_slate_editor_collapses_row_actions_into_one_menu(client, world):
+    """Phase 5, slate drift incident: "a single action menu could be cleaner." A native
+    <details> disclosure per row, closed by default, no JavaScript required."""
+    _login(client, "boss@example.com")
+    response = client.get("/league/slate?week=5")
+    assert response.status_code == 200
+    assert "<details><summary>Actions</summary>" in response.text
+
+
+def test_settings_lock_policy_saves(client, world):
+    _login(client, "boss@example.com")
+    response = client.post(
+        "/league/settings",
+        data={
+            "name": "Test Pool",
+            "season_year": 2025,
+            "timezone": "America/New_York",
+            "num_games_per_week": 4,
+            "target_nfl": 2,
+            "target_ncaaf": 2,
+            "picks_required": 4,
+            "scoring_mode": "inverse",
+            "scenarios_min_final_games": 5,
+            "scenarios_min_remaining_games": 1,
+            "sports_nfl": "1",
+            "sports_ncaaf": "1",
+            "lock_policy": "first_saturday_kickoff",
+        },
+    )
+    assert response.status_code == 303
+
+
+def test_settings_unknown_lock_policy_is_rejected(client, world):
+    _login(client, "boss@example.com")
+    response = client.post(
+        "/league/settings",
+        data={
+            "name": "Test Pool",
+            "season_year": 2025,
+            "timezone": "America/New_York",
+            "num_games_per_week": 4,
+            "target_nfl": 2,
+            "target_ncaaf": 2,
+            "picks_required": 4,
+            "scoring_mode": "inverse",
+            "scenarios_min_final_games": 5,
+            "scenarios_min_remaining_games": 1,
+            "sports_nfl": "1",
+            "sports_ncaaf": "1",
+            "lock_policy": "not-a-real-policy",
+        },
+    )
+    assert response.status_code == 303
+    assert response.headers["location"] == "/league/settings"
 
 
 def test_slate_build_route_ignores_publish_and_no_metered_even_if_posted(client, world):
@@ -2396,6 +2685,7 @@ def _make_pool_commissioner_who_is_not_admin(db: Session, pool: Pool) -> User:
         "/league/settings",
         "/league/payouts",
         "/league/payouts/summary",
+        "/league/chat",
         "/results",
         "/standings",
     ],

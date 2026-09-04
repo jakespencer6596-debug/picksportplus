@@ -228,10 +228,46 @@ The tool always proposes a slate. The commissioner can override it, and the comm
 - The commissioner can change the total and the per league counts, remove a proposed game, add any candidate game, and swap one game for another, whether or not that game has a resolved spread yet. An edited slate overrides the proposal.
 - Pinned games. A game can be pinned so it always makes the slate on the next build regardless of how wide its spread runs, because closest-spread selection alone routinely excludes a rivalry game the moment either side is having a lopsided season (Ohio State vs Michigan, Auburn vs Alabama, and similar matchups named below). A pin is set either by hand from the slate editor, or automatically the first time a game matching one of the pool's configured rivalry pairs is created; the commissioner can unpin any single game at any time, and that choice sticks across later rebuilds of the same game. The slate editor shows why each slate game is there: pinned, a rivalry match, or the closest spread. Pinning a game, and editing the rivalry list, are both allowed at any time, including after picks exist: neither resizes or reorders the slate that is already live, they only change what the next rebuild proposes.
 - The commissioner curates the rivalry list from the pool settings page: any matchup, one per line. The seeded default covers the games named by the group running the pool plus the other historically lopsided-but-always-relevant rivalries (Army vs Navy, Michigan vs Michigan State, Florida vs Georgia, Texas vs Oklahoma, USC vs Notre Dame).
-- Voiding a game is always available, including after picks exist.
-- Once any pick exists for a week the game count is fixed for that week and only voiding remains, so scoring stays consistent.
+- **Voiding a game is always available, including after picks exist, and is explained and reversible (slate drift incident, Section 6c).** The void and restore controls state the consequence up front, both directions: a voided game scores zero for everyone regardless of who picked it, drops out of everyone's `possible` count, every other pick a player made is untouched, and the confidence staked on the voided game is never reassigned. Unvoiding restores normal scoring. Both directions write a `SlateChange` audit row (Section 6c).
+- Once any pick exists for a week the game count is fixed for that week for the ordinary Remove/Swap controls and only voiding remains, so scoring stays consistent. See Section 6c for the narrower, explicitly confirmed exception a commissioner can still reach.
 - **Sorting.** Both tables (on the slate, and the candidate pool) sort by kickoff date and time, league, closeness of spread, spread source, and matchup name: click a column heading to sort, click again to reverse, with correct `aria-sort` on the active header. Numeric and datetime columns sort by a raw `data-sort-value`, never the rendered text. Below the medium breakpoint, where there is no header row to click, a `<select>` drives the same sort. The slate editor is the only page with two sortable tables sharing one page; the chosen sort for each is remembered in the browser (`localStorage`, keyed per table) and re-applied automatically after any partial update (pinning a game, adding a candidate, and so on), so a commissioner never has to re-sort mid-edit. See Section 8 for the identical sort on the picks page.
 - **Performance.** The candidate pool pages at a fixed size (`CANDIDATES_PAGE_SIZE`, 20 as of this writing) rather than rendering every candidate at once, with search and "Load more" as HTMX requests. The swap control on each on-slate row is a single shared `<datalist>` covering every real candidate, rendered once for the whole page, not a full option list repeated per row. Every action (pin, unpin, add, remove, swap, void, set a line by hand) is an HTMX partial update: pin/void/spread-setting swap only their own row, add/remove/swap (which change which table a game belongs to) refresh both tables in place. A plain POST with no JavaScript still works identically, just with a full page reload. A rendered slate page for a 20 game, 100 candidate week must stay under 150KB and 60 `<form>` elements; an automated test enforces this budget.
+
+### 6b. The change history panel and drift detection
+
+Every mutation to a week's game set (added, removed, swapped, voided, pinned, a line set by
+hand, or a real rebuild that actually changed the selection) writes a `SlateChange` row: the
+game, the actor (null for the unattended cron path), the source (`cron`, `commissioner`,
+`admin`), and a before/after snapshot of whatever that action changed. The slate editor shows
+these newest first as a plain language "Change history" panel ("Cron rebuilt the slate: 3
+game(s) added, 2 removed" or "A commissioner voided Duke at Wake Forest"), so a commissioner
+never has to take "did the app touch my slate" on faith. `python -m app.cli doctor` reports,
+for every published week in the current season, whether its current game set differs from the
+earliest recorded `SlateChange` snapshot, and says so honestly when no such snapshot exists
+rather than reporting a week clean it has no history for.
+
+### 6c. Rebuilding and amending a published slate (slate drift incident)
+
+A published week's game selection never moves on its own again (Section 7). When it genuinely
+needs to change after publish, two commissioner tools exist, both reachable from
+`/league/slate`:
+
+- **Amend a single game.** Swap or remove ONE game on a slate that already has picks,
+  bypassing the ordinary Remove/Swap lock (Section 6a) for that one action. A pick on the
+  affected game stops counting (scores zero, drops from that player's own `possible`), every
+  other pick, of every player, is untouched. Reachable per row on the slate editor once the
+  ordinary controls are locked.
+- **Rebuild this week and reopen picks.** A full, destructive reset behind a three-step
+  confirmation: what will happen in plain language (naming how many players have already
+  submitted), the current slate about to be archived, and typing the week number to confirm.
+  Every existing pick is copied into `PickArchive` (never silently destroyed) before the live
+  `Pick` and `WeekEntry` rows for the week are deleted; the slate is rebuilt from current data;
+  the week returns to `draft` for the commissioner to review, never auto-published. The moment
+  it is republished, every member gets an email that the slate changed, their previous picks
+  were cleared, and they need to submit again by the new lock time, unconditionally, never
+  gated on `Pool.notify_week_published`; a send failure surfaces a copyable message rather than
+  reporting success. A player returning to `/picks` for a rebuilt week they have not yet
+  re-picked sees a banner explaining what happened.
 
 ## 7. Automation and the weekly lifecycle (set and forget)
 
@@ -242,6 +278,9 @@ The build side of the pool runs itself; publishing the result to players is a de
 - A scheduled job builds the slate for the upcoming week. When `auto_publish` is true it also opens the slate automatically (status open) and sets `lock_at`, no human action required. When `auto_publish` is false (the default) the job stops at a draft, and the week opens only once the commissioner publishes it.
 - **Test weeks.** A commissioner can build a low-stakes "test week" (`Week.is_test_week`, reserved `week_number = 0`) from whatever is live right now, NFL preseason and college week 0 included, so a group can try picks and scoring before the real season starts, without needing a real anchor date to resolve one (preseason resolution is tried ahead of regular/postseason specifically for this path). It scores normally on its own, badged `TEST WEEK` everywhere it appears (slate editor, picks page, results page), but is quarantined from everything that counts toward the real season: excluded from season totals, correct counts and weekly-win counts (`app/services/standings.py`), skipped by the payout-freeze hook, invisible to the scenarios panel, and `/results/custom-scenario` refuses one outright. Building it again refreshes it the same way building a real week does. Deleting it (commissioner only) removes it entirely.
 - The commissioner may still adjust a published slate before `lock_at`, but only non destructive changes once picks exist. Before any picks exist, free edits are allowed. After picks exist, allow voiding a game but not reshuffling the whole slate.
+- **A published slate never moves on its own again (slate drift incident, see INCIDENT-REPORT.md).** The freeze trigger for the automated build path is `Week.status != "draft"`, never `week_has_picks`: a published week with zero picks is just as frozen as one the whole league has already picked. Checked independently in both the slate build itself and in `sync_week` before it ever calls the build (defense in depth). A frozen week still refreshes game status, scores and display-only spread lines on every cron pass; it never touches which games are selected, their order, their rank, or the lock time. This is a different, narrower rule than the picks-based `can_resize_slate` guard above, which still gates only the commissioner's own manual Remove/Swap buttons and is unchanged.
+- **Midweek kickoff warning.** A midweek (Monday through Friday) game stays fully eligible for the slate, closest games first, unchanged. A manual "Publish this week" click is blocked behind a real acknowledgement naming every such game, its kickoff, and the exact lock time it produces, shown on the slate editor as soon as such a game is selected, not only at publish. An `auto_publish` pool still publishes automatically (a human already opted out of the loop), with the same warning surfaced in the build's own report instead of blocking it.
+- **`Pool.lock_policy`** (`first_kickoff` default, unchanged; `first_saturday_kickoff`, so a midweek game locks only itself rather than pulling the whole pool's deadline earlier, falling back to `first_kickoff` when nothing on the slate falls on a Saturday; `manual`, never computed from kickoffs at all) is a commissioner setting on `/league/settings`.
 - `pool.current_week` advances automatically as the calendar moves.
 - A results job runs frequently on game days, pulls finals, and scores idempotently. When every slate game is final, mark the week scored.
 - Net effect: after first time setup, a full season needs zero manual steps. Lock is enforced at request time by comparing now with `lock_at`, so picks stay honest even if a job is delayed.
@@ -546,6 +585,28 @@ All idempotent, all take `--year` and `--week` where relevant, defaulting to the
 ## 12. Data model
 
 See `app/models.py`. Season standings are aggregated from `week_entries` on read.
+
+## 13. League chat and member email export
+
+"A way to collate all emails or create a league chat box, both allow for easier communication
+to true members versus the informational email that gets sent to potential players." A
+simple, scoped message board at `/league/chat`, not real time chat: no websocket, no new
+dependency, server rendered, posted over HTMX, polled on a 30 second interval for new messages
+from other members.
+
+- `LeagueMessage`: pool, author, body (plain text), pinned, created/edited/deleted timestamps.
+  Content is escaped and linkified at render time; no HTML, no markdown, no image upload ever
+  reaches the database or the page.
+- Members post, and edit or delete their own messages. The commissioner can delete any message
+  and pin one to the top, the way a lock time announcement should reach the whole league.
+- Access control: members of that pool only. A non-member gets 403. The site admin can view a
+  league it never joined (view as commissioner), clearly labelled as such, and this labelling
+  never reaches a real commissioner's own screen (Section 10c).
+- Posting is rate limited per member and capped at 2000 characters, enforced server side.
+- A nav badge shows an unread count from the member's own last-viewed timestamp; visiting the
+  page marks it read.
+- The other half of the same request: a copyable, comma separated member email list and a CSV
+  download on `/league/members`, for mailing the league from the commissioner's own client.
 
 ## 17. Testing
 

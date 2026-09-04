@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import datetime as dt
 import hashlib
+import html
+import re
 from pathlib import Path
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -165,6 +167,25 @@ def fmt_money(value: float | int | None) -> str:
     return f"{cents / 100:.2f}"
 
 
+_URL_RE = re.compile(r"(https?://[^\s<]+)")
+
+
+def linkify(body: str) -> str:
+    """Escape first, then turn a bare URL into a real link (Phase 6, league chat: "escape all
+    user content... no HTML, no markdown"). Escaping runs over the WHOLE message before any
+    link tag is introduced, so nothing in the original text, including something that looks
+    like an HTML tag, can ever become a tag or attribute; only a URL this function itself adds
+    is ever live markup. Returns real HTML, meant to be rendered with the `safe` filter right
+    after this one, never re-escaped."""
+    escaped = html.escape(body)
+
+    def _wrap(match: re.Match[str]) -> str:
+        url = match.group(1)
+        return f'<a href="{url}" target="_blank" rel="noopener noreferrer">{url}</a>'
+
+    return _URL_RE.sub(_wrap, escaped)
+
+
 templates.env.filters.update(
     {
         "kickoff": fmt_kickoff,
@@ -177,6 +198,7 @@ templates.env.filters.update(
         "pluralize": pluralize,
         "localtime": to_local,
         "money": fmt_money,
+        "linkify": linkify,
     }
 )
 

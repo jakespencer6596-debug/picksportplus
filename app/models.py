@@ -76,6 +76,37 @@ SEASON_TIEBREAK_MODES = ("wins", "split")
 # divides the combined payout exactly as it always has.
 WEEKLY_TIEBREAK_MODES = ("wins", "split")
 
+# Slate drift incident (see INCIDENT-REPORT.md). What SlateChange.action names: the seven
+# ways a week's game set (or one game in it) can move. "rebuilt" is the only whole-week value,
+# used both for a real selection change (a draft week's own rebuild actually swapping which
+# games are chosen) and for the commissioner's deliberate "rebuild and reopen" tool (Phase 2);
+# the row's source and before/after tell the two apart. Every other value names the one game
+# (SlateChange.game_id) it changed. "voided" and "pinned" each cover BOTH directions of that
+# game's own boolean (void/un-void, pin/unpin): the action names the dimension that changed,
+# before/after carry the actual transition, rather than doubling the enum to "unvoided" and
+# "unpinned" for what is really the same toggle.
+SLATE_CHANGE_ACTIONS = ("added", "removed", "swapped", "voided", "pinned", "line_set", "rebuilt")
+# Who or what triggered a SlateChange row. "cron" is the unattended run-cron/sync_week path
+# (SlateChange.actor_user_id is always null there); "commissioner" and "admin" both carry a
+# real actor_user_id, split only so the change history panel can say which kind of person
+# acted, exactly like PayoutAward.recalculated_by_user_id already distinguishes an attributed
+# action from an automated one.
+SLATE_CHANGE_SOURCES = ("cron", "commissioner", "admin")
+
+# Pool.lock_policy (Phase 4, midweek kickoff warnings). "first_kickoff" (default, unchanged
+# behavior): lock_at is the earliest kickoff among the selected slate games, whatever day that
+# falls on, exactly what app/slate.py.compute_lock_at has always computed. "first_saturday_
+# kickoff": lock_at is the earliest kickoff that falls on a Saturday, so a Wednesday or
+# Thursday game on the slate no longer pulls the whole pool's deadline earlier, it simply
+# locks itself individually once it kicks off (a picked game already in progress is read only
+# regardless of the pool wide lock, this policy only changes lock_at itself). Falls back to
+# the ordinary first-kickoff rule when no selected game falls on a Saturday, since a slate
+# cannot lock before its own earliest game exists. "manual": lock_at is never computed from
+# kickoffs at all, the commissioner always sets it by hand (POST /league/slate/lock), matching
+# the existing Week.lock_at_override escape hatch but as a standing pool preference rather
+# than a one-off override that a rebuild could still recompute over.
+LOCK_POLICIES = ("first_kickoff", "first_saturday_kickoff", "manual")
+
 # The rivalry pairs (Phase 5) that auto-pin themselves onto every rebuilt slate no matter
 # how wide the spread runs: the two the commissioner group named directly (Ohio State vs
 # Michigan, Auburn vs Alabama) plus the rest of the obviously-same-shape rivalries. Every
@@ -264,6 +295,12 @@ class Pool(Base):
     # behavior. Exposed on /league/settings.
     notify_week_published: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
 
+    # LOCK_POLICIES (Phase 4, slate integrity incident: "midweek games pulled the lock time to
+    # Wednesday morning, which is unacceptable"). Default "first_kickoff" keeps every existing
+    # pool's lock time exactly as it always computed, so nothing changes silently underneath a
+    # commissioner who never touches this setting.
+    lock_policy: Mapped[str] = mapped_column(String(24), default="first_kickoff", nullable=False)
+
     created_at: Mapped[dt.datetime] = mapped_column(
         DateTime(timezone=True), default=utcnow, server_default=func.now(), nullable=False
     )
@@ -346,6 +383,13 @@ class PoolMember(Base):
     # Venmo account, which the group explicitly banned: "1 person to pay, no multiple
     # accounts"). Never itself a place to pay; Pool.venmo_handle is the single collector.
     member_venmo_handle: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    # League chat (Phase 6, slate integrity incident): the last time this member opened
+    # /league/chat, so the unread count in the nav is "messages posted after this," never a
+    # separately maintained counter that could drift from the messages table itself. Null
+    # means "never opened it," which counts every non-deleted message as unread.
+    chat_last_viewed_at: Mapped[dt.datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
 
     pool: Mapped[Pool] = relationship(back_populates="members")
     # Two FKs onto users.id now (user_id, paid_marked_by_user_id), so both relationships name
@@ -412,6 +456,25 @@ class Week(Base):
     # settings.max_spread_refreshes_per_week so a season stays inside the free tiers.
     spread_refreshes: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     cfbd_calls: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    # Phase 4 (slate integrity incident): set the moment a commissioner acknowledges a midweek
+    # kickoff warning on THIS exact slate, cleared the moment slate membership changes again
+    # (add, remove, swap, or a real rebuild), so a stale acknowledgement of an earlier slate can
+    # never wave through a publish of a slate the commissioner has not actually seen the warning
+    # for. midweek_ack_note is the plain sentence shown on the change history panel, frozen at
+    # the moment of acknowledgement rather than recomputed later from games that may since have
+    # moved or been voided.
+    midweek_ack_at: Mapped[dt.datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    midweek_ack_by_user_id: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    midweek_ack_note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Phase 2 (rebuild and reopen a published week): set the moment a commissioner rebuilds a
+    # week that had picks, cleared the moment the rebuilt week is republished. Drives the
+    # player facing "your picks were cleared" banner on /picks (app/routers/picks.py), which
+    # needs to know this happened without the player having to infer it from the standings.
+    rebuilt_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[dt.datetime] = mapped_column(
         DateTime(timezone=True), default=utcnow, server_default=func.now(), nullable=False
     )
@@ -794,6 +857,117 @@ class PasswordResetToken(Base):
     expires_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     used_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
+    user: Mapped[User] = relationship()
+
+
+class SlateChange(Base):
+    """One row per mutation to a week's game set (slate drift incident, see
+    INCIDENT-REPORT.md). Written by the one place each action actually happens
+    (app/services/ingest.py), never reconstructed after the fact, so "did the app touch my
+    slate" always has a real, contemporaneous answer instead of one inferred from game rows
+    alone after something has already gone wrong. Deliberately a plain, narrow audit log, not
+    a version control system: before/after only ever hold the handful of fields relevant to
+    that one action (see each call site in app/services/ingest.py for the exact shape), never
+    a full snapshot of the game or week row.
+    """
+
+    __tablename__ = "slate_changes"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    week_id: Mapped[int] = mapped_column(
+        ForeignKey("weeks.id", ondelete="CASCADE"), index=True, nullable=False
+    )
+    # Null only for "rebuilt": every other action names the one game it changed.
+    game_id: Mapped[int | None] = mapped_column(
+        ForeignKey("games.id", ondelete="SET NULL"), nullable=True
+    )
+    action: Mapped[str] = mapped_column(String(16), nullable=False)  # SLATE_CHANGE_ACTIONS
+    # Null for the unattended cron path. Set for a commissioner or site admin action.
+    actor_user_id: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    source: Mapped[str] = mapped_column(String(16), nullable=False)  # SLATE_CHANGE_SOURCES
+    before: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    after: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    created_at: Mapped[dt.datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=utcnow,
+        server_default=func.now(),
+        index=True,
+        nullable=False,
+    )
+
+    week: Mapped[Week] = relationship()
+    game: Mapped[Game | None] = relationship()
+    actor: Mapped[User | None] = relationship(foreign_keys=[actor_user_id])
+
+
+class PickArchive(Base):
+    """A copied-out Pick row, written before a commissioner's "rebuild and reopen" (Phase 2,
+    slate drift incident) deletes the live ones. This table is the reason that rebuild is safe
+    to offer at all: a mistaken rebuild never actually destroys a player's picks, it only moves
+    them out of the live picks table, so they can always be looked up again by hand even though
+    nothing in this codebase automatically restores from here. reason names why the archive
+    happened; "rebuild" is the only value written today, kept as a real column rather than a
+    hard coded assumption so a future archiving path (there is none yet) needs no migration.
+    """
+
+    __tablename__ = "pick_archives"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    week_id: Mapped[int] = mapped_column(
+        ForeignKey("weeks.id", ondelete="CASCADE"), index=True, nullable=False
+    )
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), index=True, nullable=False
+    )
+    game_id: Mapped[int | None] = mapped_column(
+        ForeignKey("games.id", ondelete="SET NULL"), nullable=True
+    )
+    picked_team: Mapped[str] = mapped_column(String(8), nullable=False)
+    confidence: Mapped[int] = mapped_column(Integer, nullable=False)
+    original_submitted_at: Mapped[dt.datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    reason: Mapped[str] = mapped_column(String(32), default="rebuild", nullable=False)
+    archived_at: Mapped[dt.datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, server_default=func.now(), nullable=False
+    )
+
+    user: Mapped[User] = relationship()
+    game: Mapped[Game | None] = relationship()
+
+
+class LeagueMessage(Base):
+    """One post in a pool's league chat (Phase 6, "a league chat box... easier communication
+    to true members versus the informational email that gets sent to potential players").
+    Plain text only, escaped and linkified at render time, never stored as HTML or markdown
+    (see app/routers/chat.py): there is no rich content path here to sanitize wrong. Polled,
+    not pushed, on a modest interval, per the brief's own "not real-time chat, not a websocket."
+    """
+
+    __tablename__ = "league_messages"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    pool_id: Mapped[int] = mapped_column(
+        ForeignKey("pools.id", ondelete="CASCADE"), index=True, nullable=False
+    )
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), index=True, nullable=False
+    )
+    body: Mapped[str] = mapped_column(Text, nullable=False)
+    pinned: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    created_at: Mapped[dt.datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=utcnow,
+        server_default=func.now(),
+        index=True,
+        nullable=False,
+    )
+    edited_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    deleted_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    pool: Mapped[Pool] = relationship()
     user: Mapped[User] = relationship()
 
 

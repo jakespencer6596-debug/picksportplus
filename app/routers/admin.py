@@ -48,6 +48,7 @@ from app.auth import (
 from app.config import Settings, settings
 from app.db import get_db
 from app.models import (
+    LOCK_POLICIES,
     SCORING_MODES,
     Game,
     Pick,
@@ -130,11 +131,14 @@ def _commissioner_pools(db: Session, user: User) -> list[Pool]:
 
 
 def _base(db: Session, user: User, pool: Pool) -> dict:
+    from app.routers.chat import unread_chat_count
+
     return {
         "current_user": user,
         "pool": pool,
         "is_commissioner": True,
         "active_nav": "league",
+        "chat_unread_count": unread_chat_count(db, pool, membership_for(db, user, pool)),
         # Absolute origin for the player invite link and its mailto template, built the same
         # way app/routers/public.py already builds base_url for pricing.html's mailto link.
         "base_url": settings.base_url,
@@ -319,6 +323,7 @@ def settings_save(
     auto_publish: str = Form(""),
     open_registration: str = Form(""),
     notify_week_published: str = Form(""),
+    lock_policy: str = Form("first_kickoff"),
     sports_nfl: str = Form(""),
     sports_ncaaf: str = Form(""),
     week1_anchor_date: str = Form(""),
@@ -347,6 +352,8 @@ def settings_save(
         )
     if scoring_mode not in SCORING_MODES:
         errors.append("Scoring mode must be either inverse or standard.")
+    if lock_policy not in LOCK_POLICIES:
+        errors.append("Unknown lock policy.")
     if scenarios_min_final_games < 0:
         errors.append("Scenarios minimum final games cannot be negative.")
     if scenarios_min_remaining_games < 1:
@@ -401,6 +408,7 @@ def settings_save(
     pool.target_ncaaf = target_ncaaf
     pool.picks_required = picks_required
     pool.scoring_mode = scoring_mode
+    pool.lock_policy = lock_policy
     pool.scenarios_min_final_games = scenarios_min_final_games
     pool.scenarios_min_remaining_games = scenarios_min_remaining_games
     pool.sports = sports
@@ -516,8 +524,40 @@ def members_page(
             "duplicate_venmo_member_ids": _duplicate_venmo_member_ids(rows),
             "paid_count": paid_count,
             "entry_fee": pool.entry_fee,
+            # Phase 6, slate drift incident: "a way to collate all emails... versus the
+            # informational email that gets sent to potential players." One address per
+            # member, in the same name order the table above already uses.
+            "member_emails": ", ".join(player.email for _member, player in rows),
         },
         **_base(db, user, pool),
+    )
+
+
+@router.get("/members/emails.csv")
+def members_emails_csv(
+    db: Session = Depends(get_db),
+    user: User = Depends(require_user),
+    pool: Pool = Depends(require_commissioner),
+):
+    rows = db.execute(
+        select(PoolMember, User)
+        .join(User, User.id == PoolMember.user_id)
+        .where(PoolMember.pool_id == pool.id)
+        .order_by(User.display_name)
+    ).all()
+    lines = ["name,email"]
+    for _member, player in rows:
+        # A display name is free text and could in principle carry a comma or quote; quoting
+        # it and escaping any embedded quote is what keeps this a valid CSV cell regardless,
+        # the same rule any real CSV writer applies.
+        safe_name = player.display_name.replace('"', '""')
+        lines.append(f'"{safe_name}",{player.email}')
+    body = "\r\n".join(lines) + "\r\n"
+    filename = f"{pool.name.lower().replace(' ', '-')}-members.csv"
+    return Response(
+        body,
+        media_type="text/csv",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
 
 
@@ -877,6 +917,10 @@ def _slate_context(db: Session, pool: Pool, row: Week | None) -> dict:
                 "wide": (latest - earliest) > dt.timedelta(hours=48),
             }
 
+    change_history = ingest.slate_change_history(db, row) if row is not None else []
+    midweek = ingest.midweek_games(db, row) if row is not None else []
+    midweek_warning = ingest.midweek_warning_text(row, midweek) if midweek else ""
+
     return {
         "on_slate": on_slate,
         "candidates": candidates,
@@ -886,6 +930,9 @@ def _slate_context(db: Session, pool: Pool, row: Week | None) -> dict:
         "pinned_count": pinned_count,
         "missing_spread_count": missing_spread_count,
         "slate_span": slate_span_info,
+        "change_history": change_history,
+        "midweek_games": midweek,
+        "midweek_warning": midweek_warning,
     }
 
 
@@ -1008,6 +1055,8 @@ def slate_build(
             pool,
             pool.season_year,
             week_number,
+            actor_user_id=user.id,
+            source="commissioner",
         )
     except ingest.BuildInProgress as exc:
         db.rollback()
@@ -1053,6 +1102,7 @@ def slate_build(
 def slate_publish(
     request: Request,
     week_id: int = Form(...),
+    ack_midweek: str = Form(""),
     db: Session = Depends(get_db),
     user: User = Depends(require_user),
     pool: Pool = Depends(require_commissioner),
@@ -1060,17 +1110,33 @@ def slate_publish(
     row = _week_for_action(db, pool, week_id)
     if row.status != "draft":
         flash(request, f"Week {row.week_number} is already {row.status}.", "info")
+        return _redirect(f"/league/slate?week={row.week_number}")
+
+    # Phase 4, slate drift incident: "midweek games pulled the lock time to Wednesday
+    # morning, which is unacceptable because it silently moved his deadline." A manual
+    # publish is blocked behind a real acknowledgement naming the games and the resulting
+    # lock time; an unchecked checkbox (or one this exact slate has never seen, see
+    # ingest._clear_midweek_ack) refuses the publish outright, no games are dropped or
+    # changed, the commissioner just has to look at the warning first.
+    midweek = ingest.midweek_games(db, row)
+    warning_text = ingest.midweek_warning_text(row, midweek) if midweek else ""
+    if midweek and not ack_midweek:
+        flash(request, warning_text, "error")
+        flash(request, "Check the box to acknowledge the lock time, then publish again.", "info")
+        return _redirect(f"/league/slate?week={row.week_number}")
+    if midweek:
+        ingest.acknowledge_midweek(db, row, user.id, warning_text)
+
+    try:
+        notify_warnings = ingest.publish_week(db, row)
+    except ingest.SlateSpanTooWide as exc:
+        db.rollback()
+        flash(request, str(exc), "error")
     else:
-        try:
-            notify_warnings = ingest.publish_week(db, row)
-        except ingest.SlateSpanTooWide as exc:
-            db.rollback()
-            flash(request, str(exc), "error")
-        else:
-            db.commit()
-            flash(request, f"Week {row.week_number} is open for picks.")
-            for warning in notify_warnings:
-                flash(request, warning, "error")
+        db.commit()
+        flash(request, f"Week {row.week_number} is open for picks.")
+        for warning in notify_warnings:
+            flash(request, warning, "error")
     return _redirect(f"/league/slate?week={row.week_number}")
 
 
@@ -1144,6 +1210,10 @@ def _slate_action_fragment(
         else ""
     )
     parts.append(f'<div id="slate-action-error" hx-swap-oob="true">{error_html}</div>')
+    if not error:
+        # A successful action just wrote a new SlateChange row (see app/services/ingest.py):
+        # refresh the panel in place so a commissioner sees it without a full page reload.
+        parts.append(str(frag.change_history_panel(pool, ctx["change_history"], oob=True)))
 
     if action in _SLATE_MEMBERSHIP_ACTIONS and not error:
         all_candidates = ctx["candidates"]
@@ -1208,11 +1278,15 @@ def slate_game_action(
     is_hx = request.headers.get("HX-Request") == "true"
     row = _week_for_action(db, pool, week_id)
     error: str | None = None
+    actor_kwargs = {
+        "actor_user_id": user.id,
+        "source": "admin" if user.is_admin else "commissioner",
+    }
     try:
         if action == "add":
-            ingest.add_to_slate(db, row, game_id)
+            ingest.add_to_slate(db, row, game_id, **actor_kwargs)
         elif action == "remove":
-            ingest.remove_from_slate(db, row, game_id)
+            ingest.remove_from_slate(db, row, game_id, **actor_kwargs)
         elif action == "swap":
             if not swap_with.strip():
                 raise ValueError("Choose a game to swap in.")
@@ -1220,18 +1294,20 @@ def slate_game_action(
                 swap_with_id = int(swap_with.strip())
             except ValueError:
                 raise ValueError("That is not a game id. Pick one from the list.") from None
-            ingest.swap_slate_game(db, row, game_id, swap_with_id)
+            ingest.swap_slate_game(db, row, game_id, swap_with_id, **actor_kwargs)
         elif action == "void":
-            ingest.set_void(db, row, game_id, True)
+            ingest.set_void(db, row, game_id, True, **actor_kwargs)
         elif action == "unvoid":
-            ingest.set_void(db, row, game_id, False)
+            ingest.set_void(db, row, game_id, False, **actor_kwargs)
         elif action == "spread":
             value = spread.strip()
-            ingest.set_manual_spread(db, row, game_id, float(value) if value else None)
+            ingest.set_manual_spread(
+                db, row, game_id, float(value) if value else None, **actor_kwargs
+            )
         elif action == "pin":
-            ingest.set_pinned(db, row, game_id, True)
+            ingest.set_pinned(db, row, game_id, True, **actor_kwargs)
         elif action == "unpin":
-            ingest.set_pinned(db, row, game_id, False)
+            ingest.set_pinned(db, row, game_id, False, **actor_kwargs)
         else:
             raise ValueError("Unknown action.")
         db.commit()
@@ -1289,6 +1365,111 @@ def slate_lock(
     return _redirect(f"/league/slate?week={row.week_number}")
 
 
+# Rebuild and reopen, and amend a single game (Phase 2, slate drift incident) ----------------
+
+
+@router.get("/slate/rebuild")
+def slate_rebuild_confirm(
+    request: Request,
+    week_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_user),
+    pool: Pool = Depends(require_commissioner),
+):
+    """Step one and two of the three-step confirmation (SPEC Phase 2): what will happen, in
+    plain language, including how many players have already submitted, plus the current slate
+    so a commissioner can see exactly what is about to be archived and rebuilt. Step three (type
+    the week number) lives on the confirm form this page renders, POSTing to this same path."""
+    row = _week_for_action(db, pool, week_id)
+    on_slate = sorted(
+        [g for g in db.scalars(select(Game).where(Game.week_id == row.id)) if g.in_slate],
+        key=lambda g: (g.slate_rank or 999),
+    )
+    pick_count = (
+        db.scalar(select(func.count(func.distinct(Pick.user_id))).where(Pick.week_id == row.id))
+        or 0
+    )
+    return render(
+        request,
+        "admin/slate_rebuild.html",
+        {"week": row, "on_slate": on_slate, "pick_count": pick_count},
+        **_base(db, user, pool),
+    )
+
+
+@router.post("/slate/rebuild")
+def slate_rebuild(
+    request: Request,
+    week_id: int = Form(...),
+    confirm_week_number: str = Form(""),
+    db: Session = Depends(get_db),
+    user: User = Depends(require_user),
+    pool: Pool = Depends(require_commissioner),
+):
+    row = _week_for_action(db, pool, week_id)
+    if confirm_week_number.strip() != str(row.week_number):
+        flash(
+            request,
+            f"Type {row.week_number} exactly to confirm the rebuild. Nothing was changed.",
+            "error",
+        )
+        return _redirect(f"/league/slate/rebuild?week_id={row.id}")
+
+    result = ingest.rebuild_and_reopen_week(db, pool, row, actor_user_id=user.id)
+    db.commit()
+    noun = "pick" if result.picks_archived == 1 else "picks"
+    flash(
+        request,
+        f"Week {row.week_number} rebuilt. {result.picks_archived} {noun} archived. "
+        f"{result.build_report.selected} games selected. Review it below, then publish when "
+        "you are ready, the week was NOT auto-published.",
+        "ok",
+    )
+    for warning in result.build_report.warnings:
+        flash(request, warning, "error")
+    return _redirect(f"/league/slate?week={row.week_number}")
+
+
+@router.post("/slate/amend")
+def slate_amend(
+    request: Request,
+    week_id: int = Form(...),
+    game_id: int = Form(...),
+    action: str = Form(...),
+    swap_with: str = Form(""),
+    db: Session = Depends(get_db),
+    user: User = Depends(require_user),
+    pool: Pool = Depends(require_commissioner),
+):
+    """The narrower alternative to a full rebuild (Phase 2): swap or remove ONE game on a
+    slate that already has picks, which the ordinary Remove/Swap buttons refuse. This is the
+    direct fix for the commissioner's own words: "Since people have locked already, I am
+    unable to remove games." """
+    row = _week_for_action(db, pool, week_id)
+    try:
+        swap_with_id = int(swap_with.strip()) if swap_with.strip() else None
+        game, affected = ingest.amend_published_game(
+            db, row, game_id, action, swap_with_id=swap_with_id, actor_user_id=user.id
+        )
+    except ValueError as exc:
+        db.rollback()
+        flash(request, str(exc), "error")
+        return _redirect(f"/league/slate?week={row.week_number}")
+    db.commit()
+    if affected:
+        noun = "pick" if affected == 1 else "picks"
+        flash(
+            request,
+            f"{game.away_abbr} at {game.home_abbr} amended. {affected} {noun} on that game no "
+            "longer score, and dropped from those players' possible count. Every other pick is "
+            "untouched.",
+            "ok",
+        )
+    else:
+        flash(request, f"{game.away_abbr} at {game.home_abbr} amended. Nobody had picked it.", "ok")
+    return _redirect(f"/league/slate?week={row.week_number}")
+
+
 # Test week -------------------------------------------------------------------
 
 
@@ -1315,6 +1496,8 @@ def test_week_create(
             ingest.TEST_WEEK_NUMBER,
             publish=True,
             is_test_week=True,
+            actor_user_id=user.id,
+            source="commissioner",
         )
     except ValueError as exc:
         db.rollback()

@@ -1,0 +1,45 @@
+{% extends "base.html" %}
+{% import "chat/_messages.html" as msgs %}
+{% block title %}League chat. {{ APP_NAME }}{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <div>
+    <p class="eyebrow">{{ pool.name }}</p>
+    <h1 class="page-title">League chat</h1>
+  </div>
+</div>
+
+{% if viewing_as_admin %}
+  <div class="flash flash-info" role="status">
+    Viewing as site admin. You are not a member of this league.
+  </div>
+{% endif %}
+
+<section class="section" aria-labelledby="chat-title">
+  <h2 class="visually-hidden" id="chat-title">Messages</h2>
+
+  {# Phase 6, slate drift incident: "not real-time chat, not a websocket." Polled on a modest
+     30 second interval, plain HTMX, no new dependency. #}
+  <div id="chat-messages-wrap" hx-get="/league/chat/messages" hx-trigger="every 30s" hx-swap="innerHTML">
+    {{ msgs.messages_list(messages, current_user, is_commissioner, pool.timezone) }}
+  </div>
+
+  {% if is_member %}
+    <div id="chat-error"></div>
+    <form class="stack" method="post" action="/league/chat" data-chat-post-form
+          hx-post="/league/chat" hx-target="#chat-messages-wrap" hx-swap="innerHTML">
+      <div class="field">
+        <label class="field-label" for="chat-body">Message</label>
+        <textarea class="input" id="chat-body" name="body" maxlength="{{ max_length }}"
+                  rows="3" required placeholder="Say something to the league"></textarea>
+      </div>
+      <div class="form-actions">
+        <button class="btn btn-primary" type="submit">Post</button>
+      </div>
+    </form>
+  {% else %}
+    <p class="muted">Only members of this league can post.</p>
+  {% endif %}
+</section>
+{% endblock %}

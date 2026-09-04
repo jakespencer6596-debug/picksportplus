@@ -99,6 +99,12 @@
       <span class="badge{% if game.pinned %} badge-pinned{% endif %}">{{ reason }}</span>
     </td>
     <td data-label="Actions" class="cell-actions">
+      {# Phase 5, slate drift incident: "a lot going on with lines, all the different
+         buttons... a single action menu could be cleaner." A native <details> disclosure,
+         closed by default, one per row: every button below still works exactly as it always
+         has (same forms, same hx-* attributes, same no-JS fallback), only the default visual
+         state changes. No JavaScript is needed to open it. #}
+<details><summary>Actions</summary>
       <form class="action-form" method="post" action="/league/slate/game">
         <input type="hidden" name="week_id" value="{{ week.id }}">
         <input type="hidden" name="game_id" value="{{ game.id }}">
@@ -108,9 +114,16 @@
           {% if game.pinned %}Unpin{% else %}Pin{% endif %}
           <span class="visually-hidden">{{ game.away_abbr }} at {{ game.home_abbr }}</span>
         </button>
+        {# Phase 3, slate drift incident: "There's an option to void but unsure what the
+           effects are." The consequence is spelled out right in the confirmation itself,
+           both directions, rather than assuming a commissioner already knows it. hx-confirm
+           is htmx's own confirmation hook, shown before the request is even issued; a plain
+           no-JS POST (SPEC Section 6a) skips it, the same accepted tradeoff every other
+           confirm() in this app already has (see admin/payouts.html). #}
         <button class="btn btn-secondary btn-sm" type="submit"
                 name="action" value="{% if game.is_void %}unvoid{% else %}void{% endif %}"
-                hx-post="/league/slate/game" hx-target="#slate-row-{{ game.id }}" hx-swap="outerHTML">
+                hx-post="/league/slate/game" hx-target="#slate-row-{{ game.id }}" hx-swap="outerHTML"
+                hx-confirm="{% if game.is_void %}Restore {{ game.away_abbr }} at {{ game.home_abbr }}? Scoring returns to normal for everyone who picked it.{% else %}Void {{ game.away_abbr }} at {{ game.home_abbr }}? It scores zero for everyone and drops out of every player's possible count, whether or not they picked it. Anyone who picked it keeps their other picks unchanged, and the confidence they staked on it is not reassigned. You can undo this while the week is still live.{% endif %}">
           {% if game.is_void %}Restore{% else %}Void{% endif %}
           <span class="visually-hidden">{{ game.away_abbr }} at {{ game.home_abbr }}</span>
         </button>
@@ -138,6 +151,31 @@
                   hx-post="/league/slate/game" hx-swap="none">Swap</button>
         {% endif %}
       </form>
+      {% if not editable %}
+        {# Phase 2, slate drift incident: the narrower alternative to a full rebuild. Picks
+           already exist, so the ordinary Remove/Swap above are gone; this bypasses that lock
+           for one game at a time, with the consequence spelled out on the button itself. A
+           full page POST, deliberately not htmx: this is a slower, heavier action than pin or
+           void, never a quiet one-click partial swap. #}
+        <form class="action-form" method="post" action="/league/slate/amend"
+              onsubmit="return confirm('Picks already made on {{ game.away_abbr }} at {{ game.home_abbr }} will stop scoring and drop from those players possible count. Every other pick stays untouched. Continue?');">
+          <input type="hidden" name="week_id" value="{{ week.id }}">
+          <input type="hidden" name="game_id" value="{{ game.id }}">
+          <label class="visually-hidden" for="amend-swap-{{ game.id }}">
+            Amend: swap {{ game.away_abbr }} at {{ game.home_abbr }} for
+          </label>
+          <input class="input input-sm" type="text" inputmode="numeric" id="amend-swap-{{ game.id }}"
+                 name="swap_with" list="swap-candidates" placeholder="Amend: swap it for (optional)"
+                 autocomplete="off">
+          <button class="btn btn-secondary btn-sm" type="submit" name="action" value="swap">
+            Amend: swap
+          </button>
+          <button class="btn btn-secondary btn-sm" type="submit" name="action" value="remove">
+            Amend: remove
+          </button>
+        </form>
+      {% endif %}
+</details>
     </td>
   </tr>
 {% endmacro %}
@@ -146,6 +184,7 @@
   <tr id="candidate-row-{{ game.id }}">
     {{ game_cells(game, tz) }}
     <td data-label="Actions" class="cell-actions">
+<details><summary>Actions</summary>
       <form class="action-form" method="post" action="/league/slate/game">
         <input type="hidden" name="week_id" value="{{ week.id }}">
         <input type="hidden" name="game_id" value="{{ game.id }}">
@@ -177,6 +216,7 @@
           Set line<span class="visually-hidden"> for {{ game.away_abbr }} at {{ game.home_abbr }}</span>
         </button>
       </form>
+</details>
     </td>
   </tr>
 {% endmacro %}
@@ -212,6 +252,28 @@
       <option value="{{ option.id }}" label="{{ option.away_abbr }} at {{ option.home_abbr }}, {{ option.line_text }}"></option>
     {% endfor %}
   </datalist>
+{% endmacro %}
+
+{% macro change_history_panel(pool, changes, oob=False) %}
+  {# Phase 1, slate drift incident: "A commissioner must be able to see for himself whether
+     the app touched his slate." Newest first, plain sentences, source labelled so a cron
+     rebuild reads differently from a commissioner's own click. #}
+  <div id="change-history-panel" class="card"{% if oob %} hx-swap-oob="true"{% endif %}>
+    <h3>Change history</h3>
+    {% if not changes %}
+      <p class="muted">No changes recorded for this week yet.</p>
+    {% else %}
+      <ul class="change-history-list">
+        {% for change in changes %}
+          <li>
+            <span class="change-text">{{ change.text }}</span><span class="muted">,
+            {{ change.created_at | kickoff_long(pool.timezone) }}</span>
+            <span class="badge badge-source-{{ change.source }}">{{ change.source }}</span>
+          </li>
+        {% endfor %}
+      </ul>
+    {% endif %}
+  </div>
 {% endmacro %}
 
 {% macro candidates_load_more(week_id, q, offset, has_more, oob=False) %}

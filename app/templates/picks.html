@@ -185,6 +185,19 @@
   </p>
 {% endif %}
 
+{% if not preview_mode and needs_repick_after_rebuild %}
+  {# Phase 2, slate drift incident: a player should never have to work out from the standings
+     that a commissioner amended the slate. Shown until this player submits a fresh pick for
+     this exact week (app.services.ingest.player_needs_repick_after_rebuild). #}
+  <div class="flash flash-info" role="status" id="rebuilt-week-banner">
+    {{ ic.icon("alert", 18) }}
+    <span>
+      The {{ week.label }} slate was amended. Your previous picks for this week were cleared.
+      Pick again before the new lock time{% if week.lock_at %}, {{ week.lock_at | kickoff_long(pool.timezone) }}{% endif %}.
+    </span>
+  </div>
+{% endif %}
+
 
 {% if preview_mode %}
 {# ------------------------------------------- 0: poolless preview, read only #}

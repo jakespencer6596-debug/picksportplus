@@ -1,0 +1,54 @@
+{#
+  League chat message list (Phase 6, slate drift incident). Shared between the full page
+  (chat/chat.html) and every HTMX response (post, edit, delete, pin, the 30s poll) so the list
+  markup can never drift between a first load and a partial update, the same pattern
+  admin/_slate_fragments.html already uses for the slate editor.
+
+  message.body is plain text, escaped and linkified here by the `linkify` filter
+  (app/templating.py), never rendered anywhere else in this codebase with `safe` on its own,
+  so this is the one place raw user content ever becomes HTML.
+#}
+{% macro messages_list(messages, viewer, viewer_is_commissioner, tz) %}
+  <ul id="chat-messages" class="chat-messages">
+    {% if not messages %}
+      <li class="muted">No messages yet. Say hello.</li>
+    {% endif %}
+    {% for message in messages %}
+      <li class="chat-message{% if message.pinned %} chat-message-pinned{% endif %}" id="chat-message-{{ message.id }}">
+        <div class="chat-message-head">
+          <span class="chat-message-author">{{ message.user.display_name }}</span>
+          <span class="muted">{{ message.created_at | kickoff_long(tz) }}</span>
+          {% if message.edited_at %}<span class="muted">(edited)</span>{% endif %}
+          {% if message.pinned %}<span class="badge badge-pinned">Pinned</span>{% endif %}
+        </div>
+        <p class="chat-message-body">{{ message.body | linkify | safe }}</p>
+        <div class="chat-message-actions">
+          {% if message.user_id == viewer.id %}
+            <form class="inline-form chat-edit-form" method="post" action="/league/chat/{{ message.id }}/edit"
+                  hx-post="/league/chat/{{ message.id }}/edit" hx-target="#chat-messages-wrap" hx-swap="innerHTML">
+              <label class="visually-hidden" for="edit-{{ message.id }}">Edit your message</label>
+              <input class="input chat-edit-input" type="text" id="edit-{{ message.id }}" name="body"
+                     value="{{ message.body }}" maxlength="2000">
+              <button class="btn btn-secondary btn-sm" type="submit">Save edit</button>
+            </form>
+          {% endif %}
+          {% if message.user_id == viewer.id or viewer_is_commissioner %}
+            <form class="inline-form" method="post" action="/league/chat/{{ message.id }}/delete"
+                  hx-post="/league/chat/{{ message.id }}/delete" hx-target="#chat-messages-wrap" hx-swap="innerHTML"
+                  hx-confirm="Delete this message?">
+              <button class="btn btn-secondary btn-sm" type="submit">Delete</button>
+            </form>
+          {% endif %}
+          {% if viewer_is_commissioner %}
+            <form class="inline-form" method="post" action="/league/chat/{{ message.id }}/pin"
+                  hx-post="/league/chat/{{ message.id }}/pin" hx-target="#chat-messages-wrap" hx-swap="innerHTML">
+              <button class="btn btn-secondary btn-sm" type="submit">
+                {% if message.pinned %}Unpin{% else %}Pin{% endif %}
+              </button>
+            </form>
+          {% endif %}
+        </div>
+      </li>
+    {% endfor %}
+  </ul>
+{% endmacro %}
