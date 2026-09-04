@@ -4503,6 +4503,25 @@ over budget by about 2.8KB purely from the added attribute text repeated 40 time
 Removing the class and targeting the existing `.cell-actions` column instead recovered that
 margin without changing anything visual.
 
+**Phase 10, a real deploy failure found and fixed live: `sa.text('0')` is not a valid
+`BOOLEAN` default on Postgres.** The first push to `picksportplus-live` failed its migration
+outright: `psycopg.errors.DatatypeMismatch: column "pinned" is of type boolean but default
+expression is of type integer`, on `league_messages.pinned`. SQLite has no real boolean type
+(it stores booleans as integers and accepts `DEFAULT 0` for any column happily), so this
+passed every local test, including a real up/downgrade/up round trip on SQLite, without ever
+surfacing; Postgres enforces the declared column type strictly and rejected it. Every other
+boolean column added by earlier migrations in this codebase already uses `sa.false()`, not a
+raw `sa.text('0')`; this one broke the established convention. Fixed in place in the same
+revision file rather than a follow-up migration, since the failed transaction never committed
+anywhere (Postgres runs one revision's DDL in a single transaction, confirmed by the deploy
+log's own "Will assume transactional DDL" and the subsequent clean rollback: `alembic_version`
+on `picksportplus-live-db` never advanced past the prior head, so there was nothing "applied"
+to preserve). Render's own deploy healthcheck meant the previous, working release kept serving
+real traffic throughout, zero live downtime. Verified the fix offline against the Postgres
+dialect specifically this time, `alembic upgrade ... --sql` with a `postgresql+psycopg://`
+URL (compiles the exact DDL Postgres would run with no real server needed), not just another
+SQLite round trip, precisely because SQLite already proved it cannot catch this class of bug.
+
 **Phase 6, league chat messages are soft-deleted (`LeagueMessage.deleted_at`), not removed
 outright.** A member's or commissioner's "delete" hides a message from every list query (all
 of them already filter `deleted_at.is_(None)`) without erasing the row, matching this

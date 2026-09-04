@@ -93,7 +93,7 @@ def upgrade() -> None:
         sa.Column('pool_id', sa.Integer(), sa.ForeignKey('pools.id', ondelete='CASCADE'), nullable=False),
         sa.Column('user_id', sa.Integer(), sa.ForeignKey('users.id', ondelete='CASCADE'), nullable=False),
         sa.Column('body', sa.Text(), nullable=False),
-        sa.Column('pinned', sa.Boolean(), nullable=False, server_default=sa.text('0')),
+        sa.Column('pinned', sa.Boolean(), nullable=False, server_default=sa.false()),
         sa.Column(
             'created_at', sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
         ),
