@@ -4949,3 +4949,13 @@ a.toggle-btn { text-decoration: none; }
   flex-wrap: wrap;
   gap: var(--space-2);
 }
+
+.chat-edit-form {
+  flex: 1 1 100%;
+}
+
+.chat-edit-input {
+  flex: 1 1 auto;
+  min-width: 12rem;
+  max-width: 100%;
+}

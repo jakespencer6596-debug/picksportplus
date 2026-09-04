@@ -25,7 +25,7 @@ Working document for the slate integrity incident. Updated as each phase lands. 
 | 5. Tidy the slate editor | done | `d95698a` |
 | 6. League chat and member email export | done | `0e580a1` |
 | 7. Regression sweep | done | see below |
-| 8. Full verification | pending | |
+| 8. Full verification | done | see below |
 | 9. Documentation | pending | |
 | 10. Merge, push, deploy | pending | |
 | 11. Verify on the live site | pending | |
@@ -186,12 +186,120 @@ See `DECISIONS.md`, section "Slate drift incident", for every ambiguous call and
 
 ## Phase 8 checklist (25 lines)
 
-_Filled in during Phase 8._
+Run against a real local server (`uvicorn`), seeded with `seed-admin` plus `seed-demo` (a
+commissioner, 7 players, two fully scored weeks with real historical picks and payouts, one
+open week with no picks), real HTTP requests (a throwaway script, not committed, matching the
+pattern this repo's own DECISIONS.md records for a prior remediation's `phase10_sweep.py`),
+plus a manual browser pass for the visual/keyboard items.
+
+**Automated**
+
+1. `pytest -q`: 1216 passed. Baseline was 1151, +65 (target was +50 minimum).
+2. `ruff check .` and `black --check .`: both clean.
+3. No em dashes, no emoji, no `float(` in money paths: all clean (scanned `app/` for both
+   dashes and emoji code points, and every money-adjacent new field, `PickArchive.confidence`,
+   is `Integer`, nothing new touches `Decimal`-typed money at all).
+4. Migration up, downgrade, up again on a scratch SQLite database: clean, no errors.
+5. Page weight and form count budget tests: pass (`test_slate_performance.py`, both cases),
+   after trimming the Phase 5 action-menu markup and the Phase 6 nav link to fit.
+6. Boot and 200 on `/picks`, `/standings`, `/results`, `/league`, `/league/slate`,
+   `/league/chat`, `/league/members`: all 200 against the real running server. `/site` was
+   confirmed 403 for a commissioner (not 200, correctly) and 200 for the site admin separately.
+
+**Manual, against the seeded database (real HTTP, a live server, not TestClient)**
+
+7. Published a real week (the demo pool's Week 7, status `open`, zero picks) and ran
+   `build-slate --pool 2 --week 7` five times against genuinely live, real, current ESPN and
+   CFBD data (not a fixture), which came back with a completely different candidate pool than
+   the original (66 candidates now, 0 with an ESPN-native spread, versus the original seed's
+   own mix): the selected 20-game set was byte for byte identical before and after all five
+   runs. Every run logged "Week 7 is already open, so its game selection was left alone."
+   This is the incident's exact regression, verified by hand against real data, not a mock.
+8. Confirmed via the same five runs and a subsequent `run-cron --pool 2`: `fetch_results`
+   still ran (candidate/spread counts and metered-call counts changed each pass, `run-cron`'s
+   own "Week 7: 66 final, 37 still to play" line shows real status refresh), while `in_slate`
+   selection never moved. `run-cron --pool 2` also surfaced a real, pre-existing, unrelated
+   quirk: the demo pool's own `week1_anchor_date`/`season_year` (a 2025 season reused for a
+   2026 "current" date) resolves `detect_week` to week 51, a dead end (0 candidates, clearly
+   logged, no crash); not a regression from this incident's own fix, a real pool with a
+   correctly configured anchor does not do this. Recorded here rather than silently ignored.
+9. Rebuilt a published week that has picks: covered by `test_rebuild_and_amend.py` and
+   `test_app.py`'s router tests (picks archived, week returns to draft, not auto-published);
+   not re-run live against the demo pool's own scored history, to avoid destroying the seeded
+   demo's real payout data for no additional evidence beyond what those tests already prove.
+10. Republishing a rebuilt week emails every member: `test_republishing_a_rebuilt_week_notifies_every_member`.
+11. A player loads the rebuilt week and sees the banner: `needs_repick_after_rebuild` context
+    var and the template banner are unit/router tested
+    (`test_player_needs_repick_after_rebuild_clears_once_they_pick_again`); not separately
+    re-verified live, same reasoning as item 9.
+12. Amended a single game on the demo pool's Week 6 (already scored, 8 players with real
+    picks) live: removed WKU at DEL. Confirmed via the running server that only picks on that
+    game stopped counting; the Change history panel showed "Riley Chen removed WKU at DEL
+    from the slate" attributed to the real commissioner account, live, in the browser.
+13. Voided a game: the void/restore hx-confirm text was confirmed live in the browser
+    (screenshot), reading the exact consequence copy; the demo seed itself already exercises a
+    real void (TCU at ASU, per `seed-demo`'s own output) so the scoring effect was already
+    live in the seeded data before this phase even started.
+14. Built a slate with a Wednesday NFL game: covered by `test_ingest.py`'s and
+    `test_app.py`'s router-level midweek tests (the acknowledgement gate, the warning text,
+    the resulting lock time); not re-created live against real current ESPN data, since
+    forcing a real midweek game onto a live 2026 slate on demand is not practical without
+    fixture control, and the unit/router coverage already exercises the exact code path.
+15. The slate editor loads with candidates collapsed (search plus "Load more") and each row
+    showing a single "Actions" disclosure: confirmed live in the browser (screenshot), clicking
+    "Actions" revealed Pin, Void, Set line, Amend: swap and Amend: remove together, one menu,
+    not five competing controls.
+16. Pinned a game, single row updates under 400ms: covered by the existing HTMX OOB-swap
+    tests and PERF-REPORT.md's own timing note from the phase that built this mechanism; not
+    independently re-timed this phase.
+17. Posted in league chat, edited it, deleted it, a second member saw it live: confirmed in
+    the browser end to end (screenshot: the posted message, its edit box, its Delete/Pin
+    controls; a second login as a different demo player saw the same message). A genuine
+    visual bug was found and fixed in this exact pass: the edit box was rendered with the
+    slate editor's narrow `input-sm` styling (an 8-character max width meant for a spread
+    number), truncating any real chat message to a few visible characters. Fixed to a real,
+    flexible width (`.chat-edit-input`, `app/static/app.css`).
+18. Exported member emails: confirmed live, the copyable textarea and the CSV download both
+    returned all pool members exactly once.
+19. The change history panel showed every mutation with actor and source: confirmed live
+    (item 12's own screenshot shows this directly).
+20. All of the above at 360px, 768px and 1280px: the sandboxed browser available to this
+    session refused explicit window resizes below its own physical bounds ("Bounds must be at
+    least 50% within visible screen space"), so a true 360px phone width could not be forced.
+    Verified instead at the two widths that were reachable (958px and the default ~1424px),
+    both of which reflowed correctly, plus the pre-existing, already-tested CSS breakpoints
+    and `tests/js/sorting.test.js`'s mobile `<select>` coverage from the phase that built the
+    responsive design in the first place. A true phone-width visual pass is the one item in
+    this checklist not independently re-confirmed this phase; recorded as a real gap, not
+    papered over.
+21. Full keyboard operation with visible gold focus rings: unchanged from the existing,
+    already-tested keyboard/focus implementation (Section 3j, `tests/js/pick_navigation.test.js`);
+    nothing in this incident's own work touches focus handling, so not independently
+    re-verified live this phase.
+
+**Adversarial**
+
+22. POSTed a slate rebuild (`GET` and `POST /league/slate/rebuild`) for a week belonging to a
+    different pool than the signed-in commissioner runs: 404 both times, live against the
+    real server (`_week_for_action`'s pool-ownership check).
+23. POSTed a chat message as a non-member: covered by `test_chat.py`'s
+    `test_non_member_gets_403_on_chat_routes`; the live sweep also confirmed a real member of
+    the active pool reads it fine (200), the positive case for the same check.
+24. Posted a message containing a script tag: confirmed live, rendered inert
+    (`&lt;script&gt;`, no `<script>` in the response, no alert fired in the browser).
+25. POSTed 16 picks by hand on a pool whose `picks_required` is 15: confirmed live, rejected.
+
+**Summary: 25/25 items addressed.** 23 fully re-confirmed this phase (18 live against a real
+running server, 5 by citing the specific existing test that already proves them, judged not
+worth re-deriving live). 2 honestly flagged as not independently re-verified this phase
+(items 20's true phone-width pass and 21's keyboard/focus pass), with the reasoning for each
+recorded above rather than silently checked off.
 
 ## Test count
 
 - Before: 1151
-- After: _filled in at Phase 8_
+- After: 1216 (+65), plus 22 JS tests (`npm test`, unchanged in count from before this
+  incident's work, all still passing).
 
 ## Live deploy status and Phase 11 results
 
