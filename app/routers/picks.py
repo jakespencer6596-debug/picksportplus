@@ -20,6 +20,7 @@ from app.auth import (
 )
 from app.db import get_db
 from app.models import Game, Pick, Pool, PoolMember, User, Week, WeekEntry
+from app.routers.chat import unread_chat_count
 from app.scoring import PickInput, validate_picks
 from app.services import ingest
 from app.services.preview import get_preview_pool
@@ -159,6 +160,7 @@ def picks_page(
     needs_repick_after_rebuild = week is not None and ingest.player_needs_repick_after_rebuild(
         db, week, user.id
     )
+    chat_unread_count = unread_chat_count(db, pool, member)
 
     return render(
         request,
@@ -171,6 +173,7 @@ def picks_page(
             "player_locked": player_locked,
             "payment_blocked": payment_blocked,
             "needs_repick_after_rebuild": needs_repick_after_rebuild,
+            "chat_unread_count": chat_unread_count,
             "locked_at": entry.locked_at if entry else None,
             # n is the target picks a player must submit, not the slate size (games can be
             # bigger, for example 20 games with 15 required). Never hard coded, always the

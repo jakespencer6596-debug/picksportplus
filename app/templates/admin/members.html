@@ -112,6 +112,29 @@ See you on the leaderboard.
   </div>
 </section>
 
+<section class="section" aria-labelledby="member-emails-title">
+  <h2 class="section-title" id="member-emails-title">Member emails</h2>
+
+  <div class="card">
+    <div class="card-body">
+      <p class="form-hint">
+        Every current member's email, one list, for mailing the league from your own email
+        client instead of the league chat or the informational invite above.
+      </p>
+      <textarea class="input invite-message" id="member-emails-text" readonly
+                aria-label="Member email addresses">{{ member_emails }}</textarea>
+      <div class="row">
+        <button type="button" class="btn btn-secondary" data-copy="#member-emails-text">
+          Copy emails
+        </button>
+        <a class="btn btn-secondary" href="/league/members/emails.csv">
+          {{ ic.icon("download", 18) }}<span class="btn-label">Download CSV</span>
+        </a>
+      </div>
+    </div>
+  </div>
+</section>
+
 {% if can_manage_commissioners %}
 <section class="section" aria-labelledby="commissioner-invite-title">
   <h2 class="section-title" id="commissioner-invite-title">Commissioner invite link</h2>

@@ -1167,6 +1167,16 @@
     if (note) note.hidden = true;
   });
 
+  /* League chat (Phase 6, slate drift incident): clears the compose box after a successful
+     post, so the same message cannot be resubmitted by accident and the box is ready for the
+     next one. The swapped-in message list already shows the new message; this only resets
+     the form the message came from, which htmx's own swap of #chat-messages-wrap never
+     touches (the form lives outside that target). */
+  document.addEventListener("htmx:afterRequest", function (e) {
+    if (!e.target.matches("[data-chat-post-form]")) return;
+    if (e.detail.successful) e.target.reset();
+  });
+
   window.PSP = {
     renumber: renumber,
     updateSummary: updateSummary,

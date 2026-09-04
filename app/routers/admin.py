@@ -131,11 +131,14 @@ def _commissioner_pools(db: Session, user: User) -> list[Pool]:
 
 
 def _base(db: Session, user: User, pool: Pool) -> dict:
+    from app.routers.chat import unread_chat_count
+
     return {
         "current_user": user,
         "pool": pool,
         "is_commissioner": True,
         "active_nav": "league",
+        "chat_unread_count": unread_chat_count(db, pool, membership_for(db, user, pool)),
         # Absolute origin for the player invite link and its mailto template, built the same
         # way app/routers/public.py already builds base_url for pricing.html's mailto link.
         "base_url": settings.base_url,
@@ -521,8 +524,40 @@ def members_page(
             "duplicate_venmo_member_ids": _duplicate_venmo_member_ids(rows),
             "paid_count": paid_count,
             "entry_fee": pool.entry_fee,
+            # Phase 6, slate drift incident: "a way to collate all emails... versus the
+            # informational email that gets sent to potential players." One address per
+            # member, in the same name order the table above already uses.
+            "member_emails": ", ".join(player.email for _member, player in rows),
         },
         **_base(db, user, pool),
+    )
+
+
+@router.get("/members/emails.csv")
+def members_emails_csv(
+    db: Session = Depends(get_db),
+    user: User = Depends(require_user),
+    pool: Pool = Depends(require_commissioner),
+):
+    rows = db.execute(
+        select(PoolMember, User)
+        .join(User, User.id == PoolMember.user_id)
+        .where(PoolMember.pool_id == pool.id)
+        .order_by(User.display_name)
+    ).all()
+    lines = ["name,email"]
+    for _member, player in rows:
+        # A display name is free text and could in principle carry a comma or quote; quoting
+        # it and escaping any embedded quote is what keeps this a valid CSV cell regardless,
+        # the same rule any real CSV writer applies.
+        safe_name = player.display_name.replace('"', '""')
+        lines.append(f'"{safe_name}",{player.email}')
+    body = "\r\n".join(lines) + "\r\n"
+    filename = f"{pool.name.lower().replace(' ', '-')}-members.csv"
+    return Response(
+        body,
+        media_type="text/csv",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
 
 

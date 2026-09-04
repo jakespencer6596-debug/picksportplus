@@ -200,6 +200,7 @@ from app.routers import (  # noqa: E402
     admin,
     admin_contacts,
     auth,
+    chat,
     leaderboard,
     leagues,
     legacy_redirects,
@@ -216,6 +217,7 @@ app.include_router(picks.router)
 app.include_router(leaderboard.router)
 app.include_router(results.router)
 app.include_router(admin.router)
+app.include_router(chat.router)
 app.include_router(payouts.router)
 app.include_router(leagues.router)
 app.include_router(site.router)

@@ -35,6 +35,9 @@
            {{ 'aria-current=page' if active_nav == 'standings' }}>Season</a>
         <a class="nav-link {{ 'is-active' if active_nav == 'results' }}" href="/results"
            {{ 'aria-current=page' if active_nav == 'results' }}>Results</a>
+        {% if pool %}
+          <a class="nav-link {{ 'is-active' if active_nav == 'chat' }}" href="/league/chat">Chat{% if chat_unread_count %} ({{ chat_unread_count }}){% endif %}</a>
+        {% endif %}
         {% if is_commissioner %}
           <a class="nav-link {{ 'is-active' if active_nav == 'league' }}" href="/league"
              {{ 'aria-current=page' if active_nav == 'league' }}>League</a>
