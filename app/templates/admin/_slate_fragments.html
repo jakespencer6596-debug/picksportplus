@@ -108,9 +108,16 @@
           {% if game.pinned %}Unpin{% else %}Pin{% endif %}
           <span class="visually-hidden">{{ game.away_abbr }} at {{ game.home_abbr }}</span>
         </button>
+        {# Phase 3, slate drift incident: "There's an option to void but unsure what the
+           effects are." The consequence is spelled out right in the confirmation itself,
+           both directions, rather than assuming a commissioner already knows it. hx-confirm
+           is htmx's own confirmation hook, shown before the request is even issued; a plain
+           no-JS POST (SPEC Section 6a) skips it, the same accepted tradeoff every other
+           confirm() in this app already has (see admin/payouts.html). #}
         <button class="btn btn-secondary btn-sm" type="submit"
                 name="action" value="{% if game.is_void %}unvoid{% else %}void{% endif %}"
-                hx-post="/league/slate/game" hx-target="#slate-row-{{ game.id }}" hx-swap="outerHTML">
+                hx-post="/league/slate/game" hx-target="#slate-row-{{ game.id }}" hx-swap="outerHTML"
+                hx-confirm="{% if game.is_void %}Restore {{ game.away_abbr }} at {{ game.home_abbr }}? Scoring returns to normal for everyone who picked it.{% else %}Void {{ game.away_abbr }} at {{ game.home_abbr }}? It scores zero for everyone and drops out of every player's possible count, whether or not they picked it. Anyone who picked it keeps their other picks unchanged, and the confidence they staked on it is not reassigned. You can undo this while the week is still live.{% endif %}">
           {% if game.is_void %}Restore{% else %}Void{% endif %}
           <span class="visually-hidden">{{ game.away_abbr }} at {{ game.home_abbr }}</span>
         </button>

@@ -330,6 +330,18 @@ def test_how_it_works_page_renders(client, world):
     assert "Regular Player" in response.text
 
 
+def test_how_it_works_explains_what_voiding_does(client, world):
+    """Phase 3, slate drift incident: "There's an option to void but unsure what the effects
+    are." explained in plain language for players too, not only in the commissioner's own
+    confirmation dialog."""
+    response = client.get("/how-it-works")
+    assert response.status_code == 200
+    text = " ".join(response.text.lower().split())
+    assert "voiding a game scores it zero for everyone" in text
+    assert "drops out of everyone" in text
+    assert "not reassigned" in text
+
+
 def test_contact_page_renders(client, world):
     response = client.get("/contact")
     assert response.status_code == 200
@@ -682,6 +694,18 @@ def test_slate_amend_refused_for_a_regular_player(client, world):
         data={"week_id": world["week_id"], "game_id": world["game_ids"][0], "action": "remove"},
     )
     assert response.status_code == 403
+
+
+def test_slate_editor_void_button_explains_the_consequence_before_it_happens(client, world):
+    """Phase 3, slate drift incident: "There's an option to void but unsure what the effects
+    are." The consequence is spelled out in the confirmation itself (hx-confirm), not assumed
+    knowledge."""
+    _login(client, "boss@example.com")
+    response = client.get(f"/league/slate?week={5}")
+    assert response.status_code == 200
+    assert "scores zero for everyone" in response.text
+    assert "not reassigned" in response.text
+    assert "Restore" in response.text or "hx-confirm" in response.text
 
 
 def test_slate_build_route_ignores_publish_and_no_metered_even_if_posted(client, world):
