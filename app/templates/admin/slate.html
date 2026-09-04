@@ -172,11 +172,18 @@
             <button class="btn btn-secondary" type="submit">Delete this test week</button>
           </form>
         {% endif %}
+        {% if not week.is_test_week %}
+          <a class="btn btn-secondary" href="/league/slate/rebuild?week_id={{ week.id }}">
+            Rebuild this week and reopen picks
+          </a>
+        {% endif %}
       </div>
 
       <p class="form-hint">
         Publishing opens the week for picks. Refresh and score pulls finals from ESPN and rescores
-        the week. Both are free to run and safe to run again.
+        the week. Both are free to run and safe to run again. Rebuild and reopen archives every
+        pick, rebuilds the slate from scratch, and returns the week to draft for review, see
+        "Rebuild this week and reopen picks" above.
         {% if week.is_test_week %}
           Deleting this test week removes its games, picks and entries for good.
         {% endif %}

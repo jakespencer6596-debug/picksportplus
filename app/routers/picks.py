@@ -21,6 +21,7 @@ from app.auth import (
 from app.db import get_db
 from app.models import Game, Pick, Pool, PoolMember, User, Week, WeekEntry
 from app.scoring import PickInput, validate_picks
+from app.services import ingest
 from app.services.preview import get_preview_pool
 from app.templating import render
 
@@ -151,6 +152,13 @@ def picks_page(
     # server side enforcement.
     member = membership_for(db, user, pool)
     payment_blocked = not locked and not player_locked and payment_gate_blocks(member, pool)
+    # Phase 2, slate drift incident: a player should never have to work out from the
+    # standings that their picks were cleared by a commissioner's rebuild. True only until
+    # this player submits a fresh pick for this exact week, see
+    # ingest.player_needs_repick_after_rebuild's own docstring.
+    needs_repick_after_rebuild = week is not None and ingest.player_needs_repick_after_rebuild(
+        db, week, user.id
+    )
 
     return render(
         request,
@@ -162,6 +170,7 @@ def picks_page(
             "locked": locked,
             "player_locked": player_locked,
             "payment_blocked": payment_blocked,
+            "needs_repick_after_rebuild": needs_repick_after_rebuild,
             "locked_at": entry.locked_at if entry else None,
             # n is the target picks a player must submit, not the slate size (games can be
             # bigger, for example 20 games with 15 required). Never hard coded, always the

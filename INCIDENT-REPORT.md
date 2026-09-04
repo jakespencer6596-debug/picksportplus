@@ -17,9 +17,9 @@ Working document for the slate integrity incident. Updated as each phase lands. 
 
 | Phase | Status | Commit |
 |---|---|---|
-| 0. Baseline | done | (this commit) |
-| 1. Freeze at publish, audit trail, doctor drift check | done | see below |
-| 2. Rebuild and reopen, amend a single game | pending | |
+| 0. Baseline | done | `1149fd8` |
+| 1. Freeze at publish, audit trail, doctor drift check | done | `1fbe2a7` |
+| 2. Rebuild and reopen, amend a single game | done | see below |
 | 3. Explain and reverse voiding | pending | |
 | 4. Midweek kickoff warnings, lock policy | pending | |
 | 5. Tidy the slate editor | pending | |
@@ -102,7 +102,20 @@ Phase 11 against production, where the real incident happened.
 
 ### Local (Phase 1)
 
-_See below, filled in after the Phase 1 commit._
+`python -m app.cli doctor --no-probe` against the local dev SQLite database (migrated to the
+new `7f3a9c2e5b1d` head, otherwise empty, 0 users and 0 pools):
+
+```
+No pool exists yet. Run: python -m app.cli seed-admin
+```
+
+Nothing to check locally yet: there is no seeded pool in this working copy's own database.
+The doctor's new "Published slate drift" section only prints once a real pool exists (see
+`app/cli.py`'s `doctor` command); it was exercised directly instead against an in-memory test
+database in `tests/test_ingest.py`
+(`test_published_slate_drift_report_flags_a_week_with_no_history_as_unknown` and
+`test_published_slate_drift_report_detects_real_drift`), both passing. The real check against
+production, where the actual incident happened, is Phase 11's job below.
 
 ### Production (Phase 11)
 

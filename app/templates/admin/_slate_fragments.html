@@ -138,6 +138,30 @@
                   hx-post="/league/slate/game" hx-swap="none">Swap</button>
         {% endif %}
       </form>
+      {% if not editable %}
+        {# Phase 2, slate drift incident: the narrower alternative to a full rebuild. Picks
+           already exist, so the ordinary Remove/Swap above are gone; this bypasses that lock
+           for one game at a time, with the consequence spelled out on the button itself. A
+           full page POST, deliberately not htmx: this is a slower, heavier action than pin or
+           void, never a quiet one-click partial swap. #}
+        <form class="action-form" method="post" action="/league/slate/amend"
+              onsubmit="return confirm('Picks already made on {{ game.away_abbr }} at {{ game.home_abbr }} will stop scoring and drop from those players possible count. Every other pick stays untouched. Continue?');">
+          <input type="hidden" name="week_id" value="{{ week.id }}">
+          <input type="hidden" name="game_id" value="{{ game.id }}">
+          <label class="visually-hidden" for="amend-swap-{{ game.id }}">
+            Amend: swap {{ game.away_abbr }} at {{ game.home_abbr }} for
+          </label>
+          <input class="input input-sm" type="text" inputmode="numeric" id="amend-swap-{{ game.id }}"
+                 name="swap_with" list="swap-candidates" placeholder="Amend: swap it for (optional)"
+                 autocomplete="off">
+          <button class="btn btn-secondary btn-sm" type="submit" name="action" value="swap">
+            Amend: swap
+          </button>
+          <button class="btn btn-secondary btn-sm" type="submit" name="action" value="remove">
+            Amend: remove
+          </button>
+        </form>
+      {% endif %}
     </td>
   </tr>
 {% endmacro %}

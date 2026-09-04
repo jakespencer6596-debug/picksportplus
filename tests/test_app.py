@@ -12,7 +12,7 @@ import re
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import create_engine, select
+from sqlalchemy import create_engine, func, select
 from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
@@ -27,6 +27,7 @@ from app.models import (
     MailLog,
     PasswordResetToken,
     Pick,
+    PickArchive,
     PlatformSetting,
     Pool,
     PoolMember,
@@ -586,6 +587,101 @@ def test_slate_build_route_no_longer_accepts_publish_or_no_metered(client, world
     response = client.post("/league/slate/build", data={"week_number": 9})
     assert response.status_code == 303
     assert response.headers["location"] == "/league/slate?week=9"
+
+
+def test_slate_rebuild_confirm_page_renders_for_commissioner(client, world):
+    _login(client, "boss@example.com")
+    response = client.get(f"/league/slate/rebuild?week_id={world['week_id']}")
+    assert response.status_code == 200
+    assert "Rebuild" in response.text
+
+
+def test_slate_rebuild_confirm_page_refused_for_a_regular_player(client, world):
+    _login(client, "player@example.com")
+    response = client.get(f"/league/slate/rebuild?week_id={world['week_id']}")
+    assert response.status_code == 403
+
+
+def test_slate_rebuild_post_requires_exact_week_number_confirmation(client, world, session_factory):
+    """Step three of the confirmation (SPEC Phase 2): typing the wrong number changes
+    nothing at all, not even a partial rebuild."""
+    _login(client, "player@example.com")
+    client.post("/picks", data=_valid_submission(world["game_ids"]))
+    _login(client, "boss@example.com")
+
+    response = client.post(
+        "/league/slate/rebuild",
+        data={"week_id": world["week_id"], "confirm_week_number": "999"},
+    )
+    assert response.status_code == 303
+
+    db = session_factory()
+    week = db.get(Week, world["week_id"])
+    assert week.status == "open"  # untouched
+    assert db.scalar(select(func.count(Pick.id)).where(Pick.week_id == week.id)) > 0
+    db.close()
+
+
+def test_slate_rebuild_post_archives_picks_and_returns_week_to_draft(
+    client, world, session_factory
+):
+    db = session_factory()
+    week = db.get(Week, world["week_id"])
+    week_number = week.week_number
+    db.close()
+
+    _login(client, "player@example.com")
+    client.post("/picks", data=_valid_submission(world["game_ids"]))
+    _login(client, "boss@example.com")
+
+    response = client.post(
+        "/league/slate/rebuild",
+        data={"week_id": world["week_id"], "confirm_week_number": str(week_number)},
+    )
+    assert response.status_code == 303
+
+    db = session_factory()
+    week = db.get(Week, world["week_id"])
+    assert week.status == "draft"
+    assert db.scalar(select(func.count(Pick.id)).where(Pick.week_id == week.id)) == 0
+    assert db.scalar(select(func.count(PickArchive.id)).where(PickArchive.week_id == week.id)) > 0
+    db.close()
+
+
+def test_slate_rebuild_post_refused_for_a_regular_player(client, world):
+    _login(client, "player@example.com")
+    response = client.post(
+        "/league/slate/rebuild", data={"week_id": world["week_id"], "confirm_week_number": "5"}
+    )
+    assert response.status_code == 403
+
+
+def test_slate_amend_removes_a_game_even_with_picks_already_locked(client, world, session_factory):
+    """The direct fix for "Since people have locked already, I am unable to remove games.":
+    the ordinary remove button is locked once picks exist, amend still works."""
+    game_id = world["game_ids"][0]
+    _login(client, "player@example.com")
+    client.post("/picks", data=_valid_submission(world["game_ids"]))
+    _login(client, "boss@example.com")
+    response = client.post(
+        "/league/slate/amend",
+        data={"week_id": world["week_id"], "game_id": game_id, "action": "remove"},
+    )
+    assert response.status_code == 303
+
+    db = session_factory()
+    game = db.get(Game, game_id)
+    assert game.in_slate is False
+    db.close()
+
+
+def test_slate_amend_refused_for_a_regular_player(client, world):
+    _login(client, "player@example.com")
+    response = client.post(
+        "/league/slate/amend",
+        data={"week_id": world["week_id"], "game_id": world["game_ids"][0], "action": "remove"},
+    )
+    assert response.status_code == 403
 
 
 def test_slate_build_route_ignores_publish_and_no_metered_even_if_posted(client, world):

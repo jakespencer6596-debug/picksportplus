@@ -31,11 +31,13 @@ from app.config import settings
 from app.models import (
     Game,
     Pick,
+    PickArchive,
     Pool,
     PoolMember,
     SlateChange,
     User,
     Week,
+    WeekEntry,
     utcnow,
 )
 from app.providers import cfbd, espn, odds_api
@@ -1139,9 +1141,14 @@ def remove_from_slate(
     *,
     actor_user_id: int | None = None,
     source: str = "commissioner",
+    bypass_lock: bool = False,
 ) -> Game:
+    """bypass_lock (Phase 2, slate drift incident) is only ever True from amend_published_game
+    below, the commissioner's deliberate, explained "amend a single game" tool: the ordinary
+    Remove button on the slate editor still refuses once picks exist (SPEC.md Section 6a),
+    this is the one path that is allowed to override that."""
     game = _game_in_week(db, week, game_id)
-    if not can_resize_slate(db, week):
+    if not bypass_lock and not can_resize_slate(db, week):
         raise SlateLocked(
             "Picks already exist for this week, so the game count is fixed. "
             "Void the game instead."
@@ -1173,9 +1180,14 @@ def swap_slate_game(
     *,
     actor_user_id: int | None = None,
     source: str = "commissioner",
+    bypass_lock: bool = False,
 ) -> tuple[Game, Game]:
-    """Take one game off the slate and put another on, keeping the count the same."""
-    if not can_resize_slate(db, week):
+    """Take one game off the slate and put another on, keeping the count the same.
+
+    bypass_lock: see remove_from_slate's own docstring, same rule, same one caller
+    (amend_published_game).
+    """
+    if not bypass_lock and not can_resize_slate(db, week):
         raise SlateLocked(
             "Picks already exist for this week, so the slate cannot be changed. "
             "You can still void a game."
@@ -1365,6 +1377,148 @@ def _game_in_week(db: Session, week: Week, game_id: int) -> Game:
     if game is None or game.week_id != week.id:
         raise ValueError("That game is not part of this week.")
     return game
+
+
+# Rebuild and reopen a published week (Phase 2, slate drift incident) ------------------------
+#
+# The commissioner's own chosen remedy for Week 1: "It's pulling in Wednesday and Thursday NFL
+# games... Since people have locked already, I am unable to remove games." A clean rebuild
+# with everyone re-picking, but destructive to live player data, so it gets real guardrails: a
+# three-step confirmation in the router/template (app/routers/admin.py), and here, an archive
+# that never silently deletes.
+
+
+@dataclass
+class RebuildResult:
+    picks_archived: int
+    build_report: IngestReport
+
+
+def amend_published_game(
+    db: Session,
+    week: Week,
+    game_id: int,
+    action: str,
+    *,
+    swap_with_id: int | None = None,
+    actor_user_id: int | None = None,
+) -> tuple[Game, int]:
+    """The narrower tool a full rebuild should not have to be the only option for: swap or
+    remove ONE game on a slate that already has picks, which the ordinary Remove/Swap buttons
+    on the slate editor refuse outright (SPEC.md Section 6a, can_resize_slate). Reuses
+    remove_from_slate/swap_slate_game with bypass_lock=True, so the audit trail, lock recompute
+    and midweek-ack clearing all stay identical to an ordinary edit; the only thing different
+    is that the lock is bypassed. A pick on the removed game is not deleted and not specially
+    marked: app.scoring.score_week already ignores a pick whose game_id has left the slate
+    ("the game left the slate"), which is exactly the described effect, scores zero and drops
+    out of that player's own possible count, every other pick of theirs untouched. Returns the
+    affected game and how many picks were on it (before the change), purely for the
+    commissioner-facing flash message.
+    """
+    game = _game_in_week(db, week, game_id)
+    affected = int(db.scalar(select(func.count(Pick.id)).where(Pick.game_id == game.id)) or 0)
+    if action == "remove":
+        remove_from_slate(
+            db, week, game_id, actor_user_id=actor_user_id, source="commissioner", bypass_lock=True
+        )
+    elif action == "swap":
+        if swap_with_id is None:
+            raise ValueError("Choose a game to swap in.")
+        swap_slate_game(
+            db,
+            week,
+            game_id,
+            swap_with_id,
+            actor_user_id=actor_user_id,
+            source="commissioner",
+            bypass_lock=True,
+        )
+    else:
+        raise ValueError("Unknown amend action.")
+    return game, affected
+
+
+def rebuild_and_reopen_week(
+    db: Session,
+    pool: Pool,
+    week: Week,
+    *,
+    actor_user_id: int,
+) -> RebuildResult:
+    """Archive every pick, delete the live picks and week entries, rebuild the slate from
+    current data, and return the week to draft for the commissioner to review before
+    republishing (never auto-published, see app/routers/admin.py). Safe to call on a week with
+    zero picks: the archive loop is simply empty and Week.rebuilt_at is left untouched, since
+    there is nothing for a player to be notified about and no "your picks were cleared" banner
+    to show when nobody had picked yet.
+    """
+    picks = list(db.scalars(select(Pick).where(Pick.week_id == week.id)))
+    archived = 0
+    for pick in picks:
+        db.add(
+            PickArchive(
+                week_id=week.id,
+                user_id=pick.user_id,
+                game_id=pick.game_id,
+                picked_team=pick.picked_team,
+                confidence=pick.confidence,
+                original_submitted_at=pick.created_at,
+                reason="rebuild",
+            )
+        )
+        archived += 1
+    db.flush()
+    for pick in picks:
+        db.delete(pick)
+    for entry in db.scalars(select(WeekEntry).where(WeekEntry.week_id == week.id)):
+        db.delete(entry)
+    db.flush()
+
+    week.status = "draft"
+    if archived:
+        week.rebuilt_at = utcnow()
+    db.flush()
+
+    build_report = build_slate(
+        db,
+        pool,
+        pool.season_year,
+        week.week_number,
+        publish=False,
+        actor_user_id=actor_user_id,
+        source="commissioner",
+    )
+
+    # A deliberate, explicit audit row for the rebuild action itself (in addition to whatever
+    # build_slate's own selection-diff logic above may have already written): the action of
+    # archiving picks and resetting the week to draft is significant on its own, even in the
+    # rare case the fresh candidate pool happens to select the exact same games again.
+    _record_slate_change(
+        db,
+        week,
+        action="rebuilt",
+        game_id=None,
+        before={"picks_archived": archived},
+        after={"games_selected": build_report.selected},
+        actor_user_id=actor_user_id,
+        source="commissioner",
+    )
+    return RebuildResult(picks_archived=archived, build_report=build_report)
+
+
+def player_needs_repick_after_rebuild(db: Session, week: Week, user_id: int) -> bool:
+    """True when this player should see the "your picks were cleared" banner on /picks
+    (Phase 2): the week carries a rebuild timestamp and this player has not yet submitted a
+    fresh pick since. Once they save any pick, this naturally goes False again without needing
+    to explicitly clear Week.rebuilt_at anywhere, which stays as a permanent, honest record
+    that the week was rebuilt at least once."""
+    if week.rebuilt_at is None:
+        return False
+    return not bool(
+        db.scalar(
+            select(func.count(Pick.id)).where(Pick.week_id == week.id, Pick.user_id == user_id)
+        )
+    )
 
 
 def _aware(value: dt.datetime) -> dt.datetime:
@@ -1686,6 +1840,57 @@ def _notify_week_published(db: Session, week: Week) -> list[str]:
     return warnings
 
 
+def _notify_rebuilt_week_republished(db: Session, week: Week) -> list[str]:
+    """The email Phase 2's "rebuild and reopen" tool promises every member, unconditionally,
+    never gated on Pool.notify_week_published the way an ordinary publish is: a player whose
+    picks were just deleted out from under them needs to hear about it regardless of whether
+    the commissioner has opted into the routine "week is open" notice. On any send failure
+    this returns a final, clearly marked warning carrying the whole subject and body so the
+    commissioner has real copyable text to send by hand, never a silent gap (see
+    INCIDENT-REPORT.md: a silent failure mode is exactly what caused the original incident).
+    """
+    pool = week.pool
+    rows = db.execute(
+        select(PoolMember, User)
+        .join(User, User.id == PoolMember.user_id)
+        .where(PoolMember.pool_id == pool.id, User.is_active.is_(True))
+    ).all()
+    if not rows:
+        return []
+
+    lock_text = fmt_kickoff_long(week.lock_at, pool.timezone) if week.lock_at else "soon"
+    subject = f"Updated: the Week {week.week_number} slate changed, {pool.name}"
+    body = (
+        "Hey,\n\n"
+        f"The Week {week.week_number} slate for {pool.name} was amended and your previous "
+        f"picks for it were cleared. Submit new picks before the new lock time.\n\n"
+        f"Picks lock {lock_text}.\n\n"
+        f"{settings.base_url}/picks"
+    )
+    warnings: list[str] = []
+    any_failed = False
+    for _member, player in rows:
+        try:
+            mail.send(
+                db,
+                to=player.email,
+                subject=subject,
+                html=mail.text_to_html(body),
+                text=body,
+                kind="week_rebuilt",
+                actor_key=f"user:{player.id}",
+            )
+        except mail.MailError as exc:
+            any_failed = True
+            warnings.append(f"Could not email {player.email} about week {week.week_number}: {exc}")
+    if any_failed:
+        warnings.append(
+            "Mail did not reach everyone. Copy this message and send it yourself:\n\n"
+            f"Subject: {subject}\n\n{body}"
+        )
+    return warnings
+
+
 def publish_week(db: Session, week: Week) -> list[str]:
     span = slate_span(db, week)
     if span is not None:
@@ -1695,6 +1900,13 @@ def publish_week(db: Session, week: Week) -> list[str]:
     week.status = "open"
     week.published_at = utcnow()
     db.flush()
+    # A week carrying Week.rebuilt_at (Phase 2, slate drift incident) is being republished
+    # after a "rebuild and reopen" that actually archived picks: every member gets the amended-
+    # slate notice instead of, never in addition to, the routine opt-in week-published one,
+    # since the two would otherwise double up the moment a rebuilt pool also has
+    # notify_week_published on.
+    if week.rebuilt_at is not None:
+        return _notify_rebuilt_week_republished(db, week)
     return _notify_week_published(db, week)
 
 

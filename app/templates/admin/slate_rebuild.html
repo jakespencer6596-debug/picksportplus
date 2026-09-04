@@ -1,0 +1,104 @@
+{% extends "base.html" %}
+{% import "components/icons.html" as ic %}
+{% block title %}Rebuild {{ week.label }}. {{ APP_NAME }}{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <div>
+    <p class="eyebrow">Commissioner</p>
+    <h1 class="page-title">Rebuild {{ week.label }} and reopen picks</h1>
+  </div>
+</div>
+
+<section class="section">
+  <div class="flash flash-error" role="alert">
+    {{ ic.icon("alert", 18) }}
+    <span>
+      This is destructive to live player data. Read every line below before typing the
+      confirmation.
+    </span>
+  </div>
+
+  <div class="card">
+    <div class="card-head"><h3>What will happen</h3></div>
+    <div class="card-body stack">
+      <p>
+        {% if pick_count %}
+          <strong>{{ pick_count }} {{ pick_count | pluralize("player has", "players have") }}
+          already submitted picks</strong> for {{ week.label }}. Every one of those picks will
+          be archived, never destroyed, then deleted from the live picks table.
+        {% else %}
+          Nobody has submitted picks for {{ week.label }} yet, so there is nothing to archive.
+        {% endif %}
+      </p>
+      <ol>
+        <li>Every existing pick for this week is copied into an archive table, then removed
+          from the live table. It is never permanently destroyed; it can still be looked up
+          by hand afterward.</li>
+        <li>The slate is rebuilt from current data, the same closest-games selection an
+          ordinary build uses.</li>
+        <li>The week goes back to draft. It is <strong>not</strong> published automatically.
+          You review the new slate and publish it yourself when you are ready.</li>
+        <li>The moment you publish it, every member gets an email that the slate changed,
+          their previous picks were cleared, and they need to submit again by the new lock
+          time. If mail fails for anyone, you will see a copyable message to send by hand.</li>
+      </ol>
+      <p class="form-hint">
+        A narrower alternative: if only one game needs to change, use "Amend this game" on the
+        slate editor instead. It voids only the picks on that one game and leaves the rest of
+        the slate and every other player's pick alone.
+      </p>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-head"><h3>Current slate, about to be rebuilt</h3></div>
+    <div class="card-body">
+      {% if on_slate %}
+        <div class="table-wrap">
+          <table class="table">
+            <thead>
+              <tr><th scope="col">Matchup</th><th scope="col">League</th><th scope="col">Kickoff</th></tr>
+            </thead>
+            <tbody>
+              {% for game in on_slate %}
+                <tr>
+                  <td data-label="Matchup">{{ game.away_abbr }} at {{ game.home_abbr }}</td>
+                  <td data-label="League">{{ game.league | upper }}</td>
+                  <td data-label="Kickoff">{{ game.start_time | kickoff_long(pool.timezone) }}</td>
+                </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      {% else %}
+        <p class="muted">Nothing is currently on the slate.</p>
+      {% endif %}
+      <p class="form-hint">
+        The exact replacement slate cannot be shown until the rebuild actually runs: it reads
+        today's schedule and lines fresh from ESPN, the same as any other build.
+      </p>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-head"><h3>Confirm</h3></div>
+    <div class="card-body">
+      <form method="post" action="/league/slate/rebuild" class="stack">
+        <input type="hidden" name="week_id" value="{{ week.id }}">
+        <div class="field">
+          <label class="field-label" for="confirm_week_number">
+            Type the week number ({{ week.week_number }}) to confirm
+          </label>
+          <input class="input num" type="text" id="confirm_week_number" name="confirm_week_number"
+                 inputmode="numeric" autocomplete="off" required>
+        </div>
+        <div class="row">
+          <button class="btn btn-primary" type="submit">Rebuild {{ week.label }} and reopen picks</button>
+          <a class="btn btn-secondary" href="/league/slate?week={{ week.week_number }}">Cancel</a>
+        </div>
+      </form>
+    </div>
+  </div>
+</section>
+{% endblock %}

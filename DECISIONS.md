@@ -4411,3 +4411,48 @@ selection to have changed from): a commissioner who publishes a week and later a
 week ever get rebuilt before I published it" deserves a real answer, and the doctor check
 above needs at least one `"rebuilt"` row to exist before it can say anything useful about a
 week that gets published without ever having a picks-based freeze accidentally save it.
+
+**Phase 2, "amend a single game" bypasses `can_resize_slate` rather than replacing it.** The
+commissioner's literal complaint was "since people have locked already, I am unable to remove
+games," which is `can_resize_slate` (SPEC.md Section 6a) doing exactly what it was built to
+do. Weakening that rule outright for everyone would defeat its own purpose (keeping every
+player scored against the same slate by default). Instead `remove_from_slate`/
+`swap_slate_game` gained a `bypass_lock` keyword, `False` everywhere except the one new
+`amend_published_game` caller, so the ordinary Remove/Swap buttons on the slate editor are
+untouched and still refuse post-pick, while a deliberate, separately confirmed "Amend" action
+can override it one game at a time.
+
+**Phase 2, an amended pick is left in the `picks` table, not deleted or specially marked.**
+`app/scoring.py`'s own module docstring already states the rule this leans on: "Picks
+referring to a game_id not in outcomes are ignored (the game left the slate)." Once
+`amend_published_game` sets `Game.in_slate = False`, every pick on that game already stops
+counting the next time the week is scored, with the exact effect the spec describes (scores
+zero, drops from that player's own possible count, every other pick untouched) for free, no
+new column or deletion path needed. Deleting the pick row outright was rejected: nothing else
+in this codebase deletes a real submission a player actually made, and the "archive, never
+silently delete" instinct that governs the bigger rebuild tool applies here too, just via a
+different, already-existing mechanism (the pick row itself, quietly excluded, rather than a
+copy in a separate archive table).
+
+**Phase 2, the rebuild confirmation shows the CURRENT slate, not a live preview of the
+proposed new one.** Computing a genuine preview would mean either running a real ESPN
+fetch/spread-resolution pass with no commit (extra complexity for a confirmation screen, and
+still spends whatever metered budget the real rebuild would) or duplicating slate.py's
+selection logic against stale, already-written Game rows (which could show a preview that
+does not match what the real rebuild actually produces a moment later, and lines move between
+confirming and clicking Rebuild regardless). The page instead shows the exact games about to
+be archived away plus the archive/rebuild/redraft/notify sequence in plain language, which is
+what the commissioner actually needs to make an informed choice, and is honest about the one
+thing it cannot promise: "The exact replacement slate cannot be shown until the rebuild
+actually runs."
+
+**Phase 2, the rebuild-republished notification ignores `Pool.notify_week_published`.** The
+routine "week is open" email is opt-in, off by default (Phase 7 remediation), because most
+commissioners publish routinely and do not want an email every single week. A rebuild
+republish is a different, much rarer event: it exists specifically because something already
+went wrong once (a bad slate, or the commissioner correcting a mistake) and every affected
+player's picks were just deleted out from under them. Gating that behind the same opt-in
+would mean a pool that never turned the routine notice on could silently clear everyone's
+picks with no one finding out except by opening the app, exactly the kind of silent failure
+this whole incident is about. `publish_week` branches on `Week.rebuilt_at` instead, which is
+only ever set by an actual "rebuild and reopen," never by an ordinary build.

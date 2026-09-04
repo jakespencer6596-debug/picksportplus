@@ -1304,6 +1304,111 @@ def slate_lock(
     return _redirect(f"/league/slate?week={row.week_number}")
 
 
+# Rebuild and reopen, and amend a single game (Phase 2, slate drift incident) ----------------
+
+
+@router.get("/slate/rebuild")
+def slate_rebuild_confirm(
+    request: Request,
+    week_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_user),
+    pool: Pool = Depends(require_commissioner),
+):
+    """Step one and two of the three-step confirmation (SPEC Phase 2): what will happen, in
+    plain language, including how many players have already submitted, plus the current slate
+    so a commissioner can see exactly what is about to be archived and rebuilt. Step three (type
+    the week number) lives on the confirm form this page renders, POSTing to this same path."""
+    row = _week_for_action(db, pool, week_id)
+    on_slate = sorted(
+        [g for g in db.scalars(select(Game).where(Game.week_id == row.id)) if g.in_slate],
+        key=lambda g: (g.slate_rank or 999),
+    )
+    pick_count = (
+        db.scalar(select(func.count(func.distinct(Pick.user_id))).where(Pick.week_id == row.id))
+        or 0
+    )
+    return render(
+        request,
+        "admin/slate_rebuild.html",
+        {"week": row, "on_slate": on_slate, "pick_count": pick_count},
+        **_base(db, user, pool),
+    )
+
+
+@router.post("/slate/rebuild")
+def slate_rebuild(
+    request: Request,
+    week_id: int = Form(...),
+    confirm_week_number: str = Form(""),
+    db: Session = Depends(get_db),
+    user: User = Depends(require_user),
+    pool: Pool = Depends(require_commissioner),
+):
+    row = _week_for_action(db, pool, week_id)
+    if confirm_week_number.strip() != str(row.week_number):
+        flash(
+            request,
+            f"Type {row.week_number} exactly to confirm the rebuild. Nothing was changed.",
+            "error",
+        )
+        return _redirect(f"/league/slate/rebuild?week_id={row.id}")
+
+    result = ingest.rebuild_and_reopen_week(db, pool, row, actor_user_id=user.id)
+    db.commit()
+    noun = "pick" if result.picks_archived == 1 else "picks"
+    flash(
+        request,
+        f"Week {row.week_number} rebuilt. {result.picks_archived} {noun} archived. "
+        f"{result.build_report.selected} games selected. Review it below, then publish when "
+        "you are ready, the week was NOT auto-published.",
+        "ok",
+    )
+    for warning in result.build_report.warnings:
+        flash(request, warning, "error")
+    return _redirect(f"/league/slate?week={row.week_number}")
+
+
+@router.post("/slate/amend")
+def slate_amend(
+    request: Request,
+    week_id: int = Form(...),
+    game_id: int = Form(...),
+    action: str = Form(...),
+    swap_with: str = Form(""),
+    db: Session = Depends(get_db),
+    user: User = Depends(require_user),
+    pool: Pool = Depends(require_commissioner),
+):
+    """The narrower alternative to a full rebuild (Phase 2): swap or remove ONE game on a
+    slate that already has picks, which the ordinary Remove/Swap buttons refuse. This is the
+    direct fix for the commissioner's own words: "Since people have locked already, I am
+    unable to remove games." """
+    row = _week_for_action(db, pool, week_id)
+    try:
+        swap_with_id = int(swap_with.strip()) if swap_with.strip() else None
+        game, affected = ingest.amend_published_game(
+            db, row, game_id, action, swap_with_id=swap_with_id, actor_user_id=user.id
+        )
+    except ValueError as exc:
+        db.rollback()
+        flash(request, str(exc), "error")
+        return _redirect(f"/league/slate?week={row.week_number}")
+    db.commit()
+    if affected:
+        noun = "pick" if affected == 1 else "picks"
+        flash(
+            request,
+            f"{game.away_abbr} at {game.home_abbr} amended. {affected} {noun} on that game no "
+            "longer score, and dropped from those players' possible count. Every other pick is "
+            "untouched.",
+            "ok",
+        )
+    else:
+        flash(request, f"{game.away_abbr} at {game.home_abbr} amended. Nobody had picked it.", "ok")
+    return _redirect(f"/league/slate?week={row.week_number}")
+
+
 # Test week -------------------------------------------------------------------
 
 
