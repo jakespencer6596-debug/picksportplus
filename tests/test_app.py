@@ -789,6 +789,15 @@ def test_slate_editor_shows_midweek_warning_as_soon_as_selected(client, session_
     assert "kicks off before Saturday" in response.text
 
 
+def test_slate_editor_collapses_row_actions_into_one_menu(client, world):
+    """Phase 5, slate drift incident: "a single action menu could be cleaner." A native
+    <details> disclosure per row, closed by default, no JavaScript required."""
+    _login(client, "boss@example.com")
+    response = client.get("/league/slate?week=5")
+    assert response.status_code == 200
+    assert "<details><summary>Actions</summary>" in response.text
+
+
 def test_settings_lock_policy_saves(client, world):
     _login(client, "boss@example.com")
     response = client.post(

@@ -99,6 +99,12 @@
       <span class="badge{% if game.pinned %} badge-pinned{% endif %}">{{ reason }}</span>
     </td>
     <td data-label="Actions" class="cell-actions">
+      {# Phase 5, slate drift incident: "a lot going on with lines, all the different
+         buttons... a single action menu could be cleaner." A native <details> disclosure,
+         closed by default, one per row: every button below still works exactly as it always
+         has (same forms, same hx-* attributes, same no-JS fallback), only the default visual
+         state changes. No JavaScript is needed to open it. #}
+<details><summary>Actions</summary>
       <form class="action-form" method="post" action="/league/slate/game">
         <input type="hidden" name="week_id" value="{{ week.id }}">
         <input type="hidden" name="game_id" value="{{ game.id }}">
@@ -169,6 +175,7 @@
           </button>
         </form>
       {% endif %}
+</details>
     </td>
   </tr>
 {% endmacro %}
@@ -177,6 +184,7 @@
   <tr id="candidate-row-{{ game.id }}">
     {{ game_cells(game, tz) }}
     <td data-label="Actions" class="cell-actions">
+<details><summary>Actions</summary>
       <form class="action-form" method="post" action="/league/slate/game">
         <input type="hidden" name="week_id" value="{{ week.id }}">
         <input type="hidden" name="game_id" value="{{ game.id }}">
@@ -208,6 +216,7 @@
           Set line<span class="visually-hidden"> for {{ game.away_abbr }} at {{ game.home_abbr }}</span>
         </button>
       </form>
+</details>
     </td>
   </tr>
 {% endmacro %}

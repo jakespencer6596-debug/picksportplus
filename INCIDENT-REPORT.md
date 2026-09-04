@@ -20,8 +20,8 @@ Working document for the slate integrity incident. Updated as each phase lands. 
 | 0. Baseline | done | `1149fd8` |
 | 1. Freeze at publish, audit trail, doctor drift check | done | `1fbe2a7` |
 | 2. Rebuild and reopen, amend a single game | done | see below |
-| 3. Explain and reverse voiding | pending | |
-| 4. Midweek kickoff warnings, lock policy | pending | |
+| 3. Explain and reverse voiding | done | `90f1342` |
+| 4. Midweek kickoff warnings, lock policy | done | `9300d85` |
 | 5. Tidy the slate editor | pending | |
 | 6. League chat and member email export | pending | |
 | 7. Regression sweep | pending | |

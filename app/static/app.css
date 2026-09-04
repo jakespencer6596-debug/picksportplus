@@ -1455,6 +1455,31 @@ textarea[disabled] {
   margin: 0;
 }
 
+/* Phase 5, slate drift incident: one action menu per slate/candidate row instead of every
+   button competing for attention at once. Native <details>, no JavaScript required. Bare tag
+   selectors, no extra class, to keep the slate editor's own byte budget (150KB, see
+   PERF-REPORT.md and tests/test_slate_performance.py) intact across 20+ rows. */
+.cell-actions > details > summary {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  min-height: var(--tap);
+  padding: var(--space-1) var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  cursor: pointer;
+  list-style: none;
+  font-family: var(--font-body);
+  font-size: var(--fs-sm);
+}
+.cell-actions > details > summary::-webkit-details-marker { display: none; }
+.cell-actions > details > summary::after { content: " \25BE"; }
+.cell-actions > details[open] > summary::after { content: " \25B4"; }
+.cell-actions > details > form {
+  margin-top: var(--space-2);
+}
+
 /* Dense controls to match .btn-sm. Like .btn-sm they hold the 44px tap floor
    on phone widths and only relax to 36px at 768px, where the pointer is
    normally a mouse. */
