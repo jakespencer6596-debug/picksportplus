@@ -683,6 +683,66 @@ def test_run_cron_exits_non_zero_when_a_provider_warning_is_raised(isolated_db, 
     assert exc_info.value.exit_code == 1
 
 
+def test_run_cron_does_not_fail_just_because_a_published_slate_is_frozen(isolated_db, monkeypatch):
+    """Regression test for a real bug found live (Phase 11, slate drift incident, see
+    INCIDENT-REPORT.md): the very first live run after the incident fix deployed showed
+    "Your cronjob failed" in Render's own dashboard, purely because a published week's own
+    "the slate is frozen, nothing to do" notice was being written to IngestReport.warnings,
+    which _cron_pass treats as a real provider failure. That notice is the intended, healthy
+    outcome this whole incident exists to guarantee, and once a week is published it now
+    fires on every single cron pass for the rest of that week's life, which would otherwise
+    turn every future run for that pool into a false "failed" run for as long as the week
+    stays published, exactly the noise that makes a real outage easy to miss. It belongs in
+    IngestReport.notes, not .warnings.
+    """
+    import app.services.ingest as ingest_module
+    import app.services.results as results_module
+    from app.cli import run_cron
+    from app.services.ingest import IngestReport
+    from app.services.results import ResultsReport, ScoreReport
+
+    session = isolated_db()
+    try:
+        pool = Pool(
+            name="Real Pool",
+            join_code="FROZENPOOL",
+            season_year=2026,
+            sports=["nfl"],
+            timezone="America/New_York",
+            current_week=1,
+        )
+        session.add(pool)
+        session.flush()
+        week = Week(pool_id=pool.id, season_year=2026, week_number=1, label="Week 1", status="open")
+        session.add(week)
+        session.commit()
+    finally:
+        session.close()
+
+    def _fake_sync_week(db, pool, *a, **k):
+        report = IngestReport(week_number=1, season_year=2026)
+        report.locked_out = True
+        report.notes.append(
+            "Week 1 is already open, so its game selection was left alone. Scores, status "
+            "and lines still refreshed."
+        )
+        return report
+
+    monkeypatch.setattr(ingest_module, "sync_week", _fake_sync_week)
+    monkeypatch.setattr(
+        results_module,
+        "fetch_results",
+        lambda db, pool, week: ResultsReport(week_number=week.week_number),
+    )
+    monkeypatch.setattr(
+        results_module,
+        "score_week_for_pool",
+        lambda db, pool, week, actor=None: ScoreReport(week_number=week.week_number),
+    )
+
+    run_cron(pool_id=None)  # must not raise typer.Exit
+
+
 def test_payouts_preset_seeds_the_known_ladder_and_is_idempotent(isolated_db):
     from app.cli import payouts_preset_cmd
 

@@ -1078,6 +1078,42 @@ def test_cron_never_moves_a_published_slates_game_selection(db, monkeypatch):
     assert report.locked_out is True
 
 
+def test_frozen_week_notice_is_a_note_never_a_warning(db, monkeypatch):
+    """Regression test for a real bug found live (Phase 11, see INCIDENT-REPORT.md): the
+    frozen-week notice used to land in report.warnings, which app.cli._cron_pass treats as a
+    real provider failure (exits run-cron non-zero, shows "failed" on Render's own cron
+    dashboard). A published week freezing is the intended, healthy outcome this incident
+    exists to guarantee, not a failure, and it now fires on every single cron pass for the
+    rest of a published week's life, so it belongs in .notes."""
+    pool = _pool(db, num_games_per_week=1, target_nfl=0, target_ncaaf=1, sports=["ncaaf"])
+    week = _week_row(db, pool)
+    week.status = "open"
+    db.add(
+        Game(
+            week_id=week.id,
+            league="ncaaf",
+            espn_event_id="evt1",
+            start_time=dt.datetime(2026, 9, 12, 17, 0, tzinfo=UTC),
+            home_team="Duke",
+            away_team="Wake Forest",
+            home_abbr="DUKE",
+            away_abbr="WAKE",
+            canonical_home_key=canonical_key("Duke", "ncaaf"),
+            canonical_away_key=canonical_key("Wake Forest", "ncaaf"),
+            in_slate=True,
+            slate_rank=1,
+        )
+    )
+    db.flush()
+    monkeypatch.setattr(ingest, "fetch_candidates", lambda db, pool, week, **kwargs: ([], []))
+
+    report = ingest.build_slate(db, pool, pool.season_year, week.week_number, allow_metered=False)
+
+    assert report.locked_out is True
+    assert any("game selection was left" in n for n in report.notes)
+    assert not any("game selection was left" in w for w in report.warnings)
+
+
 def test_published_week_still_refreshes_scores_status_and_lines_on_cron(db, monkeypatch):
     """What the freeze does NOT stop: game status, scores and (via a real resolve_spreads
     pass) display-only spread lines all still refresh every cron run."""

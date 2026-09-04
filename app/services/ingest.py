@@ -1662,7 +1662,16 @@ def _refresh_frozen_week(
     guard still leaves the other one standing between a cron pass and a published slate.
     """
     report.locked_out = True
-    report.warnings.append(
+    # A note, never a warning (Phase 11 remediation, found live: see INCIDENT-REPORT.md). A
+    # published week staying frozen is the intended, healthy outcome this whole incident
+    # exists to guarantee, not a problem. Before this fix, a warning here (the exact wording
+    # this replaces, keyed on week_has_picks) already made run-cron report a "failed" run for
+    # this alone (app/cli.py's _cron_pass treats every IngestReport.warnings entry as reason
+    # to exit non-zero); this fix makes the freeze permanent for the rest of a published
+    # week's life, which would otherwise have turned every single future cron run for that
+    # pool into a false "failed" run in Render's own dashboard for as long as the week stays
+    # published, exactly the kind of noise that makes a real provider outage easy to miss.
+    report.notes.append(
         f"Week {week.week_number} is already {week.status}, so its game selection was left "
         'alone. Scores, status and lines still refreshed. Use "Rebuild this week and reopen '
         'picks" or amend a single game if the slate itself needs to change.'
