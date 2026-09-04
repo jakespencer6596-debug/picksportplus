@@ -4503,6 +4503,20 @@ over budget by about 2.8KB purely from the added attribute text repeated 40 time
 Removing the class and targeting the existing `.cell-actions` column instead recovered that
 margin without changing anything visual.
 
+**Phase 11, the page weight budget test failed on a later gate run with no template changes
+in between.** `test_slate_editor_page_weight_budget` uses real wall-clock `dt.datetime.now()`
+for its fixture's kickoff times, so the exact rendered byte count drifts by a handful of bytes
+as the day's date and hour change (a two-digit versus one-digit hour or day-of-month, mostly).
+Phase 5 and 6 had already trimmed this page's margin down to single digits of headroom against
+the fixed 150KB budget (SPEC.md Section 6a), so a later run of the identical test suite, same
+code, later in the same real day, failed by 32 bytes with nothing in the diff to blame. Rather
+than treat the budget itself as negotiable (it is a SPEC requirement, not a suggestion) or
+patch the test to use a fixed date (a bigger, riskier change to a passing test for a problem
+that is really about this page's own weight), trimmed real bytes back out of `slate.html`: a
+redundant sentence explaining what "Rebuild this week and reopen picks" does, when the button
+sitting right above it already says so and the rebuild confirmation page explains the whole
+flow in full. Restores real margin rather than another razor-thin pass.
+
 **Phase 10, a real deploy failure found and fixed live: `sa.text('0')` is not a valid
 `BOOLEAN` default on Postgres.** The first push to `picksportplus-live` failed its migration
 outright: `psycopg.errors.DatatypeMismatch: column "pinned" is of type boolean but default

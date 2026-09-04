@@ -27,8 +27,8 @@ Working document for the slate integrity incident. Updated as each phase lands. 
 | 7. Regression sweep | done | see below |
 | 8. Full verification | done | see below |
 | 9. Documentation | done | `abd66f5` |
-| 10. Merge, push, deploy | pending | |
-| 11. Verify on the live site | pending | |
+| 10. Merge, push, deploy | done | `69b15b3` (merge), `be58419`, `fa0272a`, `6204e93` (three live-found deploy/cron fixes) |
+| 11. Verify on the live site | done | see below |
 
 Commit SHAs are filled in as each phase's commit actually lands (see `git log`).
 
@@ -298,21 +298,215 @@ recorded above rather than silently checked off.
 ## Test count
 
 - Before: 1151
-- After: 1216 (+65), plus 22 JS tests (`npm test`, unchanged in count from before this
+- After: 1219 (+68: 1216 from the Phase 8 checkpoint, +3 more from the two live-found deploy
+  fixes in Phase 10/11), plus 22 JS tests (`npm test`, unchanged in count from before this
   incident's work, all still passing).
 
 ## Live deploy status and Phase 11 results
 
-_Filled in during Phase 10/11._
+**Merge.** `slate-integrity` branched from `main` at `3627fef` and `main` had not moved since;
+`git pull --ff-only` was a no-op and `git merge --no-ff` produced a clean merge with zero
+conflicts across all 30 changed files (`69b15b3`).
+
+**Push and deploy, attempt 1.** `git push origin main` triggered `picksportplus-live`'s
+auto-deploy (`dep-dade6r3tqb8s73cnq6d0`). The migration failed outright:
+`psycopg.errors.DatatypeMismatch: column "pinned" is of type boolean but default expression
+is of type integer`, on the new `league_messages` table. `sa.text('0')` is a valid boolean
+default on SQLite (no real boolean type there) but not on Postgres, which enforces the
+declared type strictly; every local test, including a real SQLite migration round trip,
+passed anyway because SQLite cannot catch this class of bug. Postgres runs one revision's DDL
+in a single transaction ("Will assume transactional DDL" in the deploy log), so the failure
+rolled back cleanly: nothing from this revision persisted on `picksportplus-live-db`, and
+Render kept the previous, working release live and serving real traffic throughout. Zero
+downtime, zero partial-migration risk.
+
+**Fix forward, attempt 2.** Changed the column's default to `sa.false()`, matching every other
+boolean column added by an earlier migration in this codebase. Verified this time against the
+actual Postgres dialect offline (`alembic upgrade ... --sql` against a
+`postgresql+psycopg://` URL, which compiles the exact DDL with no real server needed) rather
+than another SQLite-only round trip. Committed (`be58419`) and pushed; the resulting deploy
+(`dep-dade9ubm8hqs73fdd3dg`) went live in about a minute. Boot log: `alembic upgrade head`
+ran the slate-integrity migration clean, `database dialect: postgresql` (no ephemeral storage
+warning), `seed-admin` recognized the existing admin and the real "Fatrunner" pool, and
+"Available at your primary URL https://picksportplus.com + 2 more domains."
+
+**Health check.** `GET /health` returned `200` on both `picksportplus-live.onrender.com` and
+the custom domain `picksportplus.com`.
+
+**Phase 11, live verification.**
+
+**Two more real bugs found and fixed live, both within the first hour of deploy, both direct
+consequences of this incident's own fix (never present before it):**
+
+1. **`run-cron` failed every hour because the frozen-week notice was a warning.**
+   `picksportplus-live-cron`'s dashboard showed every run failed since August 16 (the last
+   real success): "Your cronjob failed because of an error: Exited with status 1." The old
+   trigger's own message ("Picks have already been made for this week...") had always been a
+   `report.warnings` entry, which `app.cli._cron_pass` treats as a real provider failure. That
+   was already wrong before this incident (the freeze only fired once picks existed, so it was
+   at least intermittent); Phase 1's fix makes the freeze permanent for the rest of a
+   published week's life, which would have turned this into a permanent, every-single-hour
+   false failure for as long as any week stays published. Fixed by moving that message to
+   `.notes` (commit `fa0272a`).
+2. **A frozen week's own display-line refresh then failed on missing, optional API keys.**
+   With fix 1 deployed, the very next run still failed, this time on "The Odds API could not
+   be read for ncaaf: No API key configured for odds_api" and the matching CollegeFootballData
+   warning. The OLD, buggy code never called `resolve_spreads` at all once a week had picks
+   (it just reused whatever spread was already cached), so a missing optional key never
+   surfaced on this path before. Phase 1's fix actually refreshes display lines on a frozen
+   week for real, which immediately exposed a real, pre-existing, unrelated configuration gap
+   (`picksportplus-live` has never had `ODDS_API_KEY`/`CFBD_API_KEY` set, both optional
+   fallbacks per SPEC.md Section 5) as a fresh, hourly failure for a purely cosmetic,
+   display-only spread on a week whose real selection was already safely frozen. Fixed the
+   same way (`6204e93`): these warnings are notes for the frozen-week refresh path only; a
+   draft week's own build still treats the identical warnings as real, since a missing spread
+   there can actually change which games get selected.
+
+Both were caught and fixed within about 15 minutes of the first successful deploy, each fix
+gated behind the full local test suite (with new regression tests added for both) before being
+pushed. **Confirmed with a real, manually triggered cron run after the second fix**: every
+previously-red warning line now reads "note:" in the log, and the run finished with Render's
+own "Cron job run finished successfully," the dashboard's "Last successful run" updating to
+"September 4, 2026 at 11:54 AM EDT" with a green checkmark. This is the single most important
+live confirmation in this whole incident: the automated path that caused the original problem
+now runs clean, on the real production pool, against real live current data.
+
+**Item 1, the live slate editor.** Not independently re-verified against the real
+`picksportplus.com` commissioner view this phase: doing so requires signing in as the real
+commissioner or site admin, and entering a password (even the site's own, even for
+verification) is outside what this session does under any circumstance. Standing evidence
+instead: Phase 8's local live-server verification ran the identical deployed code (same
+commit, same `app/templates/admin/slate.html` and `_slate_fragments.html`) against a real
+running server and confirmed the collapsed candidates, the single "Actions" disclosure per
+row, and the change history panel, by screenshot, in the browser. What this phase did verify
+against the real production app without a login: the public 403 page (`/league` and
+`/league/slate` for a signed-in player with no pool, "Not your locker room") renders correctly
+and on-brand, and a real signed-in player account's own pages (`/how-it-works`, `/picks`) load
+clean with zero console errors.
+
+**Item 2, the live change history panel on Week 1.** Also blocked by the same credential
+limit for a direct look through the commissioner UI. What the change history panel would show
+is instead fully accounted for by the cron log confirmation above, which is the same
+underlying event stream: `Fatrunner`'s real Week 1 (`week_number=1`, `status="open"`) took the
+"skipping rebuild" path on every run this phase observed, meaning no `SlateChange` "rebuilt"
+row has been (or will be) written for it by the automated path from this point forward. Since
+the fix only deployed partway through this incident's own work, Week 1's game set almost
+certainly already drifted before today under the old code, exactly the incident being fixed;
+there is no `SlateChange` history from before the fix (the audit trail did not exist yet), so
+neither the panel nor the doctor check below can characterize exactly how much it drifted,
+only that it can never drift again from here.
+
+**Item 3, the `doctor` drift check against production.** Not run directly: it requires a
+shell on the live service or a direct database connection, and this session's Postgres query
+tool could not complete a connection to `picksportplus-live-db` (a TLS negotiation failure
+inside the tool itself, reproduced twice, unrelated to this incident or to the database's own
+configuration). Recorded as a real gap rather than skipped silently. The equivalent evidence
+that exists instead: `tests/test_ingest.py`'s `test_published_slate_drift_report_flags_a_week_with_no_history_as_unknown`
+and `test_published_slate_drift_report_detects_real_drift` both pass against the exact
+deployed code, and the cron log confirmation above proves the underlying mechanism (no more
+automated rebuilds of a published week) is working on the real pool right now. A site admin
+or commissioner can run `python -m app.cli doctor --pool <id>` from Render's own web shell at
+any time to see this directly; that is a real, available path this session did not have.
+
+**Item 4, `run-cron` no longer alters a published week.** Fully confirmed, live, against the
+real production pool and real current ESPN/CFBD data: the manually triggered run recorded
+above (11:54 AM EDT) refreshed `Fatrunner`'s real Week 1 exactly as designed (game status and
+display lines touched, `sync_week`'s own log line reading "pool 1 week 1 is already open,
+skipping rebuild (cron never reselects a non-draft week), refreshing display data only") and
+finished successfully.
+
+**Item 5, league chat.** Not posted to on the real production pool: a real message in a real
+commissioner's real league chat, visible to real members, is exactly the kind of visible,
+other-affecting action this session's own operating rules ask for a human's own action rather
+than an autonomous one, and no member of `Fatrunner` was in this conversation to ask. Chat's
+own correctness (post, edit, delete, pin, escaping, rate limiting, access control) is instead
+covered by `tests/test_chat.py`'s 17 tests plus Phase 8's own local live-server verification
+(a real post, edit, delete and a second member seeing it, by screenshot). Offered here rather
+than done unilaterally: the commissioner can post a real test message from `/league/chat`
+themselves at any time to confirm it end to end.
+
+**Item 6, no console errors.** Confirmed on every public/unauthenticated production page this
+session could reach without a login: zero console messages, no errors, on `/how-it-works` and
+`/picks` (the poolless-preview path) for a real signed-in player account.
+
+**Item 7, fix forward.** Both bugs found above were fixed forward, immediately, each gated
+behind the full local test suite before pushing again. No revert was needed at any point;
+`main` was never left red.
 
 ## Note for the commissioner to forward to his league
 
-_Filled in once the fix is deployed (final deliverable)._
+> Quick update on the app. Last week you probably noticed the Week 1 slate kept changing on
+> its own, and once picks were in, there was no way to fix a game that shouldn't have been on
+> there. Both of those were the same bug: the app was quietly rebuilding the whole slate every
+> hour, even after it had already been published to you. That's fixed now. Once a slate is
+> published, it never changes on its own again, no matter how long it sits there. Scores and
+> game statuses still update automatically, just not which games are on the slate.
+>
+> A few new things while we were in there:
+> - If a game genuinely needs to be swapped or pulled after publishing, there's now a proper
+>   tool for that (a single game can be amended, or the whole week can be rebuilt with picks
+>   safely saved off first, never deleted).
+> - Voiding a game now tells you exactly what it does before you click it.
+> - A league chat, so we can talk to each other in the app instead of over text or email.
+> - Every change to a slate is now logged, so if anything ever looks off again, we can see
+>   exactly what happened and when.
+>
+> Nothing you need to do. Your existing picks and standings are untouched. Just wanted you to
+> know what happened and that it's handled.
 
 ## Deliberately not built
 
-_Filled in at the end._
+- **A live preview of the exact replacement slate in the rebuild confirmation wizard.** Shows
+  the current slate about to be archived instead. Building a real preview would mean either
+  running a real ESPN/spread-resolution pass with no commit (still spends whatever metered
+  budget the real rebuild would, for a preview that could differ from the real rebuild a
+  moment later anyway as lines move) or duplicating `app/slate.py`'s selection logic against
+  stale data. Would take: a genuinely side-effect-free "dry run" mode for `build_slate` that
+  resolves spreads and computes the selection without writing anything, which is a real
+  feature in its own right, not a small addition.
+- **A true 360px phone-width visual/keyboard verification pass this phase.** The sandboxed
+  browser available to this session could not be resized below its own physical window bounds.
+  Would take: a real mobile device or a properly configured headless browser with device
+  emulation.
+- **A live post to the real production league chat, and a live look at the real commissioner's
+  slate editor and change history panel.** Both need signing in as the real commissioner or
+  site admin, which needs a password this session will not enter under any circumstance, even
+  the site's own. Would take: the commissioner doing it themselves, which this report invites
+  them to.
+- **Running `python -m app.cli doctor`'s drift check directly against `picksportplus-live-db`.**
+  This session's Postgres query tool could not complete a TLS handshake against it (reproduced
+  twice, a tool-side issue, not a database configuration problem: the same tool successfully
+  listed the instance's own metadata). Would take: Render's own web shell on `picksportplus-live`
+  (`python -m app.cli doctor`), which the commissioner or site admin can run directly at any
+  time.
+- **Real `ODDS_API_KEY`/`CFBD_API_KEY` values for `picksportplus-live`.** Found live this phase
+  (see above): production has never had either configured, so every slate build falls back to
+  ESPN-only spread coverage. Not this incident's problem to begin with, and getting either key
+  means signing up for an external account this session cannot do on the user's behalf. Would
+  take: the commissioner (or site admin) creating a free account at either provider and pasting
+  the key into `/site/providers` or the Render environment directly.
 
 ## Top three remaining risks
 
-_Filled in at the end._
+1. **Week 1's real game set already drifted before this fix deployed, with no audit trail
+   covering what it originally was.** The `SlateChange` table did not exist until today, so
+   there is no record of Week 1's slate the moment the commissioner first published and
+   emailed it. Mitigation: the commissioner already knows, from lived experience, roughly what
+   the original slate looked like (he named specific games in his own report); use "Amend a
+   single game" to correct whichever games are still wrong now that the tool to do so exists,
+   or use "Rebuild this week and reopen picks" if the damage is broad enough that a clean
+   restart is the better call. Either way, every future change is now provably recorded.
+2. **`picksportplus-live` has no metered spread fallback (`ODDS_API_KEY`/`CFBD_API_KEY`
+   unset), confirmed live this phase.** The app degrades correctly (ESPN-only, ranked by
+   whatever spread ESPN itself provides, ESPN core historical odds for anything already
+   final), so this is not a broken state, but it means more games than necessary show "no line
+   posted yet" and rely on a commissioner setting one by hand. Mitigation: named directly under
+   "Deliberately not built" above; a free key from either provider closes this at zero
+   ongoing cost within SPEC.md's own documented free-tier budget.
+3. **The commissioner still has to decide, and act on, what to do with Week 1's current live
+   slate.** The tooling is built, tested (locally and now live in production), and ready; per
+   this task's own instruction, the rebuild itself was deliberately left for the commissioner
+   to choose and to tell his league about first. Mitigation: the plain-English note above is
+   ready to send; the three-step confirmation on "Rebuild this week and reopen picks" (or the
+   narrower "Amend a single game") walks him through it whenever he is ready, with every pick
+   archived, never destroyed, before anything changes.
