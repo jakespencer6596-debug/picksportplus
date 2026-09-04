@@ -4468,6 +4468,41 @@ points a real player and a real commissioner actually land on, which is a reason
 "noticed soon" without paying that cost on every page. Documented here as a scope choice, not
 an oversight: a future pass could promote it to every page if the product actually needs that.
 
+**Phase 4, the auto_publish path never blocks on the midweek acknowledgement.** A manual
+"Publish this week" click is exactly where a human is present to read and accept the warning;
+`auto_publish` is a commissioner's own standing choice to remove the human from that loop
+entirely (Section 7). Blocking an automated publish on an acknowledgement nobody is present to
+give would either silently strand the week in draft forever (defeating the whole point of
+`auto_publish`) or require inventing a second, different automatic-acknowledgement rule that
+would just be a more complicated way of saying "publish anyway." The warning still reaches the
+commissioner, in the build's own report, so the information is not lost, only the blocking gate
+is skipped for the one setting that already means "I trust this to run without me."
+
+**Phase 4, `first_saturday_kickoff`'s weekday check runs in the pool's own timezone, computed
+in `app/services/ingest.py`, never inside the pure `app/slate.py` module.** `compute_lock_at`
+(the pure function `select_slate_by_targets` and the rest of `app/slate.py` already lean on)
+stays exactly what it was, `min()` over a sequence of datetimes, with no new timezone-awareness
+or policy parameter added to a module SPEC.md Section 6 requires stay a deterministic pure
+function. `recompute_lock` instead filters the candidate kickoff list down to Saturday-only
+(in the pool's zone) before ever calling `compute_lock_at`, so the pure module's own contract
+and existing unit tests needed no change at all.
+
+**Phase 5, the row action menu is a native `<details>`/`<summary>` disclosure, not a
+JavaScript dropdown.** SPEC.md Section 6a already requires every slate action to keep working
+as a plain POST with no JavaScript (the no-JS fallback the rest of the slate editor already
+guarantees); a JS-driven dropdown (a `<select>`-triggered menu, or a click-to-toggle `<div>`)
+would have needed new `app.js` wiring just to open and close, and would not degrade to
+anything usable without it. `<details>` is native, keyboard operable, and requires zero script
+to open, so the no-JS guarantee extends to the menu itself, not just the actions inside it.
+
+**Phase 5, bare tag CSS selectors (`.cell-actions > details > summary`), no new class on the
+`<details>` element itself.** The slate editor's own 150KB/60-form budget (Section 6a, enforced
+by a failing test) is razor thin by design; the first version of this menu, with a `class=
+"row-actions"` on every row's `<details>` and `<summary>`, pushed a 20-row/100-candidate page
+over budget by about 2.8KB purely from the added attribute text repeated 40 times a page.
+Removing the class and targeting the existing `.cell-actions` column instead recovered that
+margin without changing anything visual.
+
 **Phase 6, league chat messages are soft-deleted (`LeagueMessage.deleted_at`), not removed
 outright.** A member's or commissioner's "delete" hides a message from every list query (all
 of them already filter `deleted_at.is_(None)`) without erasing the row, matching this
