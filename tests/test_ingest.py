@@ -1114,6 +1114,35 @@ def test_frozen_week_notice_is_a_note_never_a_warning(db, monkeypatch):
     assert not any("game selection was left" in w for w in report.warnings)
 
 
+def test_frozen_week_display_line_refresh_warnings_are_notes_not_warnings(db, monkeypatch):
+    """Regression test for a real bug found live, the same hour as the fix above (see
+    INCIDENT-REPORT.md): the old, buggy locked-out branch never called resolve_spreads once a
+    week had picks, so an unconfigured or exhausted fallback provider never surfaced there.
+    Actually refreshing display lines on a frozen week (the whole point of the fix) now
+    attempts it every pass; in production this immediately surfaced "no API key configured
+    for odds_api/cfbd" on every single cron run, failing it, for a purely cosmetic,
+    display-only spread on a week whose real selection is already safely frozen."""
+    pool = _pool(db, num_games_per_week=1, target_nfl=0, target_ncaaf=1, sports=["ncaaf"])
+    week = _week_row(db, pool)
+    week.status = "open"
+    game = _rivalry_game("evt1", "Duke", "Wake Forest")
+    monkeypatch.setattr(ingest, "fetch_candidates", lambda db, pool, week, **kwargs: ([game], []))
+    monkeypatch.setattr(
+        ingest,
+        "resolve_spreads",
+        lambda db, week, games, **kwargs: (
+            {},
+            ["The Odds API could not be read for ncaaf: No API key configured for odds_api."],
+        ),
+    )
+
+    report = ingest.build_slate(db, pool, pool.season_year, week.week_number, allow_metered=False)
+
+    assert report.locked_out is True
+    assert any("No API key configured" in n for n in report.notes)
+    assert not any("No API key configured" in w for w in report.warnings)
+
+
 def test_published_week_still_refreshes_scores_status_and_lines_on_cron(db, monkeypatch):
     """What the freeze does NOT stop: game status, scores and (via a real resolve_spreads
     pass) display-only spread lines all still refresh every cron run."""

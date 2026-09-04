@@ -1683,7 +1683,17 @@ def _refresh_frozen_week(
         spreads, warnings = resolve_spreads(
             db, week, games, allow_metered=effective_allow_metered, deadline=deadline
         )
-        report.warnings.extend(warnings)
+        # Notes, not warnings (found live, the same hour as the fix above, see
+        # INCIDENT-REPORT.md): the old, buggy locked-out branch never called resolve_spreads
+        # at all once a week had picks, so an unconfigured or exhausted fallback provider
+        # never surfaced here before. Actually refreshing display lines on a frozen week (the
+        # whole point of this function) now attempts it every pass, and an incomplete
+        # cosmetic, display-only spread on a week whose real selection is already frozen and
+        # safe is not the kind of "did not get fresh data" failure run-cron's exit code exists
+        # to page someone for; a draft week's own build (_build_slate_impl, unchanged) still
+        # treats the exact same warnings as real, since a missing spread there can change
+        # which games get selected.
+        report.notes.extend(warnings)
         upsert_games(db, week, games, spreads, pool)
     report.selected = int(
         db.scalar(
