@@ -26,7 +26,7 @@ Working document for the slate integrity incident. Updated as each phase lands. 
 | 6. League chat and member email export | done | `0e580a1` |
 | 7. Regression sweep | done | see below |
 | 8. Full verification | done | see below |
-| 9. Documentation | pending | |
+| 9. Documentation | done | `abd66f5` |
 | 10. Merge, push, deploy | pending | |
 | 11. Verify on the live site | pending | |
 
