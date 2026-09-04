@@ -223,6 +223,8 @@
 
     <div id="slate-action-error"></div>
 
+    {{ frag.change_history_panel(pool, change_history) }}
+
     {% if not editable %}
       <div class="flash flash-info" id="slate-locked-note">
         {{ ic.icon("lock", 18) }}

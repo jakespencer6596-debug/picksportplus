@@ -214,6 +214,28 @@
   </datalist>
 {% endmacro %}
 
+{% macro change_history_panel(pool, changes, oob=False) %}
+  {# Phase 1, slate drift incident: "A commissioner must be able to see for himself whether
+     the app touched his slate." Newest first, plain sentences, source labelled so a cron
+     rebuild reads differently from a commissioner's own click. #}
+  <div id="change-history-panel" class="card"{% if oob %} hx-swap-oob="true"{% endif %}>
+    <h3>Change history</h3>
+    {% if not changes %}
+      <p class="muted">No changes recorded for this week yet.</p>
+    {% else %}
+      <ul class="change-history-list">
+        {% for change in changes %}
+          <li>
+            <span class="change-text">{{ change.text }}</span><span class="muted">,
+            {{ change.created_at | kickoff_long(pool.timezone) }}</span>
+            <span class="badge badge-source-{{ change.source }}">{{ change.source }}</span>
+          </li>
+        {% endfor %}
+      </ul>
+    {% endif %}
+  </div>
+{% endmacro %}
+
 {% macro candidates_load_more(week_id, q, offset, has_more, oob=False) %}
   <div id="candidates-load-more" class="form-actions"{% if oob %} hx-swap-oob="true"{% endif %}>
     {% if has_more %}

@@ -877,6 +877,8 @@ def _slate_context(db: Session, pool: Pool, row: Week | None) -> dict:
                 "wide": (latest - earliest) > dt.timedelta(hours=48),
             }
 
+    change_history = ingest.slate_change_history(db, row) if row is not None else []
+
     return {
         "on_slate": on_slate,
         "candidates": candidates,
@@ -886,6 +888,7 @@ def _slate_context(db: Session, pool: Pool, row: Week | None) -> dict:
         "pinned_count": pinned_count,
         "missing_spread_count": missing_spread_count,
         "slate_span": slate_span_info,
+        "change_history": change_history,
     }
 
 
@@ -1008,6 +1011,8 @@ def slate_build(
             pool,
             pool.season_year,
             week_number,
+            actor_user_id=user.id,
+            source="commissioner",
         )
     except ingest.BuildInProgress as exc:
         db.rollback()
@@ -1144,6 +1149,10 @@ def _slate_action_fragment(
         else ""
     )
     parts.append(f'<div id="slate-action-error" hx-swap-oob="true">{error_html}</div>')
+    if not error:
+        # A successful action just wrote a new SlateChange row (see app/services/ingest.py):
+        # refresh the panel in place so a commissioner sees it without a full page reload.
+        parts.append(str(frag.change_history_panel(pool, ctx["change_history"], oob=True)))
 
     if action in _SLATE_MEMBERSHIP_ACTIONS and not error:
         all_candidates = ctx["candidates"]
@@ -1208,11 +1217,15 @@ def slate_game_action(
     is_hx = request.headers.get("HX-Request") == "true"
     row = _week_for_action(db, pool, week_id)
     error: str | None = None
+    actor_kwargs = {
+        "actor_user_id": user.id,
+        "source": "admin" if user.is_admin else "commissioner",
+    }
     try:
         if action == "add":
-            ingest.add_to_slate(db, row, game_id)
+            ingest.add_to_slate(db, row, game_id, **actor_kwargs)
         elif action == "remove":
-            ingest.remove_from_slate(db, row, game_id)
+            ingest.remove_from_slate(db, row, game_id, **actor_kwargs)
         elif action == "swap":
             if not swap_with.strip():
                 raise ValueError("Choose a game to swap in.")
@@ -1220,18 +1233,20 @@ def slate_game_action(
                 swap_with_id = int(swap_with.strip())
             except ValueError:
                 raise ValueError("That is not a game id. Pick one from the list.") from None
-            ingest.swap_slate_game(db, row, game_id, swap_with_id)
+            ingest.swap_slate_game(db, row, game_id, swap_with_id, **actor_kwargs)
         elif action == "void":
-            ingest.set_void(db, row, game_id, True)
+            ingest.set_void(db, row, game_id, True, **actor_kwargs)
         elif action == "unvoid":
-            ingest.set_void(db, row, game_id, False)
+            ingest.set_void(db, row, game_id, False, **actor_kwargs)
         elif action == "spread":
             value = spread.strip()
-            ingest.set_manual_spread(db, row, game_id, float(value) if value else None)
+            ingest.set_manual_spread(
+                db, row, game_id, float(value) if value else None, **actor_kwargs
+            )
         elif action == "pin":
-            ingest.set_pinned(db, row, game_id, True)
+            ingest.set_pinned(db, row, game_id, True, **actor_kwargs)
         elif action == "unpin":
-            ingest.set_pinned(db, row, game_id, False)
+            ingest.set_pinned(db, row, game_id, False, **actor_kwargs)
         else:
             raise ValueError("Unknown action.")
         db.commit()
@@ -1315,6 +1330,8 @@ def test_week_create(
             ingest.TEST_WEEK_NUMBER,
             publish=True,
             is_test_week=True,
+            actor_user_id=user.id,
+            source="commissioner",
         )
     except ValueError as exc:
         db.rollback()

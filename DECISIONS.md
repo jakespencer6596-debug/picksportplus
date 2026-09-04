@@ -4357,3 +4357,57 @@ POST body to keep reaching its own in-route validation rather than 422ing on Fas
 missing-field check first; `test_season_tiebreak_mode_is_saved` and
 `test_unknown_season_tiebreak_mode_is_rejected` (`tests/test_payout_routes.py`) cover the
 new field itself.
+
+## Slate drift incident
+
+See `INCIDENT-REPORT.md` for the full post-mortem, the phase checklist and commit SHAs. This
+section only records the ambiguous calls made while fixing it.
+
+**Phase 1, the freeze trigger stays separate from `can_resize_slate`.** The obvious first
+instinct is to key everything off one flag. Rejected: SPEC.md Section 6a's rule ("once any
+pick exists the game count is fixed, only voiding remains") and the incident's own freeze rule
+("frozen at publish") are two different rules answering two different questions, one about
+picks, one about publish state, and they already disagreed with each other under the old
+buggy code (a picked-but-still-draft week froze; a published-but-unpicked week did not,
+backwards from what should happen). Collapsing them into one flag would have meant picking a
+side and quietly changing the other rule's behavior as a side effect. `_build_slate_impl`'s
+freeze now reads `week.status != "draft"`; `can_resize_slate` (gating the commissioner's own
+manual add/remove/swap buttons) is untouched, still `week_has_picks`. A published week with no
+picks yet is a real, common state (a commissioner who publishes early to give players time):
+under the fix its automated selection is frozen but a commissioner can still resize it by
+hand, which is correct, and could not be expressed with a single shared flag.
+
+**Phase 1, "voided" and "pinned" cover both directions of the same toggle.** `SlateChange`'s
+`action` column has no `"unvoided"`/`"unpinned"` values, even though the router lets a
+commissioner do both. The action names the dimension that changed (this game's void-ness,
+this game's pinned-ness); `before`/`after` carry which direction. Doubling the enum for every
+reversible boolean did not seem worth it against `INCIDENT-REPORT.md`'s own consumers (the
+change history panel and the drift-detection doctor check), both of which read before/after
+anyway to build their sentence or comparison, never the action name alone.
+
+**Phase 1, a swap writes one `SlateChange` row, keyed to the incoming game.** The spec's own
+action list only has `"swapped"`, singular, not a pair of `"removed"`/`"added"` rows. `game_id`
+names the game that just joined the slate; `before`/`after` both carry `{"out": ..., "in":
+...}` so the change history sentence ("X replaced Y") and the drift doctor check both have
+everything they need from the one row, without a second row that would double-count a single
+commissioner action in any count of "how many changes happened."
+
+**Phase 1, the doctor drift check only trusts `"rebuilt"` rows for "earliest recorded
+state."** `"added"`/`"removed"`/`"swapped"` rows only carry the one or two games they touched,
+not the week's whole selected set, so they cannot answer "does the current set differ from the
+earliest known one" on their own. Only `"rebuilt"` (written whenever `apply_slate` actually
+changes the selection, draft-time reselection included) carries a full before/after set. A
+published week that was rebuilt at least once before this fix shipped gets a real comparison;
+one that was never rebuilt (or predates the audit trail entirely, which is true of every real
+week from before this deploy) is reported as "no history, cannot confirm," never as "clean."
+Reporting it as clean would have been a false negative on the exact thing this incident is
+about: a slate that could have already drifted with nobody able to prove it either way.
+
+**Phase 1, a real draft-time rebuild still writes a `"rebuilt"` row.** The spec's own worry is
+about a *published* slate moving; a draft week reselecting on every cron pass right up until
+publish is normal, expected behavior, not a bug. It still gets an audit row when the selection
+actually changes (skipped only on the very first build of a brand new week, which has no prior
+selection to have changed from): a commissioner who publishes a week and later asks "did this
+week ever get rebuilt before I published it" deserves a real answer, and the doctor check
+above needs at least one `"rebuilt"` row to exist before it can say anything useful about a
+week that gets published without ever having a picks-based freeze accidentally save it.

@@ -868,6 +868,22 @@ def doctor(
         _echo(f"  current_week       : {pool.current_week}")
         _echo(f"  timezone           : {pool.timezone}")
 
+        _echo("")
+        _echo("Published slate drift (slate drift incident, see INCIDENT-REPORT.md)")
+        from app.services.ingest import published_slate_drift_report
+
+        findings = published_slate_drift_report(db, pool)
+        if not findings:
+            _echo("  No published (non-draft, non-test) weeks this season yet.")
+        for finding in findings:
+            prefix = f"  Week {finding.week_number} ({finding.status}): "
+            if finding.drifted:
+                typer.secho(prefix + finding.detail, fg=typer.colors.RED)
+            elif not finding.has_history:
+                typer.secho(prefix + finding.detail, fg=typer.colors.YELLOW)
+            else:
+                _echo(prefix + finding.detail)
+
         if not probe:
             return
 
