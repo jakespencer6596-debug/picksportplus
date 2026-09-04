@@ -708,6 +708,134 @@ def test_slate_editor_void_button_explains_the_consequence_before_it_happens(cli
     assert "Restore" in response.text or "hx-confirm" in response.text
 
 
+# Phase 4, slate drift incident: midweek kickoff warnings and lock policy --------------------
+
+
+def _make_midweek_week(session_factory):
+    """A pool with one Wednesday kickoff on its slate, draft status, for the publish-gate
+    tests below. 2026-09-16 is a real Wednesday."""
+    db = session_factory()
+    pool = _make_pool(db)
+    boss = _make_user(db, "boss@example.com", "The Commissioner", role="admin")
+    db.add(PoolMember(pool_id=pool.id, user_id=boss.id, role_in_pool="commissioner"))
+    week = Week(
+        pool_id=pool.id,
+        season_year=pool.season_year,
+        week_number=1,
+        label="Week 1",
+        status="draft",
+    )
+    db.add(week)
+    db.flush()
+    game = Game(
+        week_id=week.id,
+        league="nfl",
+        espn_event_id="wed1",
+        start_time=dt.datetime(2026, 9, 16, 20, 0, tzinfo=UTC),
+        home_team="Home Team",
+        away_team="Away Team",
+        home_abbr="HOM",
+        away_abbr="AWY",
+        canonical_home_key="nfl:home",
+        canonical_away_key="nfl:away",
+        spread_home=1.0,
+        closeness=1.0,
+        in_slate=True,
+        slate_rank=1,
+        status="scheduled",
+    )
+    db.add(game)
+    db.commit()
+    week_id = week.id
+    db.close()
+    return week_id
+
+
+def test_slate_publish_blocked_by_unacknowledged_midweek_game(client, session_factory):
+    week_id = _make_midweek_week(session_factory)
+    _login(client, "boss@example.com")
+
+    response = client.post("/league/slate/publish", data={"week_id": week_id})
+    assert response.status_code == 303
+
+    db = session_factory()
+    week = db.get(Week, week_id)
+    assert week.status == "draft"  # publish was refused
+    db.close()
+
+
+def test_slate_publish_succeeds_once_midweek_ack_checked(client, session_factory):
+    week_id = _make_midweek_week(session_factory)
+    _login(client, "boss@example.com")
+
+    response = client.post("/league/slate/publish", data={"week_id": week_id, "ack_midweek": "1"})
+    assert response.status_code == 303
+
+    db = session_factory()
+    week = db.get(Week, week_id)
+    assert week.status == "open"
+    assert week.midweek_ack_at is not None
+    assert week.midweek_ack_by_user_id is not None
+    db.close()
+
+
+def test_slate_editor_shows_midweek_warning_as_soon_as_selected(client, session_factory):
+    _make_midweek_week(session_factory)
+    _login(client, "boss@example.com")
+
+    response = client.get("/league/slate?week=1")
+
+    assert response.status_code == 200
+    assert "kicks off before Saturday" in response.text
+
+
+def test_settings_lock_policy_saves(client, world):
+    _login(client, "boss@example.com")
+    response = client.post(
+        "/league/settings",
+        data={
+            "name": "Test Pool",
+            "season_year": 2025,
+            "timezone": "America/New_York",
+            "num_games_per_week": 4,
+            "target_nfl": 2,
+            "target_ncaaf": 2,
+            "picks_required": 4,
+            "scoring_mode": "inverse",
+            "scenarios_min_final_games": 5,
+            "scenarios_min_remaining_games": 1,
+            "sports_nfl": "1",
+            "sports_ncaaf": "1",
+            "lock_policy": "first_saturday_kickoff",
+        },
+    )
+    assert response.status_code == 303
+
+
+def test_settings_unknown_lock_policy_is_rejected(client, world):
+    _login(client, "boss@example.com")
+    response = client.post(
+        "/league/settings",
+        data={
+            "name": "Test Pool",
+            "season_year": 2025,
+            "timezone": "America/New_York",
+            "num_games_per_week": 4,
+            "target_nfl": 2,
+            "target_ncaaf": 2,
+            "picks_required": 4,
+            "scoring_mode": "inverse",
+            "scenarios_min_final_games": 5,
+            "scenarios_min_remaining_games": 1,
+            "sports_nfl": "1",
+            "sports_ncaaf": "1",
+            "lock_policy": "not-a-real-policy",
+        },
+    )
+    assert response.status_code == 303
+    assert response.headers["location"] == "/league/settings"
+
+
 def test_slate_build_route_ignores_publish_and_no_metered_even_if_posted(client, world):
     """Belt and suspenders: even a client that still posts the old field names (a stale
     bookmarked form, a browser that had the page open across the deploy) is not refused with a

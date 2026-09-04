@@ -149,15 +149,35 @@
         {% if week.lock_at %}{{ week.lock_at | kickoff_long(tz) }}{% else %}not set yet{% endif %}.
         {% if week.lock_at_override %}
           Set by hand.
+        {% elif pool.lock_policy == "manual" %}
+          Set by hand (this pool's lock policy is manual).
+        {% elif pool.lock_policy == "first_saturday_kickoff" %}
+          Automatic, the first Saturday kickoff on the slate.
         {% else %}
           Automatic, the first kickoff on the slate.
         {% endif %}
       </p>
 
+      {% if midweek_games %}
+        {# Phase 4, slate drift incident: "midweek games pulled the lock time to Wednesday
+           morning, which is unacceptable." Shown as soon as such a game is on the slate, not
+           only at publish time, so a commissioner can swap it out early if they want to. #}
+        <div class="flash flash-error" role="alert" id="midweek-warning">
+          {{ ic.icon("alert", 18) }}
+          <span>{{ midweek_warning }}</span>
+        </div>
+      {% endif %}
+
       <div class="row">
         {% if week.status == "draft" %}
-          <form method="post" action="/league/slate/publish" class="inline-form">
+          <form method="post" action="/league/slate/publish" class="inline-form stack">
             <input type="hidden" name="week_id" value="{{ week.id }}">
+            {% if midweek_games %}
+              <label class="checkbox" for="ack_midweek">
+                <input type="checkbox" id="ack_midweek" name="ack_midweek" value="1" required>
+                <span>I see the midweek games above and accept the resulting lock time.</span>
+              </label>
+            {% endif %}
             <button class="btn btn-primary" type="submit">Publish this week</button>
           </form>
         {% endif %}

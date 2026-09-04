@@ -1572,3 +1572,144 @@ def test_the_build_fetch_score_pipeline_is_idempotent_across_three_runs(db, load
     # Run 2 to run 3, against unchanged upstream data, is a true no-op.
     assert games_3 == games_2
     assert entries_3 == entries_2
+
+
+# Phase 4, slate drift incident: midweek kickoff warnings and lock policy --------------------
+
+
+def _slate_game(db, week, event_id, *, weekday_offset, **overrides):
+    """A slate game kicking off at 2026-09-{14+weekday_offset} 20:00 UTC. September 12, 2026
+    is a Saturday, so offset 0 is Saturday, 1 Sunday, 2 Monday, and so on, matching this
+    module's own week1_anchor_date convention."""
+    base = dt.datetime(2026, 9, 12, 20, 0, tzinfo=UTC) + dt.timedelta(days=weekday_offset)
+    defaults = {
+        "week_id": week.id,
+        "league": "nfl",
+        "espn_event_id": event_id,
+        "start_time": base,
+        "home_team": "Home",
+        "away_team": "Away",
+        "home_abbr": "HOM",
+        "away_abbr": "AWY",
+        "canonical_home_key": f"nfl:home-{event_id}",
+        "canonical_away_key": f"nfl:away-{event_id}",
+        "spread_home": 1.0,
+        "closeness": 1.0,
+        "in_slate": True,
+        "slate_rank": 1,
+        "status": "scheduled",
+    }
+    defaults.update(overrides)
+    game = Game(**defaults)
+    db.add(game)
+    db.flush()
+    return game
+
+
+def test_midweek_games_finds_monday_through_friday_kickoffs_only(db):
+    pool = _pool(db, timezone="America/New_York")
+    week = _week_row(db, pool)
+    saturday = _slate_game(db, week, "sat", weekday_offset=0, slate_rank=1)
+    sunday = _slate_game(db, week, "sun", weekday_offset=1, slate_rank=2)
+    _slate_game(db, week, "wed", weekday_offset=4, slate_rank=3)
+
+    found = ingest.midweek_games(db, week)
+
+    assert [g.espn_event_id for g in found] == ["wed"]
+    assert saturday.espn_event_id not in [g.espn_event_id for g in found]
+    assert sunday.espn_event_id not in [g.espn_event_id for g in found]
+
+
+def test_midweek_games_excludes_a_voided_game(db):
+    pool = _pool(db, timezone="America/New_York")
+    week = _week_row(db, pool)
+    _slate_game(db, week, "wed", weekday_offset=4, status="void")
+
+    assert ingest.midweek_games(db, week) == []
+
+
+def test_midweek_warning_text_names_the_games_and_the_lock_time(db):
+    pool = _pool(db, timezone="America/New_York")
+    week = _week_row(db, pool)
+    game = _slate_game(db, week, "wed", weekday_offset=4)
+    week.lock_at = game.start_time
+
+    text = ingest.midweek_warning_text(week, [game])
+
+    assert "AWY at HOM" in text
+    assert "1 game kicks off before Saturday" in text
+
+
+def test_recompute_lock_first_kickoff_policy_is_unchanged_default(db):
+    """The default policy: earliest kickoff wins, whatever day it falls on, exactly the
+    pre-Phase-4 behavior."""
+    pool = _pool(db, lock_policy="first_kickoff")
+    week = _week_row(db, pool)
+    wednesday = _slate_game(db, week, "wed", weekday_offset=4, slate_rank=1)
+    _slate_game(db, week, "sat", weekday_offset=7, slate_rank=2)
+
+    ingest.recompute_lock(db, week)
+
+    assert week.lock_at == wednesday.start_time
+
+
+def test_recompute_lock_first_saturday_kickoff_policy_skips_midweek_games(db):
+    pool = _pool(db, lock_policy="first_saturday_kickoff", timezone="America/New_York")
+    week = _week_row(db, pool)
+    wednesday = _slate_game(db, week, "wed", weekday_offset=4, slate_rank=1)
+    saturday = _slate_game(db, week, "sat", weekday_offset=7, slate_rank=2)  # next Saturday
+
+    ingest.recompute_lock(db, week)
+
+    assert week.lock_at == saturday.start_time
+    assert week.lock_at != wednesday.start_time
+
+
+def test_recompute_lock_first_saturday_kickoff_falls_back_when_no_saturday_game(db):
+    """A slate with nothing on a Saturday still needs a real lock time, so this policy falls
+    back to the ordinary first-kickoff rule rather than leaving lock_at unset."""
+    pool = _pool(db, lock_policy="first_saturday_kickoff", timezone="America/New_York")
+    week = _week_row(db, pool)
+    wednesday = _slate_game(db, week, "wed", weekday_offset=4, slate_rank=1)
+
+    ingest.recompute_lock(db, week)
+
+    assert week.lock_at == wednesday.start_time
+
+
+def test_recompute_lock_manual_policy_never_computes_from_kickoffs(db):
+    pool = _pool(db, lock_policy="manual")
+    week = _week_row(db, pool)
+    _slate_game(db, week, "sat", weekday_offset=0, slate_rank=1)
+    assert week.lock_at is None
+
+    ingest.recompute_lock(db, week)
+
+    assert week.lock_at is None
+
+
+def test_acknowledge_midweek_records_the_acknowledgement(db):
+    pool = _pool(db)
+    week = _week_row(db, pool)
+    boss = User(email="boss@example.com", password_hash="x", display_name="Boss")
+    db.add(boss)
+    db.flush()
+
+    ingest.acknowledge_midweek(db, week, boss.id, "some warning text")
+
+    assert week.midweek_ack_at is not None
+    assert week.midweek_ack_by_user_id == boss.id
+    assert week.midweek_ack_note == "some warning text"
+
+
+def test_adding_a_game_clears_a_stale_midweek_acknowledgement(db):
+    pool = _pool(db, num_games_per_week=2, target_nfl=2, target_ncaaf=0, sports=["nfl"])
+    week = _week_row(db, pool)
+    _picked_game(db, week)
+    candidate = _candidate_game(db, week, "evtB")
+    ingest.acknowledge_midweek(db, week, None, "stale")
+
+    ingest.add_to_slate(db, week, candidate.id)
+
+    assert week.midweek_ack_at is None
+    assert week.midweek_ack_note is None

@@ -303,6 +303,27 @@
           sending is turned on for the whole site.
         </p>
       </div>
+
+      <div class="field">
+        <label class="field-label" for="lock_policy">Picks lock time policy</label>
+        <select class="select" id="lock_policy" name="lock_policy">
+          <option value="first_kickoff" {% if pool.lock_policy == "first_kickoff" %}selected{% endif %}>
+            First kickoff on the slate (default)
+          </option>
+          <option value="first_saturday_kickoff" {% if pool.lock_policy == "first_saturday_kickoff" %}selected{% endif %}>
+            First Saturday kickoff (a midweek game locks on its own, not the whole pool)
+          </option>
+          <option value="manual" {% if pool.lock_policy == "manual" %}selected{% endif %}>
+            Manual, I always set it by hand
+          </option>
+        </select>
+        <p class="form-hint">
+          Controls when picks lock by default. A midweek (Monday through Friday) game still
+          always makes the slate when it is one of the closest games, this only changes what
+          locks picks for the whole pool. "Manual" never computes a lock time from kickoffs at
+          all, you always set it from the slate editor.
+        </p>
+      </div>
     </div>
   </section>
 

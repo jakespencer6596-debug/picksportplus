@@ -48,6 +48,7 @@ from app.auth import (
 from app.config import Settings, settings
 from app.db import get_db
 from app.models import (
+    LOCK_POLICIES,
     SCORING_MODES,
     Game,
     Pick,
@@ -319,6 +320,7 @@ def settings_save(
     auto_publish: str = Form(""),
     open_registration: str = Form(""),
     notify_week_published: str = Form(""),
+    lock_policy: str = Form("first_kickoff"),
     sports_nfl: str = Form(""),
     sports_ncaaf: str = Form(""),
     week1_anchor_date: str = Form(""),
@@ -347,6 +349,8 @@ def settings_save(
         )
     if scoring_mode not in SCORING_MODES:
         errors.append("Scoring mode must be either inverse or standard.")
+    if lock_policy not in LOCK_POLICIES:
+        errors.append("Unknown lock policy.")
     if scenarios_min_final_games < 0:
         errors.append("Scenarios minimum final games cannot be negative.")
     if scenarios_min_remaining_games < 1:
@@ -401,6 +405,7 @@ def settings_save(
     pool.target_ncaaf = target_ncaaf
     pool.picks_required = picks_required
     pool.scoring_mode = scoring_mode
+    pool.lock_policy = lock_policy
     pool.scenarios_min_final_games = scenarios_min_final_games
     pool.scenarios_min_remaining_games = scenarios_min_remaining_games
     pool.sports = sports
@@ -878,6 +883,8 @@ def _slate_context(db: Session, pool: Pool, row: Week | None) -> dict:
             }
 
     change_history = ingest.slate_change_history(db, row) if row is not None else []
+    midweek = ingest.midweek_games(db, row) if row is not None else []
+    midweek_warning = ingest.midweek_warning_text(row, midweek) if midweek else ""
 
     return {
         "on_slate": on_slate,
@@ -889,6 +896,8 @@ def _slate_context(db: Session, pool: Pool, row: Week | None) -> dict:
         "missing_spread_count": missing_spread_count,
         "slate_span": slate_span_info,
         "change_history": change_history,
+        "midweek_games": midweek,
+        "midweek_warning": midweek_warning,
     }
 
 
@@ -1058,6 +1067,7 @@ def slate_build(
 def slate_publish(
     request: Request,
     week_id: int = Form(...),
+    ack_midweek: str = Form(""),
     db: Session = Depends(get_db),
     user: User = Depends(require_user),
     pool: Pool = Depends(require_commissioner),
@@ -1065,17 +1075,33 @@ def slate_publish(
     row = _week_for_action(db, pool, week_id)
     if row.status != "draft":
         flash(request, f"Week {row.week_number} is already {row.status}.", "info")
+        return _redirect(f"/league/slate?week={row.week_number}")
+
+    # Phase 4, slate drift incident: "midweek games pulled the lock time to Wednesday
+    # morning, which is unacceptable because it silently moved his deadline." A manual
+    # publish is blocked behind a real acknowledgement naming the games and the resulting
+    # lock time; an unchecked checkbox (or one this exact slate has never seen, see
+    # ingest._clear_midweek_ack) refuses the publish outright, no games are dropped or
+    # changed, the commissioner just has to look at the warning first.
+    midweek = ingest.midweek_games(db, row)
+    warning_text = ingest.midweek_warning_text(row, midweek) if midweek else ""
+    if midweek and not ack_midweek:
+        flash(request, warning_text, "error")
+        flash(request, "Check the box to acknowledge the lock time, then publish again.", "info")
+        return _redirect(f"/league/slate?week={row.week_number}")
+    if midweek:
+        ingest.acknowledge_midweek(db, row, user.id, warning_text)
+
+    try:
+        notify_warnings = ingest.publish_week(db, row)
+    except ingest.SlateSpanTooWide as exc:
+        db.rollback()
+        flash(request, str(exc), "error")
     else:
-        try:
-            notify_warnings = ingest.publish_week(db, row)
-        except ingest.SlateSpanTooWide as exc:
-            db.rollback()
-            flash(request, str(exc), "error")
-        else:
-            db.commit()
-            flash(request, f"Week {row.week_number} is open for picks.")
-            for warning in notify_warnings:
-                flash(request, warning, "error")
+        db.commit()
+        flash(request, f"Week {row.week_number} is open for picks.")
+        for warning in notify_warnings:
+            flash(request, warning, "error")
     return _redirect(f"/league/slate?week={row.week_number}")
 
 

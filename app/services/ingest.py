@@ -46,7 +46,7 @@ from app.providers.teams import match_by_teams_and_date
 from app.services import calendar as calendar_svc
 from app.services import mail
 from app.slate import Candidate, compute_lock_at, select_slate_by_targets
-from app.templating import fmt_kickoff_long
+from app.templating import fmt_kickoff_long, get_zone
 
 log = logging.getLogger("picksportplus.ingest")
 
@@ -871,6 +871,44 @@ def slate_span(db: Session, week: Week) -> tuple[int, dt.datetime, dt.datetime] 
     return (latest - earliest).days, earliest, latest
 
 
+# Midweek kickoff warnings (Phase 4, slate drift incident) -----------------------------------
+#
+# "Midweek games pulled the lock time to Wednesday morning, which is unacceptable because it
+# silently moved his deadline." Midweek games stay eligible for the slate, closest games first
+# exactly as before; what changes is that a commissioner can no longer publish one without
+# seeing, and deliberately acknowledging, exactly which games and what lock time it produces.
+
+
+def midweek_games(db: Session, week: Week) -> list[Game]:
+    """Every live slate game (not void) that kicks off Monday through Friday, in the pool's
+    own timezone, earliest first. Weekday 0-4 is Monday-Friday; Saturday (5) and Sunday (6)
+    are never midweek. An empty list means nothing to warn about."""
+    tz = get_zone(week.pool.timezone) if week.pool is not None else dt.UTC
+    games = list(
+        db.scalars(
+            select(Game).where(
+                Game.week_id == week.id, Game.in_slate.is_(True), Game.status != "void"
+            )
+        )
+    )
+    midweek = [g for g in games if _aware(g.start_time).astimezone(tz).weekday() < 5]
+    midweek.sort(key=lambda g: _aware(g.start_time))
+    return midweek
+
+
+def midweek_warning_text(week: Week, games: list[Game]) -> str:
+    """The exact sentence the commissioner sees, naming the games, their kickoff times, and
+    the resulting lock time (SPEC Phase 4's own worked example)."""
+    tz = week.pool.timezone if week.pool is not None else "UTC"
+    names = "; ".join(
+        f"{g.away_abbr} at {g.home_abbr}, {fmt_kickoff_long(g.start_time, tz)}" for g in games
+    )
+    lock_text = fmt_kickoff_long(week.lock_at, tz) if week.lock_at else "at the earliest kickoff"
+    count = len(games)
+    noun = "game kicks" if count == 1 else "games kick"
+    return f"Picks will lock {lock_text} because of {names}. {count} {noun} off before " "Saturday."
+
+
 def _span_too_wide_message(
     week: Week, span_days: int, earliest: dt.datetime, latest: dt.datetime
 ) -> str:
@@ -893,7 +931,17 @@ def _span_too_wide_message(
 
 
 def recompute_lock(db: Session, week: Week) -> None:
-    """Lock at the earliest kickoff on the slate, unless the commissioner pinned a time."""
+    """Lock at the earliest kickoff on the slate, unless the commissioner pinned a time, or
+    the pool's Pool.lock_policy (Phase 4, slate drift incident) says otherwise.
+
+    "first_kickoff" (default): unchanged, the earliest kickoff on the slate, whatever day it
+    falls on. "first_saturday_kickoff": the earliest kickoff that falls on a Saturday in the
+    pool's own timezone, so a Wednesday or Thursday game no longer pulls the whole pool's
+    deadline earlier; falls back to the ordinary first-kickoff rule when nothing on the slate
+    is a Saturday game, since a slate cannot lock before its own earliest game exists.
+    "manual": never computed from kickoffs at all, left exactly as it is for the commissioner
+    to set by hand from the slate editor.
+    """
     if week.lock_at_override:
         return
     db.flush()  # autoflush is off, so read back only what is already written
@@ -905,6 +953,14 @@ def recompute_lock(db: Session, week: Week) -> None:
             )
         )
     ]
+    policy = week.pool.lock_policy if week.pool is not None else "first_kickoff"
+    if policy == "manual":
+        return
+    if policy == "first_saturday_kickoff" and kickoffs:
+        tz = get_zone(week.pool.timezone) if week.pool is not None else dt.UTC
+        saturday_kickoffs = [k for k in kickoffs if k.astimezone(tz).weekday() == 5]
+        if saturday_kickoffs:
+            kickoffs = saturday_kickoffs
     week.lock_at = compute_lock_at(kickoffs)
     db.flush()
 
@@ -1781,6 +1837,15 @@ def _build_slate_impl(
 
     should_publish = pool.auto_publish if publish is None else publish
     if should_publish and report.selected > 0 and week.status == "draft":
+        # A commissioner who has opted into auto_publish has already chosen "no human in the
+        # loop"; blocking that on an unacknowledged midweek warning would defeat the feature
+        # they explicitly turned on. It still publishes, but the warning is surfaced here so
+        # it reaches the same flash/log the rest of a build's warnings do (Phase 4, slate
+        # drift incident). A manual "Publish this week" click still gets the real, blocking
+        # acknowledgement gate; see app/routers/admin.py's slate_publish.
+        midweek = midweek_games(db, week)
+        if midweek:
+            report.warnings.append(midweek_warning_text(week, midweek))
         try:
             report.warnings.extend(publish_week(db, week))
             report.published = True
@@ -1889,6 +1954,18 @@ def _notify_rebuilt_week_republished(db: Session, week: Week) -> list[str]:
             f"Subject: {subject}\n\n{body}"
         )
     return warnings
+
+
+def acknowledge_midweek(db: Session, week: Week, actor_user_id: int | None, note: str) -> None:
+    """Records the commissioner's deliberate acknowledgement of a midweek kickoff warning
+    (Phase 4) for the EXACT slate currently on the week. Cleared automatically the moment
+    slate membership changes again (_clear_midweek_ack, called by every add/remove/swap/
+    rebuild), so a stale acknowledgement of an earlier slate can never wave through a publish
+    of a slate the commissioner never actually saw the warning for."""
+    week.midweek_ack_at = utcnow()
+    week.midweek_ack_by_user_id = actor_user_id
+    week.midweek_ack_note = note
+    db.flush()
 
 
 def publish_week(db: Session, week: Week) -> list[str]:
