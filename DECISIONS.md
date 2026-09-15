@@ -4542,3 +4542,108 @@ of them already filter `deleted_at.is_(None)`) without erasing the row, matching
 codebase's existing bias toward archiving over destroying (`PickArchive`, `SlateChange`'s own
 audit trail). Nothing today ever reads a deleted row back, but the option to add a moderation
 view later needs no migration, only a new query.
+
+## Orphaned picks
+
+Full incident: the commissioner reported a player with 16 ranked games against a 15-pick
+requirement, duplicate confidence values, and an inflated inverse-scoring penalty. See
+PICKS-REPAIR-REPORT.md for the full post-mortem, impact assessment, and production results;
+this section records the judgment calls made while fixing and repairing it.
+
+**The two pre-existing failing tests found at baseline are left alone, not fixed.**
+`test_week_published_notification_sent_when_pool_opts_in` and
+`test_slate_editor_page_weight_budget` were both already failing on `main` before this branch
+existed (confirmed with a clean `git status` and a baseline `pytest -q` run before touching
+anything: 1217 passed, these 2 failed). Neither is related to picks, scoring, or money. The
+house rule is not to weaken or delete a failing test to make a suite pass; it says nothing
+about a test that was already red walking in, and chasing an unrelated notification bug and a
+byte-budget regression would be real scope creep on a live scoring integrity incident. Every
+gate run in this incident's own commits is genuinely green except these same two, called out
+explicitly rather than silently accepted.
+
+**Commit granularity approximates the phase list; it is not a mechanical 1:1 mapping.**
+`app/services/pick_repair.py` and `app/cli.py` each carry code for more than one phase
+(the audit functions from Phase 0, the repair functions from Phase 3, the CLI wiring for
+both), and splitting every phase into a byte-for-byte isolated commit across shared files
+would have meant repeatedly writing and reverting working code purely for git history
+cosmetics. Where a clean split was cheap (Phase 0's audit-only commit, Phase 1's fix-only
+commit), it was done. Where phases share a file in a way that is expensive to untangle, the
+phase boundary is documented here and in the commit message instead of forced into git.
+
+**The post write assertion in `_upsert_picks` returns HTTP 409 with a generic retry message,
+not a 500.** A real trip of this assertion should never happen (`validate_picks` already
+guarantees the submission is a clean permutation before `_upsert_picks` ever runs), so this
+is defense against a bug, not a user error, and there is nothing specific and actionable to
+tell the player beyond "try again." 409 Conflict reads better than 500 for something that is,
+from the player's side, a transient write conflict; a 500 would also trip FastAPI's generic
+error page rather than the picks page's own inline error partial.
+
+**Reordering confidence values among surviving picks (no game added or removed) writes
+through a temporary negative sentinel (`-row.id`) before the real values, in two passes.**
+The new `uq_pick_user_week_confidence` constraint makes a naive "just update each row"
+loop fail intermittently: swapping which of two games holds confidence 1 versus 2 means one
+`UPDATE` briefly makes two rows agree, or a still-pending `DELETE` of an orphaned row means an
+`UPDATE` collides with a row about to disappear, in either case failing on an intermediate
+state that neither the old nor the new (both valid, both permutations) state ever violates.
+Orphan deletes are flushed first (separately) to close the delete-vs-update case; every
+surviving row that is changing is parked on `-row.id`, a value guaranteed unique across the
+whole table (not just this user and week) and never a valid confidence, before any of them is
+set to its real target, which closes the update-vs-update case regardless of what order the
+ORM happens to emit the statements in. Found by the reorder test in `test_orphaned_picks.py`
+actually failing against the new constraint before this fix existed, not by inspection.
+
+**The unique constraint migration checks for violations and skips itself with a warning
+instead of crashing; `repair-picks --apply` can add the constraint directly afterward.**
+Production has real corrupt rows before this ships (that is the whole incident), and this
+codebase's Render start command runs `alembic upgrade head` on every deploy, before a human
+ever gets to run `repair-picks` by hand. A migration that unconditionally tries
+`ADD CONSTRAINT` would take the entire site down on the very deploy meant to fix it, the
+opposite of the goal. Instead the migration's `upgrade()` runs a cheap
+`GROUP BY ... HAVING COUNT(*) > 1` check first; if it finds anything, it prints a clear
+warning and returns without adding the constraint, rather than raising. Because Alembic
+marks a revision "applied" the moment it runs once, regardless of what it actually did, a
+second `alembic upgrade head` later will not retry it. `app/services/pick_repair.py`'s
+`ensure_unique_constraint` is the actual second chance: `repair-picks --apply` calls it right
+after committing a real repair, checking the same violation query on a fresh connection (so
+it only ever sees `repair-picks`'s own already-committed data, never a transaction racing its
+own uncommitted writes) and adding the constraint immediately once it is safe to. On SQLite
+(this test suite, and this developer's local `.venv`) that is a `CREATE UNIQUE INDEX` rather
+than a real `ALTER TABLE ... ADD CONSTRAINT`, since SQLite has no such statement; both are
+checked for on lookup so the status check is correct regardless of which one is present.
+
+**Production access: this session has a read-only path to the real `picksportplus-live-db`
+Postgres instance (via a connected Render MCP tool, `query_render_postgres`), but no write
+path and no raw connection string.** `mcp__claude_ai_Render__get_postgres` does not expose a
+connection string or credentials, and the only query tool available runs every statement
+inside a read-only transaction. This is exactly right for Phase 0's impact assessment and
+Phase 9's `doctor-picks`/`repair-picks --dry-run` verification against real data (both are
+pure reads, or writes this session can compute and then discard), but it means an actual
+`repair-picks --apply` against production cannot be executed by this session: doing so would
+need either the raw `DATABASE_URL` or shell access to the `picksportplus-live` service,
+neither of which this session has. Per the incident brief's own rule ("stop only for a
+credential you do not have"), Phase 9's `--apply` step is exactly that stop condition; see
+PICKS-REPAIR-REPORT.md for what was verified read-only against production instead, and what
+is left for the commissioner (or a session with that credential) to actually run.
+
+**Phase 2 (the browser cap) needed no `app.js` change.** `app.js`'s `onClick` handler already
+refuses to select a winner on a new game once `pickedRowCount(list) >= picksRequired(list)`
+(from an earlier, unrelated phase; see its own inline comment, "a hard cap on how many games
+can be picked"), and `updateSummary()` already renders a live "X of N winners chosen" count
+plus a progress meter. Both already fully cover the incident brief's own asks ("not allow
+players to choose more than 15 games" and a live count). The bug was never that the browser
+let a player accumulate more than picks_required winners in one sitting; it was that the
+server unioned two separate, individually valid sittings together (Phase 1, above), which no
+client-side cap can prevent since each sitting looks correct on its own. The only real gap
+was proof that the server itself still rejects an oversized submission independent of the
+browser, so the only change for this phase is a test (`test_server_rejects_a_hand_crafted_16_
+pick_post_when_15_are_required`) built with the incident's own exact numbers (16 games,
+15 required), not new JS. The existing JS test suite (`npm test`, 22 tests covering the
+pick cap's Tab/Arrow navigation) was re-run unmodified and stayed green, confirming nothing
+here regressed keyboard operability.
+
+Also discovered while enumerating Render access for this: `list_workspaces` returned two
+other, unrelated people's workspaces ("Aaron's workspace", "Pelagos Workspace") alongside
+this user's own ("My Workspace"). Every Render action in this incident was scoped explicitly
+to `tea-d40u6b0dl3ps73dba6cg` ("My Workspace", matching the user's own email); the other two
+were never queried. Flagged to the user directly as a possible cross-tenant exposure in the
+connector, not something to investigate further under this task's own authorization.

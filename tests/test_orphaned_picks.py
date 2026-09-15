@@ -361,3 +361,56 @@ def test_unique_constraint_rejects_a_duplicate_confidence_value(world, session_f
         db.commit()
     db.rollback()
     db.close()
+
+
+# Phase 2: the browser already caps how many games can be picked (pickedRowCount(list) >=
+# required in app.js's onClick, from an earlier phase) and already shows a live "X of N"
+# count (updateSummary). Neither needed a change for this incident: the bug was never that a
+# player could get more than picks_required winners selected in one sitting, it was that the
+# server union'd two separate, individually valid sittings together (Phase 1, above). What
+# was still missing is a test proving the server rejects an oversized submission in the exact
+# shape of the reported incident, a hand crafted POST no real client would ever send, matching
+# the commissioner's own reported "16 ranked games when the league requires 15."
+
+
+@pytest.fixture
+def sixteen_game_world(session_factory):
+    """16 slate games, picks_required=15, matching the reported incident's own numbers."""
+    db = session_factory()
+    pool = _make_pool(db, num_games=16, picks_required=15)
+    boss = _make_user(db, "boss@example.com", "The Commissioner", role="admin")
+    player = _make_user(db, "player@example.com", "Regular Player")
+    db.add(PoolMember(pool_id=pool.id, user_id=boss.id, role_in_pool="commissioner"))
+    db.add(PoolMember(pool_id=pool.id, user_id=player.id, role_in_pool="member"))
+    week = _make_week(db, pool)
+    games = _make_games(db, week, count=16)
+    db.commit()
+    data = {
+        "pool_id": pool.id,
+        "week_id": week.id,
+        "player_id": player.id,
+        "game_ids": [g.id for g in games],
+    }
+    db.close()
+    return data
+
+
+def test_server_rejects_a_hand_crafted_16_pick_post_when_15_are_required(
+    client, sixteen_game_world
+):
+    """The browser cap and live count are convenience, never authority (Phase 2). A
+    hand crafted POST covering all 16 slate games, exactly the shape of the reported
+    incident, must still be rejected server side even though no real client, with the
+    existing cap in place, would ever produce it."""
+    game_ids = sixteen_game_world["game_ids"]
+    _login(client, "player@example.com")
+    data = {}
+    for index, gid in enumerate(game_ids):
+        data[f"winner-{gid}"] = "home" if index % 2 == 0 else "away"
+        data[f"confidence-{gid}"] = str(index + 1)
+    response = client.post("/picks", data=data, headers={"HX-Request": "true"})
+    assert response.status_code == 400
+    assert "You have picked 16 games. Pick 15." in response.text
+
+    db_check = client.get("/picks")
+    assert "16 of 15" not in db_check.text
