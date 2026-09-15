@@ -239,9 +239,36 @@ def dashboard(
             "slate_counts": counts,
             "pick_counts": pick_counts,
             "member_count": member_count,
+            "pick_integrity_warnings": _pick_integrity_warnings(db, pool, weeks),
         },
         **_base(db, user, pool),
     )
+
+
+def _pick_integrity_warnings(db: Session, pool: Pool, weeks: list[Week]) -> list[str]:
+    """One plain sentence per open or locked week with a corrupt pick entry (the orphaned
+    picks incident, see DECISIONS.md, "Orphaned picks"), naming every affected player, so the
+    commissioner never has to find this by eye in a results grid the way this incident was
+    actually found. A scored week is not checked here: score_week_for_pool's own guard (Phase
+    4) is what flags a corrupt entry the moment scoring would use it, which is the point where
+    it actually matters; this is the earlier, "before it scores anything" warning.
+    """
+    from app.services.pick_repair import audit_week
+
+    warnings: list[str] = []
+    for week in weeks:
+        if week.status not in ("open", "locked"):
+            continue
+        affected = [row for row in audit_week(db, pool, week) if row.is_affected]
+        if not affected:
+            continue
+        names = ", ".join(row.display_name for row in affected)
+        warnings.append(
+            f"{week.label}: {names} {'has' if len(affected) == 1 else 'have'} an invalid "
+            f"pick entry (not exactly {pool.picks_required} picks forming a clean confidence "
+            "permutation). Run doctor-picks / repair-picks."
+        )
+    return warnings
 
 
 @router.post("/switch-league")

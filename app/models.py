@@ -572,7 +572,18 @@ class Game(Base):
 
 class Pick(Base):
     __tablename__ = "picks"
-    __table_args__ = (UniqueConstraint("user_id", "game_id", name="uq_user_game"),)
+    __table_args__ = (
+        UniqueConstraint("user_id", "game_id", name="uq_user_game"),
+        # The orphaned picks incident (see DECISIONS.md, "Orphaned picks"): a database level
+        # backstop so two picks in the same week can never share a confidence value again,
+        # on top of app.routers.picks._upsert_picks now deleting an orphan on every save and
+        # its own post write assertion. Matches alembic/versions/8f1491439a97_*, which adds
+        # this same constraint to an existing database, skipping itself (with a loud warning,
+        # never a crash) if old corrupt rows still violate it; app.services.pick_repair's
+        # repair-picks --apply is what actually clears those and can add the constraint
+        # directly the moment it is safe to, without waiting on a fresh migration run.
+        UniqueConstraint("user_id", "week_id", "confidence", name="uq_pick_user_week_confidence"),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     user_id: Mapped[int] = mapped_column(

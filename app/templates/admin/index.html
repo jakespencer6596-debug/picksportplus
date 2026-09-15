@@ -28,6 +28,18 @@
   {% endif %}
 </div>
 
+{% if pick_integrity_warnings %}
+  <div class="flash flash-error" role="alert" id="pick-integrity-warning">
+    {{ ic.icon("alert", 18) }}
+    <div>
+      <p><strong>Pick data needs attention.</strong></p>
+      <ul class="error-list">
+        {% for warning in pick_integrity_warnings %}<li>{{ warning }}</li>{% endfor %}
+      </ul>
+    </div>
+  </div>
+{% endif %}
+
 <nav class="subnav" aria-label="Commissioner tools">
   <a class="subnav-link is-active" href="/league" aria-current="page">Overview</a>
   <a class="subnav-link" href="/league/slate">Slate</a>
