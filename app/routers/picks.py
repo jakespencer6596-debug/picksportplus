@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import datetime as dt
+import logging
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from fastapi.responses import RedirectResponse
@@ -27,6 +28,7 @@ from app.services.preview import get_preview_pool
 from app.templating import render
 
 router = APIRouter(tags=["picks"])
+log = logging.getLogger("picksportplus.picks")
 
 
 def payment_gate_blocks(member: PoolMember | None, pool: Pool) -> bool:
@@ -283,6 +285,32 @@ def _parse_submission(games: list[Game], raw: dict[str, str]) -> tuple[list[Pick
     return submitted, malformed
 
 
+class PickIntegrityError(Exception):
+    """Raised when the post write assertion in _upsert_picks finds the database would not end
+    up matching the submission exactly. See _upsert_picks and _assert_clean_picks below: this
+    is what stood between an already-validated submission and the orphaned picks incident
+    (validate_picks checks the submission on the way in, this checks the resulting row set on
+    the way out). The caller rolls back and returns a real error rather than committing."""
+
+
+def _assert_clean_picks(db: Session, user: User, week: Week, picks_required: int) -> None:
+    """Re-read this player's picks for this week and confirm the row count equals
+    picks_required and the confidence values are a clean permutation of 1..picks_required.
+    Raises PickIntegrityError otherwise. Called after the upsert/delete below and before
+    commit, so a bug here rolls back instead of leaving a corrupt row set in place."""
+    rows = list(db.scalars(select(Pick).where(Pick.user_id == user.id, Pick.week_id == week.id)))
+    if len(rows) != picks_required:
+        raise PickIntegrityError(
+            f"Expected {picks_required} picks for user {user.id}, week {week.id}, "
+            f"found {len(rows)}."
+        )
+    if sorted(p.confidence for p in rows) != list(range(1, picks_required + 1)):
+        raise PickIntegrityError(
+            f"Confidence values for user {user.id}, week {week.id} are not a clean "
+            f"permutation of 1..{picks_required}: {sorted(p.confidence for p in rows)}."
+        )
+
+
 def _upsert_picks(
     db: Session, user: User, pool: Pool, week: Week, submitted: list[PickInput], now: dt.datetime
 ) -> WeekEntry:
@@ -290,14 +318,49 @@ def _upsert_picks(
 
     The one write path shared by /picks and /picks/lock. Never touches WeekEntry.locked_at:
     only the caller in /picks/lock does that, after this returns.
+
+    The database ends in exactly the state the player submitted, never a union of every state
+    they have ever submitted: every existing Pick row for this user and week whose game_id is
+    not in this submission is deleted (the orphaned picks incident, see DECISIONS.md,
+    "Orphaned picks"). validate_picks already guaranteed the submission itself is a clean
+    picks_required-sized permutation before this is ever called; _assert_clean_picks below
+    re-checks that guarantee against the row set actually written, so a bug in this function
+    (or a future one) rolls back rather than silently committing a corrupt state.
+
+    Reordering which game holds which confidence value (nothing added or removed, just, say,
+    two games' rankings swapped) writes real rows through an intermediate state that can
+    collide with the new uq_pick_user_week_confidence constraint even though neither the old
+    nor the new state ever does: updating one row to a value another still-unupdated row
+    currently holds trips the same-week uniqueness rule mid flush. Deleting orphans first (and
+    flushing that separately) handles the delete-then-update case; the two pass update below
+    (every changing row parked on a guaranteed-unique negative sentinel before any of them is
+    set to its real target) handles a pure reordering among rows that all survive, so this
+    never depends on the order the ORM happens to emit statements in.
     """
     existing = {
         p.game_id: p
         for p in db.scalars(select(Pick).where(Pick.user_id == user.id, Pick.week_id == week.id))
     }
+    submitted_game_ids = {item.game_id for item in submitted}
+    orphans = [row for game_id, row in existing.items() if game_id not in submitted_game_ids]
+    for row in orphans:
+        db.delete(row)
+    if orphans:
+        db.flush()
+
+    to_update = [(existing[item.game_id], item) for item in submitted if item.game_id in existing]
+    if to_update:
+        for row, _item in to_update:
+            row.confidence = -row.id
+        db.flush()
+        for row, item in to_update:
+            row.picked_team = item.picked_team
+            row.confidence = item.confidence
+            row.updated_at = now
+        db.flush()
+
     for item in submitted:
-        row = existing.get(item.game_id)
-        if row is None:
+        if item.game_id not in existing:
             db.add(
                 Pick(
                     user_id=user.id,
@@ -308,10 +371,6 @@ def _upsert_picks(
                     confidence=item.confidence,
                 )
             )
-        else:
-            row.picked_team = item.picked_team
-            row.confidence = item.confidence
-            row.updated_at = now
 
     entry = db.scalar(
         select(WeekEntry).where(WeekEntry.user_id == user.id, WeekEntry.week_id == week.id)
@@ -321,6 +380,9 @@ def _upsert_picks(
         db.add(entry)
     elif entry.submitted_at is None:
         entry.submitted_at = now
+
+    db.flush()
+    _assert_clean_picks(db, user, week, pool.picks_required)
     return entry
 
 
@@ -359,7 +421,23 @@ def _save_picks(request: Request, db: Session, user: User, pool: Pool, raw: dict
         )
 
     now = dt.datetime.now(dt.UTC)
-    _upsert_picks(db, user, pool, week, submitted, now)
+    try:
+        _upsert_picks(db, user, pool, week, submitted, now)
+    except PickIntegrityError as exc:
+        db.rollback()
+        log.error("Pick integrity check failed on save for user %s: %s", user.id, exc)
+        return render(
+            request,
+            "components/pick_status.html",
+            {
+                "errors": ["Your picks could not be saved. Please try again."],
+                "saved": False,
+                "n": pool.picks_required,
+            },
+            current_user=user,
+            pool=pool,
+            status_code=409,
+        )
     db.commit()
 
     if request.headers.get("HX-Request") == "true":
@@ -428,7 +506,23 @@ def _lock_picks(request: Request, db: Session, user: User, pool: Pool, raw: dict
         )
 
     now = dt.datetime.now(dt.UTC)
-    entry = _upsert_picks(db, user, pool, week, submitted, now)
+    try:
+        entry = _upsert_picks(db, user, pool, week, submitted, now)
+    except PickIntegrityError as exc:
+        db.rollback()
+        log.error("Pick integrity check failed on lock for user %s: %s", user.id, exc)
+        return render(
+            request,
+            "components/pick_status.html",
+            {
+                "errors": ["Your picks could not be locked. Please try again."],
+                "saved": False,
+                "n": pool.picks_required,
+            },
+            current_user=user,
+            pool=pool,
+            status_code=409,
+        )
     entry.locked_at = now
     db.commit()
 
