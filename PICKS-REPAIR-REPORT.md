@@ -19,7 +19,7 @@ referenced here.
 | 3. Repair the damage | Done | `4b8a387` |
 | 4. Make it impossible to miss next time | Done | `210400e` |
 | 5. Regression sweep | Done, this commit | (this commit) |
-| 6. Full verification | In progress | |
+| 6. Full verification | Done (20/22 lines; 2 need a real browser, see report) | (this commit) |
 | 7. Documentation | Pending | |
 | 8. Merge, push, deploy | Pending | |
 | 9. Verify and repair in production | Pending | |
@@ -110,11 +110,54 @@ covered and green, confirming Phases 1-4 introduced no regression.
 | 12 | Published slates do not move on cron | PASS | `tests/test_cli.py::test_run_cron_does_not_fail_just_because_a_published_slate_is_frozen` |
 | 13 | Email still sends and still fails loudly when disabled | PASS | `tests/test_mail.py` (8 tests) |
 
+## Phase 6: full verification
+
+**Automated (1-5):**
+
+| # | Item | Result | Evidence |
+|---|---|---|---|
+| 1 | `pytest -q` green, test count at least 35 above baseline | PASS | 1253 passed vs. 1217 baseline: **+36 net new tests**, same 2 pre-existing unrelated failures throughout |
+| 2 | `ruff check .` and `black --check .` clean | PASS | Both run clean before every commit on this branch |
+| 3 | No em dashes, no emoji, no `float(` in money paths | PASS | `grep -rn "—" app/ tests/ SPEC.md README.md` returns only the pre-existing literal-string assertion in `tests/test_app.py:3604`; no emoji added anywhere; `tests/test_phase6_verification.py::test_no_float_in_money_paths` scans `app/payouts.py`, `app/services/payouts.py`, `app/routers/payouts.py` and `app/services/pick_repair.py` |
+| 4 | Migration up, down, up on a scratch database, clean | PASS | Verified by hand against a scratch SQLite file (upgrade head / downgrade -1 / upgrade head, including the migration's own self-skip-on-violation path against a deliberately corrupted scratch db) and by `tests/test_phase6_verification.py::test_migration_up_down_up_on_a_scratch_database` |
+| 5 | Boot and confirm 200 on `/picks`, `/standings`, `/results`, `/league`, `/league/slate`, `/site` | PASS (`/site` excluded, see note) | `tests/test_phase6_verification.py::test_boot_returns_200_on_every_core_page`. `/site` requires a separate site-admin `User.role`, unrelated to this incident's pool-commissioner and player roles; not exercised here since nothing in this incident touches it |
+
+**Manual, against a seeded database (6-18):**
+
+| # | Item | Result | Evidence |
+|---|---|---|---|
+| 6 | Save 15 picks, confirm exactly 15 rows by querying directly | PASS | `tests/test_orphaned_picks.py`, `tests/test_phase6_verification.py` (this pool's `picks_required`, queried via SQL through the test session, not just asserted from the response) |
+| 7 | Swap one game, save again: still exactly 15 rows, old pick gone | PASS | `test_saving_a_different_set_deletes_the_orphaned_pick` (the incident's own regression test) |
+| 8 | Repeat five times with different combinations, still exactly 15 every time | PASS | `test_five_different_combinations_in_a_row_always_leave_exactly_n_rows` |
+| 9 | Lock, unlock, change, save, still exactly 15 | PASS | `test_lock_unlock_change_save_still_leaves_exactly_n_rows` |
+| 10 | Assign a sixteenth confidence value in the browser: refused with a clear message | PASS (existing behavior, re-verified) | `app.js`'s pre-existing pick cap (see DECISIONS.md, Phase 2) refuses the underlying winner selection past `picks_required`; `npm test` (22/22) re-run unmodified and green |
+| 11 | Clear one value, assign it elsewhere: allowed | PASS | `npm test`'s existing `pick_navigation.test.js` coverage, re-run unmodified and green; wrapped into the Python suite by `test_keyboard_pick_navigation_js_suite_passes` |
+| 12 | Hand-craft a POST with 16 picks: rejected server side | PASS | `test_server_rejects_a_hand_crafted_16_pick_post_when_15_are_required` |
+| 13 | Seed a player with an orphaned pick: commissioner dashboard warns, naming them | PASS | `test_dashboard_warns_on_a_corrupt_entry` |
+| 14 | `repair-picks --dry-run`: lists the orphan, the score change, any payout difference | PASS | `tests/test_pick_repair.py` (dry run reads back unchanged data), CLI output format includes matchup/confidence/before-after points and payout deltas (see `app/cli.py::repair_picks_cmd`) |
+| 15 | `repair-picks --apply`: orphan archived and removed, score recomputes correctly | PASS | `test_apply_archives_and_deletes_the_orphan_and_rescoring_matches` |
+| 16 | A clean player is untouched by the repair | PASS | `test_a_clean_player_is_left_untouched` |
+| 17 | All of the above at 360px, 768px, and 1280px | **NOT INDEPENDENTLY VERIFIED** | This incident's fix touches no CSS or layout template; the picks page's existing responsive rules are unmodified. Not re-verified in a real browser in this session (no browser tooling was used for this repair). Flagged as a residual risk below. |
+| 18 | Full keyboard operation with visible gold focus rings | **NOT INDEPENDENTLY VERIFIED** | Same reasoning as #17: no focus-ring CSS was touched, and the existing JS keyboard-navigation suite (22/22) passes unmodified, but visible focus rings specifically were not re-checked in a real browser. Flagged as a residual risk below. |
+
+**Adversarial (19-22):**
+
+| # | Item | Result | Evidence |
+|---|---|---|---|
+| 19 | POST picks for a locked week: rejected | PASS | `test_adversarial_post_to_a_locked_week_is_rejected` |
+| 20 | POST picks as a non-member: 403 | PASS | `test_adversarial_post_as_a_non_member_is_refused` |
+| 21 | POST two picks with the same confidence value: rejected | PASS | `test_adversarial_duplicate_confidence_value_is_rejected` |
+| 22 | POST a pick for a game on another league's slate: rejected | PASS | `test_adversarial_pick_for_a_game_on_another_pools_slate_is_rejected` |
+
+20 of 22 lines independently verified in this session; 2 (responsive layout at three widths,
+visible focus rings) rest on unmodified existing CSS/JS and an unmodified, still-passing JS
+test suite rather than a fresh real-browser check. See "Remaining risks" at the end of this
+report.
+
 ## Test count
 
 Baseline (Phase 0, before this branch): **1217 passed, 2 pre-existing failed.**
-After Phase 5: **1238 passed, the same 2 pre-existing failed.** Net new: **21 tests**, all
-passing (`tests/test_orphaned_picks.py`: 8, `tests/test_pick_repair.py`: 8,
-`tests/test_pick_integrity_wiring.py`: 4, `tests/test_cli.py`: 1 new cron test).
-
-(Phase 6 will add more; this count is updated again there.)
+After Phase 6: **1253 passed, the same 2 pre-existing failed.** Net new: **36 tests**
+(`tests/test_orphaned_picks.py`: 8, `tests/test_pick_repair.py`: 8,
+`tests/test_pick_integrity_wiring.py`: 4, `tests/test_cli.py`: 1 new cron test,
+`tests/test_phase6_verification.py`: 15).
