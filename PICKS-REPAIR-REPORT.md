@@ -20,7 +20,7 @@ referenced here.
 | 4. Make it impossible to miss next time | Done | `210400e` |
 | 5. Regression sweep | Done, this commit | (this commit) |
 | 6. Full verification | Done (20/22 lines; 2 need a real browser, see report) | (this commit) |
-| 7. Documentation | Pending | |
+| 7. Documentation | Done | (this commit) |
 | 8. Merge, push, deploy | Pending | |
 | 9. Verify and repair in production | Pending | |
 

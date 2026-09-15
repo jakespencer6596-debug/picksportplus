@@ -331,7 +331,34 @@ python -m app.cli payouts-show               # print the payout ladder and alloc
 python -m app.cli payouts-preset             # load the known preset ladder for all four scopes
 python -m app.cli payouts-snapshot --scope weekly --week 6   # freeze one scope's awards by hand
 python -m app.cli payouts-summary            # print what every player is owed, paid and unpaid
+python -m app.cli doctor-picks                # read only pick integrity audit, every pool/week/player
+python -m app.cli repair-picks                # dry run: print the orphaned picks repair plan, write nothing
+python -m app.cli repair-picks --apply        # actually archive and remove orphaned picks, then rescore
 ```
+
+### Pick integrity: `doctor-picks` and `repair-picks`
+
+Both exist because of a real incident (see `DECISIONS.md`, "Orphaned picks", and
+`PICKS-REPAIR-REPORT.md`): a player who saved a valid entry, then saved a different valid
+entry, could end up with more picks than the pool requires and two games sharing a confidence
+value, quietly inflating their score. The write path itself is fixed; these two commands are
+for finding and cleaning up any data corrupted before the fix.
+
+`doctor-picks` is read only and safe to run any time, including against a copy of production
+data: for every pool, week and player it reports the pick count against `picks_required`,
+whether the confidence values form a clean permutation, any duplicate or missing values, and
+any pick whose game has since left the slate. It exits non-zero if anything is affected, and
+the same check runs as part of `python -m app.cli doctor` and every `run-cron` pass.
+
+`repair-picks` **defaults to a dry run** and refuses to write anything unless you pass
+`--apply` explicitly. For every affected player, it keeps the `picks_required` picks with the
+most recently updated timestamp (that player's latest intent), archives every other pick into
+the `pick_archives` table (nothing is ever deleted outright) and removes it, then rescores the
+affected week. A week whose payout has already been marked paid is always left completely
+untouched, dry run or not, and reported separately: money already sent is the commissioner's
+problem to resolve with the group, never something this command moves on its own. When the
+repair still leaves a player's confidence values short of a clean permutation, that player's
+values are never renumbered, only flagged for you to look at by hand.
 
 Lock is enforced at request time by comparing the clock against `lock_at`, so a late or missed
 cron run can never hand anyone extra time to pick. A player who has not submitted by lock is

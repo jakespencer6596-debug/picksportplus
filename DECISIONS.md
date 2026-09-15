@@ -4647,3 +4647,27 @@ this user's own ("My Workspace"). Every Render action in this incident was scope
 to `tea-d40u6b0dl3ps73dba6cg` ("My Workspace", matching the user's own email); the other two
 were never queried. Flagged to the user directly as a possible cross-tenant exposure in the
 connector, not something to investigate further under this task's own authorization.
+
+**Phase 5, two `test_scenarios.py` timing tests failed once, mid-sweep, then passed cleanly
+both in isolation and on a full re-run.** `test_monte_carlo_after_an_aborted_exhaustive_
+attempt_still_respects_the_hard_cap` and `test_exhaustive_r15_16_players_completes_well_
+under_the_two_second_cap` both assert against a real 2-second wall clock budget
+(`app/scenarios.py`, SPEC.md Section 9a); this incident's branch never touches that module.
+Re-running `tests/test_scenarios.py` alone took 6.25s for all 29 tests, and a full second
+`pytest -q` run came back at the normal 2 pre-existing failures with nothing scenario-related.
+Treated as ordinary timing flakiness under momentary machine load from the one long run that
+hit it, not a regression, and not chased further; recorded here rather than silently ignored
+in case it recurs.
+
+**Phase 6, two of the 22 checklist lines (responsive layout at 360/768/1280px, visible
+keyboard focus rings) are not independently re-verified in a real browser.** This incident's
+fix touches `app/routers/picks.py`, `app/services/pick_repair.py`, `app/services/results.py`,
+`app/routers/admin.py`, `app/cli.py`, one template addition (a warning banner using the same
+`flash flash-error` pattern already used elsewhere), and one migration; no CSS, no layout
+template, and no focus-ring styling. The existing JS keyboard navigation suite (22 tests,
+`tests/js/pick_navigation.test.js` and friends) was re-run unmodified and stayed green, wired
+into the same `pytest -q` run via `test_keyboard_pick_navigation_js_suite_passes` so it cannot
+be silently skipped in the future. Doing a fresh real-browser pass across three widths for
+code that was never touched would have been checking someone else's prior work, not this
+incident's own change; recorded as a residual risk in PICKS-REPAIR-REPORT.md instead of
+claiming a browser check that did not happen.
