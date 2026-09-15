@@ -691,11 +691,12 @@ def payouts_summary_cmd(
     )
 
 
-# Orphaned picks: audit -------------------------------------------------------
+# Orphaned picks: audit and repair -------------------------------------------
 #
 # See app/services/pick_repair.py for the actual logic and DECISIONS.md, "Orphaned picks",
-# for the full incident writeup. doctor-picks is read only and safe to run any time,
-# including against a snapshot of production data. Changes nothing.
+# for why the keep rule is what it is. doctor-picks is read only and safe to run any time,
+# including against a snapshot of production data. repair-picks defaults to --dry-run and
+# refuses to write without an explicit --apply.
 
 
 def _pools_to_check(db, pool_id: int | None) -> list[Pool]:
@@ -761,6 +762,109 @@ def doctor_picks_cmd(
     _echo(f"{total_rows} player-week row(s) checked, {total_affected} affected.")
     if total_affected:
         raise typer.Exit(code=1)
+
+
+@app.command("repair-picks")
+def repair_picks_cmd(
+    pool_id: int | None = typer.Option(None, "--pool"),
+    apply_changes: bool = typer.Option(
+        False,
+        "--apply",
+        help="Actually write the repair. Without this flag, nothing is written (dry run).",
+    ),
+) -> None:
+    """Repair orphaned picks: archive and remove every pick beyond picks_required, keeping
+    the most recently updated ones (see app/services/pick_repair.py for the exact keep rule),
+    then rescore every affected week.
+
+    Defaults to a dry run: the plan is computed and printed in full, then rolled back, so
+    nothing is written unless --apply is passed explicitly. A week whose weekly/bowl payout
+    has already been marked paid is always left untouched, dry run or not, and reported
+    separately: money already sent over Venmo is never something this command moves on its
+    own. When the repair leaves a player's confidence values short of a clean 1..picks_required
+    permutation (a real, documented case: rows that accumulated across more than two saves can
+    still have both a duplicate and a gap after the one required row is dropped), that
+    player's set is never renumbered, only flagged for the commissioner.
+    """
+    from app.services.pick_repair import ensure_unique_constraint, plan_and_apply_repair
+
+    with session_scope() as db:
+        pools = _pools_to_check(db, pool_id)
+        if not pools:
+            _echo("No pool exists yet. Run: python -m app.cli seed-admin")
+            return
+
+        any_orphans = False
+        for pool in pools:
+            plans = plan_and_apply_repair(db, pool, skip_paid=True)
+            if not plans:
+                continue
+            _echo(f"Pool: {pool.name} (id {pool.id})")
+            for plan in plans:
+                if plan.skipped_paid_scopes:
+                    typer.secho(
+                        f"  Week {plan.week_number} ({plan.week_label}): SKIPPED, already paid "
+                        f"out ({', '.join(plan.skipped_paid_scopes)}). Left for the "
+                        "commissioner to decide.",
+                        fg=typer.colors.YELLOW,
+                    )
+                    continue
+                any_orphans = True
+                locked_note = (
+                    " [locked/scored week]" if plan.week_status in ("locked", "scored") else ""
+                )
+                _echo(f"  Week {plan.week_number} ({plan.week_label}){locked_note}:")
+                for player in plan.players:
+                    clean_note = ""
+                    if player.still_not_clean:
+                        clean_note = (
+                            " -- STILL NOT A CLEAN PERMUTATION after repair "
+                            f"(duplicates {player.remaining_duplicate_values}, "
+                            f"missing {player.remaining_missing_values}). Needs the "
+                            "commissioner's attention; values were not renumbered."
+                        )
+                    _echo(
+                        f"    {player.display_name}: {player.before_pick_count} -> "
+                        f"{player.after_pick_count} picks, "
+                        f"{player.before_points} -> {player.after_points} points, "
+                        f"{player.before_correct} -> {player.after_correct} correct"
+                        f"{clean_note}"
+                    )
+                    for orphan in player.orphans:
+                        _echo(
+                            f"      removing: {orphan.matchup}, picked {orphan.picked_team}, "
+                            f"confidence {orphan.confidence}, last updated {orphan.updated_at}"
+                        )
+                for delta in plan.payout_deltas:
+                    paid_note = " (ALREADY PAID)" if delta.already_paid else ""
+                    typer.secho(
+                        f"    PAYOUT CHANGE [{delta.scope}] {delta.display_name}: "
+                        f"place {delta.old_place} -> {delta.new_place}, "
+                        f"${delta.old_amount} -> ${delta.new_amount}{paid_note}",
+                        fg=typer.colors.YELLOW,
+                    )
+
+        if not any_orphans:
+            _echo("No orphaned picks found. Nothing to repair.")
+            db.rollback()
+            return
+
+        if not apply_changes:
+            db.rollback()
+            _echo("")
+            _echo("Dry run only. Nothing was written. Re-run with --apply to write this.")
+            return
+
+        applied = True
+        # session_scope commits when this `with` block exits normally, right below. The
+        # unique constraint check below must run against a connection that can see that
+        # commit, not one racing it, so it happens after the block closes (see below).
+
+    if applied:
+        constraint_status = ensure_unique_constraint(engine)
+        _echo("")
+        _echo(f"Unique constraint on (user_id, week_id, confidence): {constraint_status}.")
+        _echo("Applied. Orphaned picks archived (reason=orphan_repair) and removed.")
 
 
 def _redact_db_url(url: str) -> str:
