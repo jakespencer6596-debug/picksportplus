@@ -691,6 +691,78 @@ def payouts_summary_cmd(
     )
 
 
+# Orphaned picks: audit -------------------------------------------------------
+#
+# See app/services/pick_repair.py for the actual logic and DECISIONS.md, "Orphaned picks",
+# for the full incident writeup. doctor-picks is read only and safe to run any time,
+# including against a snapshot of production data. Changes nothing.
+
+
+def _pools_to_check(db, pool_id: int | None) -> list[Pool]:
+    if pool_id:
+        pool = db.get(Pool, pool_id)
+        if pool is None:
+            raise typer.BadParameter(f"No pool with id {pool_id}.")
+        return [pool]
+    return list(db.scalars(select(Pool).where(Pool.is_preview.is_(False)).order_by(Pool.id)))
+
+
+@app.command("doctor-picks")
+def doctor_picks_cmd(
+    pool_id: int | None = typer.Option(None, "--pool"),
+) -> None:
+    """Read only pick integrity audit. For every pool, week and player: the pick count,
+    picks_required, whether the confidence values are a clean permutation of 1..picks_required,
+    duplicate values, missing values, and any pick whose game has left the slate. Changes
+    nothing. --pool limits the audit to one pool; the default checks every real (non preview)
+    pool.
+    """
+    from app.services.pick_repair import audit_pool
+
+    total_rows = 0
+    total_affected = 0
+    with session_scope() as db:
+        pools = _pools_to_check(db, pool_id)
+        if not pools:
+            _echo("No pool exists yet. Run: python -m app.cli seed-admin")
+            return
+        for pool in pools:
+            rows = audit_pool(db, pool)
+            if not rows:
+                continue
+            _echo(f"Pool: {pool.name} (id {pool.id})")
+            by_week: dict[int, list] = {}
+            for row in rows:
+                by_week.setdefault(row.week_id, []).append(row)
+            for week_rows in by_week.values():
+                _echo(f"  Week {week_rows[0].week_number} ({week_rows[0].week_label}):")
+                for row in week_rows:
+                    total_rows += 1
+                    flags = []
+                    if row.pick_count != row.picks_required:
+                        flags.append(f"{row.pick_count} picks, expected {row.picks_required}")
+                    if row.duplicate_values:
+                        flags.append(f"duplicate values {row.duplicate_values}")
+                    if row.missing_values:
+                        flags.append(f"missing values {row.missing_values}")
+                    if row.off_slate_game_ids:
+                        flags.append(f"{len(row.off_slate_game_ids)} pick(s) off the slate")
+                    if row.is_affected:
+                        total_affected += 1
+                        typer.secho(
+                            f"    CORRUPT  {row.display_name}: {'; '.join(flags)}",
+                            fg=typer.colors.RED,
+                        )
+                    elif flags:
+                        _echo(f"    ok       {row.display_name}: {'; '.join(flags)}")
+                    else:
+                        _echo(f"    ok       {row.display_name}: clean")
+    _echo("")
+    _echo(f"{total_rows} player-week row(s) checked, {total_affected} affected.")
+    if total_affected:
+        raise typer.Exit(code=1)
+
+
 def _redact_db_url(url: str) -> str:
     """Hide a password in a postgres URL. Never print a live secret."""
     if "@" not in url:
