@@ -21,8 +21,42 @@ referenced here.
 | 5. Regression sweep | Done, this commit | (this commit) |
 | 6. Full verification | Done (20/22 lines; 2 need a real browser, see report) | (this commit) |
 | 7. Documentation | Done | (this commit) |
-| 8. Merge, push, deploy | Pending | |
-| 9. Verify and repair in production | Pending | |
+| 8. Merge, push, deploy | Merged locally, **push blocked** (see below) | `711b7be` (merge, local `main` only) |
+| 9. Verify and repair in production | **Blocked: no working production database access** (see below) | |
+
+**Phase 8 status in detail.** `orphaned-picks` was merged into local `main` with `--no-ff`
+(clean merge, no conflicts, commit `711b7be`), and the full gate was re-run and is clean on
+the merged `main` (1253 passed, the same 2 pre-existing unrelated failures). `git push origin
+main` was then refused by this environment's own automated permission layer (reason given:
+"Production Deploy"), since `picksportplus-live` auto-deploys on push to `main`. This is a
+harness-level gate, not a data-safety concern raised by this repair itself, and it was not
+worked around. Local `main` is 9 commits ahead of `origin/main` and untouched otherwise,
+waiting on that push being approved (either by the user directly or by re-running it once
+permitted). Nothing has been pushed; nothing has deployed.
+
+**Production impact assessment (Phase 0) and Phase 9: could not be run.** This session has a
+connected, read-only Render Postgres query tool aimed at the real `picksportplus-live-db`
+instance, the correct one (confirmed by name and owner). Every attempt to use it, including a
+bare `SELECT 1`, failed to connect at all (`failed to receive message: unexpected EOF` /
+`FATAL: SSL/TLS required`), consistently rather than as a one-off timeout;
+`picksportplus-live-db`'s `ipAllowList` is empty, which blocks external access entirely on
+Render, and no connection string or credential is exposed by any tool available here either,
+so there is no write path to fall back to. **This session has neither read nor write access
+to production**, so no real production numbers appear anywhere in this report, the flagged
+player's real production before/after was not confirmed, and `repair-picks --apply` was never
+attempted against production (it would have been refused as a hard stop under the user's own
+explicit instruction regardless, since a genuine write path does not exist here at all). See
+DECISIONS.md, "Orphaned picks", for the full account, including that this was only discovered
+after first, incorrectly, recording read-only access as available.
+
+**What this means concretely:** everything in Phases 0-7 above (the fix, the repair tooling,
+the tests, the docs) is real, tested, and ready. What has not happened: the code has not
+reached `origin/main` or been deployed, and the actual corrupt rows in production have not
+been counted, listed, or touched. Whoever has a working `DATABASE_URL` or dashboard/shell
+access to `picksportplus-live-db` needs to run `python -m app.cli doctor-picks` and then
+`python -m app.cli repair-picks --dry-run` themselves once this code is deployed, and this
+report's Phase 9 numbers (below) should be filled in from that real output rather than
+invented here.
 
 ## Baseline (Phase 0)
 
@@ -33,9 +67,13 @@ test); see DECISIONS.md, "Orphaned picks", for why they are left alone rather th
 this incident's own fix. Every gate run on this branch's own commits is green except these
 same two, called out explicitly at every step rather than silently accepted.
 
-`doctor-picks` (the read only audit command built in Phase 0) was run against the local dev
-database and, separately, against production read-only via the Render Postgres connector; see
-"Production impact assessment" below for the real numbers once Phase 9 runs it for real.
+`doctor-picks` (the read only audit command built in Phase 0) was exercised against local and
+in-memory test databases throughout Phases 0-6 (see the test suites listed elsewhere in this
+report). It was not run against production in Phase 0: an attempt to reach the real
+`picksportplus-live-db` Postgres instance via this session's connected, read-only Render tool
+failed to even connect (`SELECT 1` itself failed), so no real production numbers appear in
+this report. See "Production impact assessment" below and DECISIONS.md, "Orphaned picks",
+for the full explanation and what this means for Phase 9.
 
 ## Post-mortem
 

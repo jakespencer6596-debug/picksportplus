@@ -4611,19 +4611,26 @@ own uncommitted writes) and adding the constraint immediately once it is safe to
 than a real `ALTER TABLE ... ADD CONSTRAINT`, since SQLite has no such statement; both are
 checked for on lookup so the status check is correct regardless of which one is present.
 
-**Production access: this session has a read-only path to the real `picksportplus-live-db`
-Postgres instance (via a connected Render MCP tool, `query_render_postgres`), but no write
-path and no raw connection string.** `mcp__claude_ai_Render__get_postgres` does not expose a
-connection string or credentials, and the only query tool available runs every statement
-inside a read-only transaction. This is exactly right for Phase 0's impact assessment and
-Phase 9's `doctor-picks`/`repair-picks --dry-run` verification against real data (both are
-pure reads, or writes this session can compute and then discard), but it means an actual
-`repair-picks --apply` against production cannot be executed by this session: doing so would
-need either the raw `DATABASE_URL` or shell access to the `picksportplus-live` service,
-neither of which this session has. Per the incident brief's own rule ("stop only for a
-credential you do not have"), Phase 9's `--apply` step is exactly that stop condition; see
-PICKS-REPAIR-REPORT.md for what was verified read-only against production instead, and what
-is left for the commissioner (or a session with that credential) to actually run.
+**Production access: attempted, and it does not actually work, read or write.** This session
+has a connected Render MCP tool (`query_render_postgres`) that in principle runs a read-only
+query against the real `picksportplus-live-db` Postgres instance, and `mcp__claude_ai_Render_
+_get_postgres` confirms the right instance (owner `jakespencer6596@gmail.com`, the user's own
+workspace, not one of the two unrelated workspaces this same connector also exposed, see
+below). In practice, every attempt, including a bare `SELECT 1`, fails to even connect:
+`failed to receive message: unexpected EOF` / `FATAL: SSL/TLS required (SQLSTATE 28000)`,
+consistently, not a one-off timeout. `picksportplus-live-db`'s `ipAllowList` is empty (per
+`list_postgres_instances`), which on Render means no external address is allowed in at all;
+whatever network path this MCP tool's query runs over is evidently outside that empty
+allowlist. There is also no exposed connection string or credential (`get_postgres` never
+returns one), so there is no write path either, and no way to work around the read failure
+by connecting directly. Net effect: this session has neither read nor write access to
+production, despite a tool that suggests read access exists. Per the incident brief's own
+rule ("stop only for a credential you do not have"), this is exactly that stop condition, and
+it is a stricter one than originally assessed (initially recorded here as read-only access
+before the connection was actually attempted): Phase 0's production impact assessment and all
+of Phase 9 could not be run against real data by this session. See PICKS-REPAIR-REPORT.md for
+what this means for those two phases and what is left for the commissioner (or a session with
+working database access) to actually run.
 
 **Phase 2 (the browser cap) needed no `app.js` change.** `app.js`'s `onClick` handler already
 refuses to select a winner on a new game once `pickedRowCount(list) >= picksRequired(list)`
