@@ -46,6 +46,12 @@ class ScoreReport:
     winners: list[str] = field(default_factory=list)
     week_complete: bool = False
     payouts_recalculated: bool = False
+    # Names of players whose Pick rows for this week are not exactly picks_required forming a
+    # clean 1..picks_required permutation (the orphaned picks incident, see DECISIONS.md,
+    # "Orphaned picks"). Non-empty here means every game has gone final but this week is
+    # deliberately held back from "scored" and from freezing any PayoutAward: see the guard in
+    # score_week_for_pool below. A no-show (zero picks) is never flagged, that is ordinary.
+    integrity_warnings: list[str] = field(default_factory=list)
 
     def summary(self) -> str:
         text = (
@@ -58,6 +64,12 @@ class ScoreReport:
             text += " The week is complete."
         if self.payouts_recalculated:
             text += " Payout amounts were recalculated to match this correction."
+        if self.integrity_warnings:
+            text += (
+                " PICK INTEGRITY WARNING, week held back from scoring: "
+                + "; ".join(self.integrity_warnings)
+                + ". Run repair-picks."
+            )
         return text
 
 
@@ -168,6 +180,8 @@ def score_week_for_pool(
     for pick in db.scalars(select(Pick).where(Pick.week_id == week.id)):
         picks_by_user.setdefault(pick.user_id, []).append(pick)
 
+    report.integrity_warnings = _integrity_warnings(db, pool, picks_by_user)
+
     existing = {
         e.user_id: e for e in db.scalars(select(WeekEntry).where(WeekEntry.week_id == week.id))
     }
@@ -228,6 +242,21 @@ def score_week_for_pool(
     if slate and not playable:
         report.week_complete = True
         already_scored = week.status == "scored"
+        if report.integrity_warnings and not already_scored:
+            # The orphaned picks incident (see DECISIONS.md, "Orphaned picks"): a corrupt
+            # entry must never be allowed to freeze a PayoutAward. Every game is done and
+            # WeekEntry above was still updated (so the live numbers are as accurate as they
+            # can be with the picks as they stand), but the week itself is deliberately held
+            # back from "scored" until repair-picks (or a fresh, correct save) clears every
+            # warning, and no payout snapshot is ever taken while that is true.
+            log.error(
+                "Week %s for pool %s has corrupt pick data, holding back from scoring: %s",
+                week.week_number,
+                pool.name,
+                "; ".join(report.integrity_warnings),
+            )
+            db.flush()
+            return report
         if not already_scored:
             week.status = "scored"
             week.scored_at = utcnow()
@@ -276,3 +305,27 @@ def score_week_for_pool(
     db.flush()
 
     return report
+
+
+def _integrity_warnings(db: Session, pool: Pool, picks_by_user: dict[int, list[Pick]]) -> list[str]:
+    """One sentence per player whose Pick rows for this week are not exactly picks_required
+    forming a clean 1..picks_required permutation (the orphaned picks incident, see
+    DECISIONS.md, "Orphaned picks"). A no-show (no rows at all) is never flagged, that is
+    ordinary. Deliberately not imported from app.services.pick_repair, which itself imports
+    this module (score_week_for_pool), to avoid a circular import; the same, simple check is
+    cheap enough to keep here directly.
+    """
+    n = pool.picks_required
+    bad_user_ids = [
+        user_id
+        for user_id, picks in picks_by_user.items()
+        if len(picks) != n or sorted(p.confidence for p in picks) != list(range(1, n + 1))
+    ]
+    if not bad_user_ids:
+        return []
+    users = {u.id: u for u in db.scalars(select(User).where(User.id.in_(bad_user_ids)))}
+    return [
+        f"{users[uid].display_name if uid in users else f'user {uid}'} has "
+        f"{len(picks_by_user[uid])} pick(s), not a clean 1..{n} permutation"
+        for uid in bad_user_ids
+    ]

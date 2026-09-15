@@ -624,6 +624,95 @@ def _bare_pool(session_factory, *, join_code: str) -> int:
         session.close()
 
 
+def test_run_cron_exits_non_zero_on_corrupt_pick_data(isolated_db, monkeypatch):
+    """The orphaned picks incident (see DECISIONS.md, "Orphaned picks"): a corrupt entry must
+    fail the cron run visibly, the same way a provider outage already does (the test right
+    below this one), rather than sitting unnoticed through the season. Real score_week_for_pool
+    runs here, against a genuinely corrupt Pick row set: 5 rows (confidence 1..5, no duplicate
+    values, so uq_pick_user_week_confidence is not in play here) against a 4-pick requirement,
+    the "too many picks" half of the incident rather than the "duplicate value" half already
+    covered directly in tests/test_pick_repair.py and tests/test_orphaned_picks.py.
+    """
+    import app.services.ingest as ingest_module
+    import app.services.results as results_module
+    from app.cli import run_cron
+    from app.models import Game, Pick
+
+    session = isolated_db()
+    try:
+        pool = Pool(
+            name="Real Pool",
+            join_code="REALPOOL2",
+            season_year=2026,
+            sports=["nfl"],
+            timezone="America/New_York",
+            current_week=1,
+            picks_required=4,
+        )
+        session.add(pool)
+        session.flush()
+        boss = User(email="boss@example.com", password_hash="x", display_name="Boss", role="admin")
+        player = User(email="player@example.com", password_hash="x", display_name="Player")
+        session.add_all([boss, player])
+        session.flush()
+        session.add(PoolMember(pool_id=pool.id, user_id=boss.id, role_in_pool="commissioner"))
+        session.add(PoolMember(pool_id=pool.id, user_id=player.id, role_in_pool="member"))
+        week = Week(
+            pool_id=pool.id,
+            season_year=2026,
+            week_number=1,
+            label="Week 1",
+            status="open",
+        )
+        session.add(week)
+        session.flush()
+        now = utcnow()
+        for i in range(5):  # 5 picks against a 4-pick requirement: the orphaned picks shape
+            game = Game(
+                week_id=week.id,
+                league="nfl",
+                espn_event_id=f"cron-corrupt-{i}",
+                start_time=now + dt.timedelta(hours=48),
+                home_team=f"H{i}",
+                away_team=f"A{i}",
+                home_abbr=f"H{i}",
+                away_abbr=f"A{i}",
+                canonical_home_key=f"nfl:h{i}",
+                canonical_away_key=f"nfl:a{i}",
+                in_slate=True,
+                slate_rank=i + 1,
+                status="scheduled",
+            )
+            session.add(game)
+            session.flush()
+            session.add(
+                Pick(
+                    user_id=player.id,
+                    pool_id=pool.id,
+                    week_id=week.id,
+                    game_id=game.id,
+                    picked_team="home",
+                    confidence=i + 1,
+                    created_at=now,
+                    updated_at=now,
+                )
+            )
+        session.commit()
+    finally:
+        session.close()
+
+    monkeypatch.setattr(ingest_module, "sync_week", lambda db, pool, *a, **k: None)
+
+    def _fake_fetch_results(db, pool, week):
+        return results_module.ResultsReport(week_number=week.week_number)
+
+    monkeypatch.setattr(results_module, "fetch_results", _fake_fetch_results)
+
+    with pytest.raises(typer.Exit) as exc_info:
+        run_cron(pool_id=None)
+    assert exc_info.value.exit_code == 1
+
+
 def test_run_cron_exits_non_zero_when_a_provider_warning_is_raised(isolated_db, monkeypatch):
     """Regression test for a real bug: run-cron always exited 0, even when every provider
     call failed for every pool, so an extended ESPN outage would show as an unbroken string

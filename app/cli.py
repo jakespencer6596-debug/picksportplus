@@ -423,6 +423,11 @@ def _cron_pass(db, pool: Pool) -> bool:
             ok = False
         score = score_week_for_pool(db, pool, row)
         _echo(f"  {score.summary()}")
+        if score.integrity_warnings:
+            # The orphaned picks incident (see DECISIONS.md, "Orphaned picks"): corrupt pick
+            # data must fail the cron run visibly, the same way a provider outage already
+            # does, rather than sitting unnoticed through the season.
+            ok = False
 
     return ok
 
@@ -1059,6 +1064,24 @@ def doctor(
                 typer.secho(prefix + finding.detail, fg=typer.colors.YELLOW)
             else:
                 _echo(prefix + finding.detail)
+
+        _echo("")
+        _echo("Pick integrity (the orphaned picks incident, see DECISIONS.md)")
+        from app.services.pick_repair import audit_pool
+
+        affected_rows = [row for row in audit_pool(db, pool) if row.is_affected]
+        if not affected_rows:
+            _echo(
+                "  clean: every player-week has exactly picks_required picks, a clean permutation."
+            )
+        else:
+            for row in affected_rows:
+                typer.secho(
+                    f"  CORRUPT: {row.display_name}, {row.week_label}: {row.pick_count} pick(s), "
+                    f"duplicates {row.duplicate_values}, missing {row.missing_values}",
+                    fg=typer.colors.RED,
+                )
+            _echo(f"  {len(affected_rows)} affected. Run: python -m app.cli repair-picks --dry-run")
 
         if not probe:
             return
