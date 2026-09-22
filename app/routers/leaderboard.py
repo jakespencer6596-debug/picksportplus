@@ -27,9 +27,13 @@ def standings_page(
     user: User = Depends(require_user),
     pool: Pool = Depends(get_active_pool),
 ):
-    from app.services.standings import season_points_ranking, season_wins_ranking
+    from app.services.standings import season_live_weeks, season_points_ranking, season_wins_ranking
 
     season = season_points_ranking(db, pool, viewer_id=user.id)
+    # The 120 point bug fix (standings and ties, September): unfinished weeks count live in
+    # season points as their games finish, so the page must say so rather than let a moving
+    # number look settled. Empty in the ordinary case where every started week has scored.
+    live_weeks = season_live_weeks(db, pool)
     # The Season: Wins ladder (SPEC.md Section 10b), shown as its own ranked table so the
     # tiebreak note on Section 2's spec (Phase 2, "Tab entry and season tiebreak") has
     # somewhere to render independent of whether any payout scope has ever been snapshotted.
@@ -52,6 +56,7 @@ def standings_page(
         {
             "season": season,
             "season_by_wins": season_by_wins,
+            "live_weeks": live_weeks,
             "season_points_awards": season_points_awards,
             "season_wins_awards": season_wins_awards,
             "show_season_awards": show_season_awards,

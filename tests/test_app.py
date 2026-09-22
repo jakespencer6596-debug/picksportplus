@@ -1772,6 +1772,11 @@ def test_scoring_end_to_end(client, world, session_factory):
         game.winner = winner
         game.home_score = 21 if winner == "home" else 17
         game.away_score = 17 if winner == "home" else 21
+    # Every game going final can only happen once lock_at (the earliest kickoff) is long past
+    # (standings and ties, September, the 120 point bug fix): a no-show is only a real
+    # no-show once the deadline has actually passed, so this reflects that here, the same way
+    # real time always would in production.
+    week.lock_at = dt.datetime.now(UTC) - dt.timedelta(hours=1)
     db.commit()
 
     report = score_week_for_pool(db, pool, week)
@@ -1833,6 +1838,7 @@ def test_scoring_end_to_end_standard_mode_still_works(client, world, session_fac
         game.winner = winner
         game.home_score = 21 if winner == "home" else 17
         game.away_score = 17 if winner == "home" else 21
+    week.lock_at = dt.datetime.now(UTC) - dt.timedelta(hours=1)
     db.commit()
 
     score_week_for_pool(db, pool, week)
@@ -1854,6 +1860,35 @@ def test_scoring_end_to_end_standard_mode_still_works(client, world, session_fac
     assert boss_entry.did_not_submit is True
     assert boss_entry.points == 0
     db.close()
+
+
+def test_season_page_labels_an_unfinished_week_that_contributes_live(
+    client, world, session_factory
+):
+    """The 120 point bug fix (standings and ties, September): the Season tab shows a single
+    muted line naming any week whose own games are still in progress but is already
+    contributing a live figure to season totals, so a moving number never looks settled."""
+    from app.services.results import score_week_for_pool
+
+    db = session_factory()
+    pool = db.get(Pool, world["pool_id"])
+    week = db.get(Week, world["week_id"])
+    score_week_for_pool(db, pool, week)  # world's week is still open, lock_at in the future
+    db.commit()
+    db.close()
+
+    _login(client, "player@example.com")
+    response = client.get("/standings")
+    assert response.status_code == 200
+    assert "Includes week 5, in progress." in response.text
+
+
+def test_season_page_has_no_in_progress_note_once_everything_has_scored(client, world):
+    """The ordinary, settled case: nothing in progress, no note."""
+    _login(client, "player@example.com")
+    response = client.get("/standings")
+    assert response.status_code == 200
+    assert "in progress." not in response.text
 
 
 def test_scoring_is_idempotent(client, world, session_factory):

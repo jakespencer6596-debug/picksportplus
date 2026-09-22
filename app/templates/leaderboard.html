@@ -51,6 +51,16 @@
     </a>
   </div>
 
+  {% if live_weeks %}
+    <p class="muted" data-testid="season-live-weeks-note">
+      {% if live_weeks | length == 1 %}
+        Includes week {{ live_weeks[0] }}, in progress.
+      {% else %}
+        Includes weeks {{ live_weeks | join(", ") }}, in progress.
+      {% endif %}
+    </p>
+  {% endif %}
+
   {% if has_scores %}
     <div class="mobile-only sort-select-wrap">
       <label class="field-label" for="season-sort-select">Sort by</label>
@@ -206,12 +216,10 @@
     </div>
   </section>
 
-  {% if pool.season_tiebreak_mode == "wins" %}
-    <p class="muted lb-note">
-      Season ties are broken by total weekly wins, then by total points, then by submission
-      time.
-    </p>
-  {% endif %}
+  <p class="muted lb-note">
+    Ties go to the player with more weekly wins. If points and wins are both tied, the
+    players split the combined payouts for the places they share.
+  </p>
 {% endif %}
 
 {% if show_season_awards %}
@@ -307,11 +315,9 @@
       {% endif %}
     </div>
     <p class="muted lb-note">
-      A tie splits the combined amount for those places evenly, to the cent, with any leftover
-      cent going to whoever submitted their picks earliest.
-      {%- if pool.season_tiebreak_mode == "wins" %}
-        A season place never splits under this pool's tiebreak setting: see the rule above.
-      {%- endif %}
+      A tie on both points and wins splits the combined amount for those places evenly, to the
+      cent, with any leftover cent going to the tied players in alphabetical order of display
+      name.
     </p>
   </section>
 {% endif %}

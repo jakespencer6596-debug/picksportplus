@@ -16,7 +16,7 @@ from sqlalchemy.orm import Session
 from app.models import Game, Pick, Pool, PoolMember, User, Week, WeekEntry, utcnow
 from app.providers import espn
 from app.providers.http import ProviderError
-from app.scoring import GameOutcome, PickInput, score_week, weekly_winner_ids
+from app.scoring import GameOutcome, PickInput, WeekResult, score_week, weekly_winner_ids
 from app.services import payouts as payout_service
 
 log = logging.getLogger("picksportplus.results")
@@ -188,18 +188,36 @@ def score_week_for_pool(
 
     picks_required = pool.picks_required
 
+    # The 120 point bug (standings and ties, September): before a week's own lock time has
+    # passed, nobody is a no-show yet, there is simply still time left to pick. score_week's
+    # no-show branch (no picks submitted) always charges the maximum possible inverse-mode
+    # penalty, which is exactly right once lock_at has passed but was being applied to every
+    # member of a week that was still wide open, the moment ANY week landed in cron's "open
+    # or locked" sweep (app/cli.py._cron_pass) with picks still outstanding. Guarded here, in
+    # score_week_for_pool itself rather than only in the cron, so every caller (the cron, and
+    # the commissioner's "Refresh and score now") applies the same rule. A member who has
+    # submitted picks keeps scoring live off whichever slate games have gone final so far,
+    # unaffected by this guard either way: unfinished weeks still count live as games finish.
+    lock_at = _aware(week.lock_at)
+    lock_passed = lock_at is not None and utcnow() >= lock_at
+
     results = {}
     for member in members:
         picks = picks_by_user.get(member.user_id, [])
-        result = score_week(
-            [
-                PickInput(game_id=p.game_id, picked_team=p.picked_team, confidence=p.confidence)
-                for p in picks
-            ],
-            outcomes,
-            mode=pool.scoring_mode,
-            picks_required=picks_required,
-        )
+        if not picks and not lock_passed:
+            # Not a no-show: the deadline simply has not arrived yet. Scores as a live 0,
+            # exactly like a member who has submitted but whose games have not gone final.
+            result = WeekResult(points=0, correct=0, possible=0, did_not_submit=False)
+        else:
+            result = score_week(
+                [
+                    PickInput(game_id=p.game_id, picked_team=p.picked_team, confidence=p.confidence)
+                    for p in picks
+                ],
+                outcomes,
+                mode=pool.scoring_mode,
+                picks_required=picks_required,
+            )
         results[member.user_id] = result
 
         entry = existing.get(member.user_id)
@@ -219,7 +237,14 @@ def score_week_for_pool(
             )
         report.players += 1
 
-    winners = weekly_winner_ids(results, mode=pool.scoring_mode)
+    # The week is complete when every slate game has stopped being playable. Weekly winners
+    # (and, below, PayoutAward snapshots) only ever apply to a fully scored week: computing
+    # winners against a week that still has games pending would crown someone based on a
+    # partial, still-moving scoreboard.
+    playable = [g for g in slate if g.status not in ("final", "void")]
+    week_complete = bool(slate) and not playable
+
+    winners = weekly_winner_ids(results, mode=pool.scoring_mode) if week_complete else set()
     for member in members:
         entry = existing.get(member.user_id) or db.scalar(
             select(WeekEntry).where(
@@ -227,7 +252,7 @@ def score_week_for_pool(
             )
         )
         if entry is not None:
-            entry.is_winner = member.user_id in winners
+            entry.is_winner = week_complete and member.user_id in winners
 
     db.flush()
 
@@ -237,9 +262,7 @@ def score_week_for_pool(
         )
         report.winners = sorted(e.user.display_name for e in names)
 
-    # The week is complete when every slate game has stopped being playable.
-    playable = [g for g in slate if g.status not in ("final", "void")]
-    if slate and not playable:
+    if week_complete:
         report.week_complete = True
         already_scored = week.status == "scored"
         if report.integrity_warnings and not already_scored:
