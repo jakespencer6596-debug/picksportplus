@@ -198,6 +198,9 @@
                   {% if row.tiebreak_reason %}
                     <p class="muted lb-tiebreak-note">{{ row.tiebreak_reason }}</p>
                   {% endif %}
+                  {% if row.user_id in stale_award_user_ids %}
+                    <p class="muted lb-tiebreak-note">Awarded under the previous tie rule.</p>
+                  {% endif %}
                   <div class="pick-strip-target" id="pick-strip-week-{{ row.user_id }}" data-row-detail hidden></div>
                 </td>
                 <td class="num" data-label="Points" data-sort-value="{{ row.points }}">

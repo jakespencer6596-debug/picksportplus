@@ -183,6 +183,7 @@ def results_page(
     representative_lines: list[RepresentativeLine] = []
     remaining_games_by_id: dict[int, Game] = {}
     season_wins_by_user: dict[int, int] = {}
+    stale_award_user_ids: set[int] = set()
 
     if row is not None:
         games = list(
@@ -237,6 +238,21 @@ def results_page(
                     payout_rules_exist = bool(payouts_by_user) or bool(
                         payout_service.load_rules(db, pool, scope=payout_scope)
                     )
+                    # A frozen award created before the league's tie rule shipped, or before
+                    # some other change to the week's own scoring, no longer matches what a
+                    # live recompute would give (mirrors app/routers/leaderboard.py's own
+                    # season-scope check, standings and ties, September, Phase 10: found live,
+                    # a weekly award can go stale exactly the same way a season one can, and
+                    # this page had no label for it). Never recalculated here, only labelled;
+                    # a user_id in this set has a stored award that no longer matches its own
+                    # live projection for this week.
+                    stale_award_user_ids = {
+                        diff.user_id
+                        for diff in payout_service.recalculate_preview(
+                            db, pool, payout_scope, week=row
+                        )
+                        if diff.old_place is not None
+                    }
                 else:
                     # Locked but still live: the week has not finished scoring, so there is no
                     # frozen row yet. Compute a live, unsaved projection instead, clearly
@@ -287,6 +303,7 @@ def results_page(
             "representative_lines": representative_lines,
             "remaining_games_by_id": remaining_games_by_id,
             "season_wins_by_user": season_wins_by_user,
+            "stale_award_user_ids": stale_award_user_ids,
         },
         current_user=user,
         pool=pool,
