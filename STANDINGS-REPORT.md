@@ -16,7 +16,7 @@ commit messages for the exact diff each phase introduced.
 | 6. Condense the This Week tab | Done | (pending commit) |
 | 7. Expandable pick rows on Results and Season | Done | (pending commit) |
 | 8. Mobile pass | Pending | |
-| 9. Regression sweep | Pending | |
+| 9. Regression sweep | Done | (pending commit) |
 | 10. Full verification | Pending | |
 | 11. Documentation | Pending | |
 | 12. Merge, safety check, push, deploy | Pending | |
@@ -37,13 +37,14 @@ commit messages for the exact diff each phase introduced.
   bytes over its 150000 byte cap). Neither touched by this build's changes; both were already
   failing before this branch started and are tracked, not fixed, per the gate rule ("no new
   failures").
-- `scripts/seed_prod_shaped.py`: **not yet built.** A first attempt (dispatched to a fresh
-  background agent) went off track mid-task and never produced the file; see "What still
-  needs attention" below. Needed before Phase 8 (mobile) and Phase 10 (Claude in Chrome
-  browser testing) can run against a realistic local database; local development and all
-  automated tests so far have used the existing in-memory sqlite fixtures
-  (`tests/conftest.py`'s `db` fixture) instead, which is correct for those, but Phase 10's
-  browser pass specifically needs the messy production-shaped states this script is for.
+- `scripts/seed_prod_shaped.py`: built (a first attempt went off track and never produced the
+  file; rebuilt from scratch). Runs `alembic upgrade head` against a local sqlite file (repo
+  working directory by default, or anywhere under the OS temp directory), refuses anywhere
+  else, then loads the existing `seed_demo_pool` fixture (real teams, real historical scores,
+  eight real-named players, no network calls) and layers the seven messy states listed above
+  on top. Verified: `doctor-picks` against the resulting database correctly flags the seeded
+  16-pick player as corrupt. Used for Phase 8's mobile pass and will be used again for Phase
+  10's browser pass and Phase 12's migration row-count check.
 - `app/main.py._assert_local_database`: new boot-time guard (Phase 0 rule 8). A no-op when
   the `RENDER` environment variable is set (the real production service); otherwise refuses
   to start unless `DATABASE_URL` resolves to a local `sqlite:///` file inside the repo's
@@ -281,11 +282,44 @@ confidence ordering, a 403 for a player in another pool, the season week selecto
 switching which week's picks render, and the Results row wiring the chevron to the correct
 panel id.
 
+## Phase 9. Regression sweep
+
+Full gate (`ruff check .`, `black --check .`, `pytest -q`, the em dash grep) run clean
+throughout every phase above; this pass adds targeted, named evidence per line rather than
+only the aggregate count.
+
+| # | Line | Status | Evidence |
+|---|---|---|---|
+| 1 | Inverse scoring: lowest total wins a finished week | Pass | `tests/test_scoring.py` (unchanged by this build), full suite green |
+| 2 | 15 of 20 validation, specific messages | Pass | `app/scoring.py.validate_picks` tests, unchanged |
+| 3 | Saving twice with a swapped game leaves exactly 15 pick rows | Pass | `tests/test_orphaned_picks.py`, 100% green, unchanged |
+| 4 | Tab/arrow nav, confidence cap, reorder, drag, lock/unlock | Pass | `npm test`, 23/23 JS tests green (`tests/js/pick_navigation.test.js`, `sorting.test.js`) |
+| 5 | Payouts: known ladder totals 2775/400/1155/620, grand total 4950 | Pass | `tests/test_payouts.py::test_fatrunner_ladder_resolves_to_known_totals` |
+| 6 | Payout snapshots do not move when the pot changes | Pass | `tests/test_payout_service.py::test_snapshot_amounts_survive_the_pot_growing_after_the_fact` |
+| 7 | Published slates do not move on cron | Pass | `tests/test_rebuild_and_amend.py`, `tests/test_cli.py`, unchanged, green |
+| 8 | Test weeks contribute nothing to standings, payouts, or wins counts | Pass | Phase 1/2's own new tests plus pre-existing quarantine tests, all green |
+| 9 | Scenarios read the same ranking and tie rules as standings | Pass, with a scope note | See below |
+| 10 | Voided games score zero, reduce only the affected player's possible | Pass | `tests/test_scoring.py`, `tests/test_results_service.py`, void-related tests green |
+| 11 | Commissioner pages carry no "admin" wording; `/site` 403s for commissioners | Pass | `tests/test_app.py`'s rendered-response admin-wording and site-403 tests, unchanged, green |
+| 12 | Email and league chat still work | Pass | `tests/test_mail.py`, `tests/test_chat.py`, unchanged, green |
+
+**Item 9, the scope note.** `app/scenarios.py` is deliberately a pure, database-free module
+(SPEC.md Section 9a: "no database, no network, no imports from app.models or any
+app.services/app.routers module"), so it cannot import `app/services/standings.py`'s new
+wins-then-split ranking and never could, before or after this build. Its own `rank_players`/
+`_rank_values` already agree with standings on the one thing they share, the primary sort
+direction (lowest wins under inverse, matching `weekly_winner_ids`), and already use
+competition ranking so ties share a place, which is the correct behavior for a probabilistic
+sweep across many scenarios regardless of any single settled week's own tiebreak. Teaching the
+scenario engine about weekly-wins tiebreaks would mean passing `wins_entering_week` into the
+pure engine as a new input and reworking its ranking and Monte Carlo sampling around a second
+dimension, a real, separately scoped feature this prompt's 13 phases never actually ask for
+elsewhere; not attempted here, and not a regression this build introduced, since the scenario
+engine never had wins-tiebreak awareness even under the old two-mode system.
+
 ## What still needs attention
 
-- `scripts/seed_prod_shaped.py` (Phase 0 item 5) still needs to be written; the first attempt
-  did not complete. Needed before Phase 8 and Phase 10.
-- Phases 3 through 13 have not started yet.
+- Phase 8 (mobile pass) is in progress; Phases 10 through 13 have not started yet.
 
 ## Confirmation: no production data touched
 
