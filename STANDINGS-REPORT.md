@@ -12,7 +12,7 @@ commit messages for the exact diff each phase introduced.
 | 2. Replace the tie rules with the league's rule | Done | `3ad9318` |
 | 3. Fix the sort that pulls in tiebreak lines | Done | (pending commit) |
 | 4. Condense the Results tab | Done | (pending commit) |
-| 5. Condense the Season tab | Pending | |
+| 5. Condense the Season tab | Done | (pending commit) |
 | 6. Condense the This Week tab | Pending | |
 | 7. Expandable pick rows on Results and Season | Pending | |
 | 8. Mobile pass | Pending | |
@@ -190,6 +190,41 @@ scenarios sections are untouched, they do not duplicate the leaderboard table.
 **Tests:** the existing player-major/game-major grid test now also asserts the disclosure is
 present and closed; a new test confirms the Wins column shows season weekly wins, not a
 single-week figure.
+
+## Phase 5. Condense the Season tab
+
+The two previously stacked tables (season points, season wins) are now one section with a
+"By points" / "By wins" toggle (the same view-toggle pattern results.html already used for
+its pick grid), each panel a single condensed table: Standing, Name, Points, Wins, Correct,
+and Payout once that scope's season awards exist. The separate "Season awards" section (two
+more stacked card/table pairs below the ladders) is gone, folded into the same rows. The stat
+card row above the table (Leader, Points, Players, Weeks played) is removed, since it only
+restated row 1 and the row count of the table right below it.
+
+**Phase 2 item 5, closed out:** a frozen season award is compared, at read time, against what
+`project_awards` would compute live right now (`app/services/payouts.py.recalculate_preview`,
+new); a row whose frozen amount or place differs gets a muted "Awarded under the previous tie
+rule." note next to the tiebreak reason. Nothing is recalculated to produce this, it is a pure
+comparison.
+
+**Phase 2 item 6, closed out:** the commissioner's "Refresh and score now" button
+(`POST /league/run/results`) no longer recalculates payout awards as a silent side effect of
+scoring. It now always runs a safe live rescore (no actor passed to `score_week_for_pool`,
+which only ever recalculates when an actor is present), and only when the week was already
+scored before the refresh AND the correction would actually change a frozen award does it
+redirect to a new preview page (`GET /league/run/results-preview`) listing every affected
+player, old and new place, old and new amount, and whether the award is already marked paid.
+Nothing is written until the commissioner clicks "Confirm recalculation"
+(`POST /league/run/results-confirm`), which mirrors `score_week_for_pool`'s own recalculate
+branch scope by scope and preserves `paid_at` throughout, exactly as `recalculate_awards`
+already guaranteed. This is never reachable from the unattended cron path, which never posts
+to this route at all.
+
+**Tests:** `recalculate_preview` (service level: lists the real diff, writes nothing, empty
+when nothing would change) and an end to end HTTP test driving refresh, preview, and confirm
+through a real scenario where the weekly winner actually flips, proving the redirect happens,
+nothing is written before confirming, and a paid, now-stale award is left exactly as it was
+after confirming.
 
 ## What still needs attention
 

@@ -61,6 +61,7 @@ from app.providers.http import get_platform_settings, provider_warnings
 from app.providers.teams import canonical_key, display_name
 from app.routers.leagues import _fresh_commissioner_invite_code, _parse_commissioner_emails
 from app.services import ingest, mail
+from app.services import payouts as payout_service
 from app.templating import get_zone, render, templates
 
 router = APIRouter(prefix="/league", tags=["admin"])
@@ -1565,6 +1566,18 @@ def test_week_delete(
 # Manual job triggers --------------------------------------------------------
 
 
+def _recalculate_scopes(pool: Pool, row: Week) -> list[tuple[str, Week | None]]:
+    """Every (scope, week) pair a recalculation of this week touches, mirroring exactly what
+    score_week_for_pool's own recalculate branch does: the week's own scope (weekly or bowl),
+    plus both season scopes when the week is the bowl week."""
+    scope = "bowl" if row.is_bowl_week else "weekly"
+    scopes: list[tuple[str, Week | None]] = [(scope, row)]
+    if row.is_bowl_week:
+        scopes.append(("season_points", None))
+        scopes.append(("season_wins", None))
+    return scopes
+
+
 @router.post("/run/results")
 def run_results(
     request: Request,
@@ -1573,16 +1586,82 @@ def run_results(
     user: User = Depends(require_user),
     pool: Pool = Depends(require_commissioner),
 ):
+    """Standings and ties, September, Phase 2, "make the recalculate button safe under the
+    new rule": fetching and scoring is always safe and always runs immediately, exactly as
+    before. But a correction to a week that has already finished scoring once can change a
+    frozen PayoutAward, real money a commissioner may already have paid out over Venmo, so
+    that part never happens silently any more. score_week_for_pool is called with no actor
+    (standings update, no recalculation possible), and if the week was already scored before
+    this call and a correction would actually change any award, this redirects to a preview
+    instead of writing anything.
+    """
     from app.services.results import fetch_results, score_week_for_pool
 
     row = _week_for_action(db, pool, week_id)
+    already_scored = row.status == "scored"
     results = fetch_results(db, pool, row)
-    score = score_week_for_pool(db, pool, row, actor=user)
+    score = score_week_for_pool(db, pool, row)
     db.commit()
     flash(request, results.summary())
     flash(request, score.summary())
     for warning in results.warnings:
         flash(request, warning, "error")
+
+    if already_scored and not row.is_test_week and not score.integrity_warnings:
+        diffs = []
+        for scope, scope_week in _recalculate_scopes(pool, row):
+            diffs.extend(payout_service.recalculate_preview(db, pool, scope, scope_week))
+        if diffs:
+            flash(
+                request,
+                "This correction would change frozen payout amounts. Review before applying.",
+            )
+            return _redirect(f"/league/run/results-preview?week_id={row.id}")
+
+    return _redirect(f"/league/slate?week={row.week_number}")
+
+
+@router.get("/run/results-preview")
+def run_results_preview(
+    request: Request,
+    week_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_user),
+    pool: Pool = Depends(require_commissioner),
+):
+    """The preview itself (Phase 2 item 6): player, old place, new place, old amount, new
+    amount, and whether it is already marked paid, for every scope this week's correction
+    would touch. Nothing here is written; only POST /run/results-confirm writes anything."""
+    row = _week_for_action(db, pool, week_id)
+    diffs_by_scope = {
+        scope: payout_service.recalculate_preview(db, pool, scope, scope_week)
+        for scope, scope_week in _recalculate_scopes(pool, row)
+    }
+    return render(
+        request,
+        "admin/recalculate_preview.html",
+        {"week": row, "diffs_by_scope": diffs_by_scope},
+        **_base(db, user, pool),
+    )
+
+
+@router.post("/run/results-confirm")
+def run_results_confirm(
+    request: Request,
+    week_id: int = Form(...),
+    db: Session = Depends(get_db),
+    user: User = Depends(require_user),
+    pool: Pool = Depends(require_commissioner),
+):
+    """The one deliberate write this flow ever makes, only ever reached after the commissioner
+    has seen the preview and clicked confirm. Mirrors score_week_for_pool's own recalculate
+    branch exactly, scope by scope, paid_at preserved throughout (recalculate_awards' own
+    contract)."""
+    row = _week_for_action(db, pool, week_id)
+    for scope, scope_week in _recalculate_scopes(pool, row):
+        payout_service.recalculate_awards(db, pool, scope, scope_week, user)
+    db.commit()
+    flash(request, "Payout amounts recalculated to match this correction.")
     return _redirect(f"/league/slate?week={row.week_number}")
 
 

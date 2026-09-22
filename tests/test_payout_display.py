@@ -403,8 +403,8 @@ def test_season_awards_panels_show_once_frozen_and_a_player_can_appear_in_both(
     _login(client, "boss@example.com")
     response = client.get("/standings")
     assert response.status_code == 200
-    assert "Season: Points" in response.text
-    assert "Season: Wins" in response.text
+    assert 'data-view-panel="points"' in response.text
+    assert 'data-view-panel="wins"' in response.text
     # Alice: 1st in points (600), 2nd in wins (111). Bob: 2nd in points (300), 1st in wins
     # (333). Both appear in both panels, each with their own correct amount.
     assert "600 dollars" in response.text
@@ -437,7 +437,7 @@ def test_standings_page_shows_a_season_wins_table_and_tiebreak_reason(client, se
     response = client.get("/standings")
 
     assert response.status_code == 200
-    assert "Season standings: wins" in response.text
+    assert 'id="season-wins-table"' in response.text
     assert "Tiebreak: 1 weekly wins to 0." in response.text
     assert "Ties go to the player with more weekly wins" in response.text
 

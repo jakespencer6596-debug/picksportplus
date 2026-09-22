@@ -32,9 +32,11 @@ from app.services.standings import season_points_ranking, season_wins_ranking, w
 
 __all__ = [
     "PlayerPayoutRow",
+    "AwardDiff",
     "effective_pot",
     "load_rules",
     "project_awards",
+    "recalculate_preview",
     "snapshot_awards",
     "awards_for_week",
     "season_awards",
@@ -218,6 +220,77 @@ def project_awards(db: Session, pool: Pool, scope: str, week: Week | None = None
     return allocate(
         rules, standings, pot=pot, rounding=pool.payout_rounding, tiebreak="alphabetical"
     )
+
+
+@dataclass
+class AwardDiff:
+    """One player whose frozen award would change if recalculate_awards ran right now
+    (standings and ties, September, Phase 2, "make the recalculate button safe under the new
+    rule"). old_* is None for a player the live projection newly places who has no frozen row
+    yet; new_* is None for a player who no longer places live (recalculate_awards leaves a
+    stale row in place rather than deleting it, so this is shown, not silently dropped)."""
+
+    user_id: int
+    display_name: str
+    old_place: int | None
+    new_place: int | None
+    old_amount: Decimal | None
+    new_amount: Decimal | None
+    paid: bool
+
+
+def recalculate_preview(
+    db: Session, pool: Pool, scope: str, week: Week | None = None
+) -> list[AwardDiff]:
+    """What recalculate_awards would change for this scope, computed but never written
+    (standings and ties, September, Phase 2). Only players whose place or amount would
+    actually differ are returned; a player the live projection agrees with the frozen row on
+    is left out entirely, so an empty list means "safe, nothing would change."
+    """
+    week_id = week.id if week else None
+    live_awards = {a.user_id: a for a in project_awards(db, pool, scope, week=week)}
+    frozen_awards = {
+        a.user_id: a
+        for a in db.scalars(
+            select(PayoutAward).where(
+                PayoutAward.pool_id == pool.id,
+                PayoutAward.scope == scope,
+                PayoutAward.week_id == week_id,
+            )
+        )
+    }
+    names = {
+        u.id: u.display_name
+        for u in db.scalars(
+            select(User)
+            .join(PoolMember, PoolMember.user_id == User.id)
+            .where(PoolMember.pool_id == pool.id)
+        )
+    }
+
+    diffs: list[AwardDiff] = []
+    for user_id in set(live_awards) | set(frozen_awards):
+        live = live_awards.get(user_id)
+        frozen = frozen_awards.get(user_id)
+        old_place = frozen.place if frozen else None
+        old_amount = frozen.amount if frozen else None
+        new_place = live.place if live else None
+        new_amount = live.amount if live else None
+        if old_place == new_place and old_amount == new_amount:
+            continue
+        diffs.append(
+            AwardDiff(
+                user_id=user_id,
+                display_name=names.get(user_id, f"User {user_id}"),
+                old_place=old_place,
+                new_place=new_place,
+                old_amount=old_amount,
+                new_amount=new_amount,
+                paid=bool(frozen and frozen.paid_at is not None),
+            )
+        )
+    diffs.sort(key=lambda d: d.display_name.lower())
+    return diffs
 
 
 def _existing_award(

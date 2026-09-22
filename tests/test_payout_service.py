@@ -35,6 +35,7 @@ from app.services.payouts import (
     payout_summary,
     project_awards,
     recalculate_awards,
+    recalculate_preview,
     snapshot_awards,
 )
 from app.services.results import score_week_for_pool
@@ -536,6 +537,57 @@ def test_recalculate_awards_overwrites_amounts_and_preserves_paid_at(db):
     assert recalculated.recalculated_by_user_id == commissioner.id
     assert recalculated.paid_at == original_paid_at
     assert recalculated.paid_marked_by_user_id == commissioner.id
+
+
+def test_recalculate_preview_lists_the_difference_and_writes_nothing(db):
+    """standings and ties, September, Phase 2 item 6: the preview names exactly what would
+    change, including whether the award is already paid, and never itself writes anything."""
+    pool = _pool(db, scoring_mode="standard")
+    commissioner = _user(db, "Commissioner")
+    alice = _user(db, "Alice")
+    bob = _user(db, "Bob")
+    _member(db, pool, commissioner, role="commissioner")
+    _member(db, pool, alice)
+    _member(db, pool, bob)
+
+    week = _week(db, pool)
+    _entry(db, pool, week, alice, points=10)
+    _entry(db, pool, week, bob, points=5)
+    rule = _rule(db, pool, "weekly", 1, value=Decimal("50"))
+
+    [award] = snapshot_awards(db, pool, "weekly", week=week)
+    mark_paid(db, award.id, commissioner)
+
+    rule.value = Decimal("80")
+    db.flush()
+
+    diffs = recalculate_preview(db, pool, "weekly", week)
+
+    assert len(diffs) == 1
+    diff = diffs[0]
+    assert diff.user_id == alice.id
+    assert diff.old_amount == Decimal("50.00")
+    assert diff.new_amount == Decimal("80.00")
+    assert diff.old_place == 1
+    assert diff.new_place == 1
+    assert diff.paid is True
+
+    # Nothing was written: the stored row is still the pre-correction figure.
+    still_frozen = db.get(PayoutAward, award.id)
+    assert still_frozen.amount == Decimal("50.00")
+
+
+def test_recalculate_preview_is_empty_when_nothing_would_change(db):
+    pool = _pool(db, scoring_mode="standard")
+    alice = _user(db, "Alice")
+    _member(db, pool, alice)
+
+    week = _week(db, pool)
+    _entry(db, pool, week, alice, points=10)
+    _rule(db, pool, "weekly", 1, value=Decimal("50"))
+    snapshot_awards(db, pool, "weekly", week=week)
+
+    assert recalculate_preview(db, pool, "weekly", week) == []
 
 
 def test_mark_paid_is_idempotent_on_the_timestamp(db):

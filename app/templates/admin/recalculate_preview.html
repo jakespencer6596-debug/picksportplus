@@ -1,0 +1,82 @@
+{% extends "base.html" %}
+{% import "components/icons.html" as ic %}
+{% block title %}Recalculate {{ week.label }} payouts. {{ APP_NAME }}{% endblock %}
+
+{% set scope_titles = {"weekly": "Weekly", "bowl": "Bowl week", "season_points": "Season: Points", "season_wins": "Season: Wins"} %}
+
+{% block content %}
+<div class="page-head">
+  <div>
+    <p class="eyebrow">Commissioner</p>
+    <h1 class="page-title">Recalculate {{ week.label }} payouts</h1>
+  </div>
+</div>
+
+<section class="section">
+  <div class="flash flash-error" role="alert">
+    {{ ic.icon("alert", 18) }}
+    <span>
+      This correction changes frozen payout amounts, real money you may have already paid
+      over Venmo. Nothing has been written yet. Review every row below before confirming.
+    </span>
+  </div>
+
+  {% for scope, diffs in diffs_by_scope.items() %}
+    <div class="card">
+      <div class="card-head"><h3>{{ scope_titles.get(scope, scope) }}</h3></div>
+      <div class="card-body">
+        {% if diffs %}
+          <div class="table-wrap">
+            <table class="table">
+              <thead>
+                <tr>
+                  <th scope="col">Player</th>
+                  <th scope="col">Old place</th>
+                  <th scope="col">New place</th>
+                  <th scope="col" class="num">Old amount</th>
+                  <th scope="col" class="num">New amount</th>
+                  <th scope="col">Paid</th>
+                </tr>
+              </thead>
+              <tbody>
+                {% for diff in diffs %}
+                  <tr>
+                    <td data-label="Player">{{ diff.display_name }}</td>
+                    <td data-label="Old place">{{ diff.old_place if diff.old_place is not none else "Not placed" }}</td>
+                    <td data-label="New place">{{ diff.new_place if diff.new_place is not none else "Not placed" }}</td>
+                    <td class="num" data-label="Old amount">
+                      {{ (diff.old_amount | money ~ " dollars") if diff.old_amount is not none else "." }}
+                    </td>
+                    <td class="num" data-label="New amount">
+                      {{ (diff.new_amount | money ~ " dollars") if diff.new_amount is not none else "." }}
+                    </td>
+                    <td data-label="Paid">{{ "Yes" if diff.paid else "No" }}</td>
+                  </tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
+        {% else %}
+          <p class="muted">Nothing would change in this scope.</p>
+        {% endif %}
+      </div>
+    </div>
+  {% endfor %}
+
+  <div class="card">
+    <div class="card-head"><h3>Confirm</h3></div>
+    <div class="card-body">
+      <p class="form-hint">
+        Confirming recalculates every scope above to match the correction. A "Paid" mark is
+        never lost: whatever is already marked paid stays marked paid, only the amount, place
+        and rule figures update.
+      </p>
+      <form method="post" action="/league/run/results-confirm" class="row">
+        <input type="hidden" name="week_id" value="{{ week.id }}">
+        <button class="btn btn-primary" type="submit">Confirm recalculation</button>
+        <a class="btn btn-secondary" href="/league/slate?week={{ week.week_number }}">Cancel</a>
+      </form>
+    </div>
+  </div>
+</section>
+{% endblock %}

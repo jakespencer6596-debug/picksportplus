@@ -48,7 +48,20 @@ def standings_page(
     frozen_season_awards = payout_service.season_awards(db, pool)
     season_points_awards = {award.user_id: award for award in frozen_season_awards["season_points"]}
     season_wins_awards = {award.user_id: award for award in frozen_season_awards["season_wins"]}
-    show_season_awards = bool(season_points_awards) or bool(season_wins_awards)
+
+    # A frozen award created before the league's tie rule shipped (standings and ties,
+    # September, Phase 2 item 5): compared against what the rule would give right now, never
+    # recalculated here, only labelled. A user_id in this set has a stored award that no
+    # longer matches its own live projection.
+    stale_award_user_ids = {
+        diff.user_id
+        for diff in payout_service.recalculate_preview(db, pool, "season_points")
+        if diff.old_place is not None
+    } | {
+        diff.user_id
+        for diff in payout_service.recalculate_preview(db, pool, "season_wins")
+        if diff.old_place is not None
+    }
 
     return render(
         request,
@@ -59,7 +72,7 @@ def standings_page(
             "live_weeks": live_weeks,
             "season_points_awards": season_points_awards,
             "season_wins_awards": season_wins_awards,
-            "show_season_awards": show_season_awards,
+            "stale_award_user_ids": stale_award_user_ids,
         },
         current_user=user,
         pool=pool,

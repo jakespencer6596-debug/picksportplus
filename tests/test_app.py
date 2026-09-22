@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import datetime as dt
 import re
+from decimal import Decimal
 
 import pytest
 from fastapi.testclient import TestClient
@@ -26,6 +27,8 @@ from app.models import (
     Game,
     MailLog,
     PasswordResetToken,
+    PayoutAward,
+    PayoutRule,
     Pick,
     PickArchive,
     PlatformSetting,
@@ -690,6 +693,126 @@ def test_slate_rebuild_post_archives_picks_and_returns_week_to_draft(
     assert db.scalar(select(func.count(Pick.id)).where(Pick.week_id == week.id)) == 0
     assert db.scalar(select(func.count(PickArchive.id)).where(PickArchive.week_id == week.id)) > 0
     db.close()
+
+
+def test_refresh_results_on_an_already_scored_week_previews_before_recalculating(
+    client, world, session_factory
+):
+    """standings and ties, September, Phase 2 item 6: a correction to an already-scored week
+    that would actually change a frozen payout amount never writes it silently. "Refresh and
+    score now" redirects to a preview instead, and only POST /run/results-confirm, reached
+    from that preview, ever recalculates."""
+    from app.services.payouts import mark_paid, snapshot_awards
+    from app.services.results import score_week_for_pool
+
+    # Boss picks all home (so a winner correction flips their score hard); player picks the
+    # usual home/away/home/away pattern (Phase 2's own worked example shape).
+    boss_submission = {}
+    for index, gid in enumerate(world["game_ids"]):
+        boss_submission[f"winner-{gid}"] = "home"
+        boss_submission[f"confidence-{gid}"] = str(len(world["game_ids"]) - index)
+    _login(client, "boss@example.com")
+    client.post("/picks", data=boss_submission)
+    _login(client, "player@example.com")
+    client.post("/picks", data=_valid_submission(world["game_ids"]))
+
+    db = session_factory()
+    pool = db.get(Pool, world["pool_id"])
+    week = db.get(Week, world["week_id"])
+    games = list(db.scalars(select(Game).where(Game.week_id == week.id).order_by(Game.slate_rank)))
+    for game in games:
+        game.status, game.winner = "final", "home"
+        game.home_score, game.away_score = 21, 17
+    week.lock_at = dt.datetime.now(UTC) - dt.timedelta(hours=1)
+    db.add(
+        PayoutRule(pool_id=pool.id, scope="weekly", place=1, mode="amount", value=Decimal("100"))
+    )
+    db.commit()
+    score_week_for_pool(db, pool, week)
+    db.commit()
+    # Boss picked every game correctly (0 points, inverse), player split 2 right/2 wrong (4
+    # points): boss wins the week outright and takes the frozen 1st place award.
+    [award] = snapshot_awards(db, pool, "weekly", week=week)
+    boss = db.scalar(select(User).where(User.email == "boss@example.com"))
+    assert award.user_id == boss.id
+    mark_paid(db, award.id, boss)
+    original_amount = award.amount
+    db.commit()
+
+    # A correction: every game everyone picked actually went the other way. Boss now gets
+    # every pick wrong (10 points against), player's own total flips to 6: player now wins.
+    for game in games:
+        game.winner = "away"
+    db.commit()
+    db.close()
+
+    _login(client, "boss@example.com")
+    response = client.post("/league/run/results", data={"week_id": world["week_id"]})
+    assert response.status_code == 303
+    assert response.headers["location"] == f"/league/run/results-preview?week_id={world['week_id']}"
+
+    db = session_factory()
+    still_frozen = db.get(PayoutAward, award.id)
+    assert (
+        still_frozen.amount == original_amount
+    ), "the preview redirect must not have written anything"
+    db.close()
+
+    preview = client.get(response.headers["location"])
+    assert preview.status_code == 200
+    assert "Confirm recalculation" in preview.text
+    assert "Yes" in preview.text  # the Paid column for this already-paid award
+
+    confirm = client.post("/league/run/results-confirm", data={"week_id": world["week_id"]})
+    assert confirm.status_code == 303
+
+    db = session_factory()
+    player = db.scalar(select(User).where(User.email == "player@example.com"))
+    # Player now wins the week outright and picks up a brand new frozen award.
+    new_award = db.scalar(
+        select(PayoutAward).where(
+            PayoutAward.pool_id == pool.id,
+            PayoutAward.scope == "weekly",
+            PayoutAward.week_id == week.id,
+            PayoutAward.user_id == player.id,
+        )
+    )
+    assert new_award is not None
+    assert new_award.amount == Decimal("100.00")
+    assert new_award.recalculated_at is not None
+    # Boss's original, paid award is left exactly as it was: recalculate_awards never deletes
+    # a stale row, and a paid mark is never lost.
+    stale = db.get(PayoutAward, award.id)
+    assert stale.amount == original_amount
+    assert stale.paid_at is not None, "confirming must never lose the paid mark"
+    db.close()
+
+
+def test_refresh_results_with_no_payout_change_does_not_redirect_to_a_preview(
+    client, world, session_factory
+):
+    from app.services.results import score_week_for_pool
+
+    _login(client, "player@example.com")
+    client.post("/picks", data=_valid_submission(world["game_ids"]))
+
+    db = session_factory()
+    pool = db.get(Pool, world["pool_id"])
+    week = db.get(Week, world["week_id"])
+    games = list(db.scalars(select(Game).where(Game.week_id == week.id).order_by(Game.slate_rank)))
+    for game in games:
+        game.status, game.winner = "final", "home"
+        game.home_score, game.away_score = 21, 17
+    week.lock_at = dt.datetime.now(UTC) - dt.timedelta(hours=1)
+    db.commit()
+    score_week_for_pool(db, pool, week)
+    db.commit()
+    db.close()
+
+    _login(client, "boss@example.com")
+    response = client.post("/league/run/results", data={"week_id": world["week_id"]})
+    assert response.status_code == 303
+    assert response.headers["location"] == "/league/slate?week=5"
 
 
 def test_slate_rebuild_post_refused_for_a_regular_player(client, world):
