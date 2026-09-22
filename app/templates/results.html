@@ -143,6 +143,8 @@
           </option>
           <option value="3:desc">Correct, most first</option>
           <option value="3:asc">Correct, fewest first</option>
+          <option value="4:desc">Wins, most first</option>
+          <option value="4:asc">Wins, fewest first</option>
         </select>
       </div>
 
@@ -150,17 +152,19 @@
         <table class="table" id="weekly-leaderboard-table" data-sortable
                data-default-sort-col="2" data-default-sort-dir="{{ points_dir }}">
           <caption class="visually-hidden">
-            {{ week.label }} leaderboard. Ranked by points for the week. Click a column heading to sort.
+            {{ week.label }} leaderboard. Standing, name, points, correct, wins and payout.
+            Ranked by points for the week. Click a column heading to sort.
           </caption>
           <thead>
             <tr>
-              <th scope="col" data-sortable-col data-sort-default-dir="asc" aria-sort="none">Rank</th>
-              <th scope="col" data-sortable-col data-sort-default-dir="asc" aria-sort="none">Player</th>
+              <th scope="col" data-sortable-col data-sort-default-dir="asc" aria-sort="none">Standing</th>
+              <th scope="col" data-sortable-col data-sort-default-dir="asc" aria-sort="none">Name</th>
               <th scope="col" class="num" data-sortable-col data-sort-default-dir="{{ points_dir }}"
                   aria-sort="{{ 'ascending' if points_dir == 'asc' else 'descending' }}">
                 {{ "Points against" if pool.scoring_mode == "inverse" else "Points" }}
               </th>
               <th scope="col" class="num" data-sortable-col data-sort-default-dir="desc" aria-sort="none">Correct</th>
+              <th scope="col" class="num" data-sortable-col data-sort-default-dir="desc" aria-sort="none">Wins</th>
               {% if payout_rules_exist %}
                 <th scope="col" class="num" data-sortable-col data-sort-default-dir="desc" aria-sort="none">
                   Payout{% if payout_is_projected %} <span class="pill">Projected</span>{% endif %}
@@ -172,10 +176,10 @@
             {% for row in weekly %}
               {% set you = row.is_you or (me is not none and row.user_id == me) %}
               <tr class="lb-row{{ ' lb-leader' if row.is_winner }}{{ ' is-you' if you }}" data-row>
-                <td data-label="Rank" data-sort-value="{{ row.rank }}">
+                <td data-label="Standing" data-sort-value="{{ row.rank }}">
                   <span class="rank-badge num{% if row.rank <= 3 %} is-{{ row.rank }}{% endif %}">{{ row.rank }}</span>
                 </td>
-                <td data-label="Player">
+                <td data-label="Name">
                   <span class="lb-name">
                     <span class="lb-player">{{ row.display_name }}</span>
                     {% if you %}<span class="pill pill-you">You</span>{% endif %}
@@ -192,6 +196,9 @@
                 </td>
                 <td class="num" data-label="Correct" data-sort-value="{{ row.correct }}">
                   {% if row.did_not_submit %}<span class="no-entry">.</span>{% else %}{{ row.correct }} of {{ row.possible }}{% endif %}
+                </td>
+                <td class="num" data-label="Wins" data-sort-value="{{ season_wins_by_user.get(row.user_id, 0) }}">
+                  {{ season_wins_by_user.get(row.user_id, 0) }}
                 </td>
                 {% if payout_rules_exist %}
                   {% set amount = payouts_by_user.get(row.user_id) %}
@@ -254,6 +261,11 @@
         </div>
       </div>
     {% elif columns and games %}
+    {# Standings and ties, September, Phase 4: the full pick grid stays available, but closed
+       by default behind this disclosure, since the condensed weekly table above is now the
+       primary view of this page. #}
+    <details class="full-pick-grid">
+      <summary>Full pick grid</summary>
       <ul class="pick-legend">
         <li><span class="pick-key is-correct" aria-hidden="true"></span>Correct</li>
         <li><span class="pick-key is-wrong" aria-hidden="true"></span>Wrong</li>
@@ -447,6 +459,7 @@
           </table>
         </div>
       </div>
+    </details>
     {% else %}
       <div class="empty-state">
         {{ ic.icon("users", 28) }}

@@ -1743,6 +1743,12 @@ def test_results_grid_is_player_major_with_confidence_columns_and_game_major_tog
     assert 'class="pick-player' in text
     assert 'data-view-btn="game"' in text
 
+    # standings and ties, September, Phase 4: the whole grid is closed by default behind a
+    # <details class="full-pick-grid">, no open attribute, with the condensed weekly table
+    # above it as the primary view.
+    assert '<details class="full-pick-grid">' in text
+    assert "Full pick grid" in text
+
 
 def test_scoring_end_to_end(client, world, session_factory):
     """Save picks, finalise the games, score, and check the leaderboard math.
@@ -2513,6 +2519,41 @@ def test_results_no_payout_rules_means_no_payout_column(client, world, session_f
     response = client.get("/results")
     assert response.status_code == 200
     assert "Payout" not in response.text
+
+
+def test_results_wins_column_shows_season_weekly_wins(client, world, session_factory):
+    """standings and ties, September, Phase 4: the condensed table's Wins column is the
+    player's season weekly wins, since that is the ladder's own tiebreak level, not
+    something specific to the single week shown."""
+    from app.services.results import score_week_for_pool
+
+    _login(client, "player@example.com")
+    client.post("/picks", data=_valid_submission(world["game_ids"]))
+
+    db = session_factory()
+    pool = db.get(Pool, world["pool_id"])
+    week = db.get(Week, world["week_id"])
+    games = list(db.scalars(select(Game).where(Game.week_id == week.id).order_by(Game.slate_rank)))
+    outcomes = ["home", "away", "away", "home"]
+    for game, winner in zip(games, outcomes, strict=False):
+        game.status = "final"
+        game.winner = winner
+        game.home_score = 21 if winner == "home" else 17
+        game.away_score = 17 if winner == "home" else 21
+    week.lock_at = dt.datetime.now(UTC) - dt.timedelta(hours=1)
+    db.commit()
+
+    score_week_for_pool(db, pool, week)
+    db.commit()
+    db.close()
+
+    _login(client, "boss@example.com")
+    response = client.get("/results")
+    assert response.status_code == 200
+    text = response.text
+    # The player won the only scored week so far: one season weekly win.
+    assert 'data-label="Wins" data-sort-value="1">' in text
+    assert 'data-label="Wins" data-sort-value="0">' in text
 
 
 # The weekly and bowl week payout column tests moved to tests/test_payout_display.py, on the

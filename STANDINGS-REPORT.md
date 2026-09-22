@@ -11,7 +11,7 @@ commit messages for the exact diff each phase introduced.
 | 1. Fix the 120 point bug | Done | `066b731` |
 | 2. Replace the tie rules with the league's rule | Done | `3ad9318` |
 | 3. Fix the sort that pulls in tiebreak lines | Done | (pending commit) |
-| 4. Condense the Results tab | Pending | |
+| 4. Condense the Results tab | Done | (pending commit) |
 | 5. Condense the Season tab | Pending | |
 | 6. Condense the This Week tab | Pending | |
 | 7. Expandable pick rows on Results and Season | Pending | |
@@ -175,6 +175,21 @@ player it explained.
 sorting entirely and stays in place; `tests/test_payout_display.py` gained an HTTP-level test
 confirming the reason renders inside `<tr data-row>`, never a separate `<tr class="lb-row
 lb-tiebreak-row">`. The full existing JS suite (23 tests) and Python suite pass unchanged.
+
+## Phase 4. Condense the Results tab
+
+The weekly leaderboard table (already reshaped into the condensed form across Phases 2/3) is
+now exactly the spec's columns: Standing, Name, Points, Correct ("10 of 14"), Wins (season
+weekly wins, the tiebreak level), Payout once the week is fully final, every column sortable,
+default sort by standing, the tie/split reason under the name. The full pick grid (both the
+player-major and game-major views, and the legend and view toggle) is unchanged in content but
+now sits behind a native `<details class="full-pick-grid"><summary>Full pick grid</summary>`,
+closed by default, so a returning player reaches the condensed table first. The scoreboard and
+scenarios sections are untouched, they do not duplicate the leaderboard table.
+
+**Tests:** the existing player-major/game-major grid test now also asserts the disclosure is
+present and closed; a new test confirms the Wins column shows season weekly wins, not a
+single-week figure.
 
 ## What still needs attention
 

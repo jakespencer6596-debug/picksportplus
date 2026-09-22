@@ -2946,6 +2946,16 @@ a.toggle-btn { text-decoration: none; }
   margin-top: var(--space-4);
 }
 
+/* Closed by default (standings and ties, September, Phase 4): the full pick grid is real,
+   useful detail a returning player does not have to scroll past to reach the condensed
+   weekly table above it. */
+.full-pick-grid summary {
+  cursor: pointer;
+  font-weight: 500;
+  color: var(--accent);
+  margin-bottom: var(--space-4);
+}
+
 .scenario-representative summary {
   cursor: pointer;
   font-weight: 500;

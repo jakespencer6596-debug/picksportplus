@@ -25,7 +25,7 @@ from app.scenarios import PlayerScenarioOutlook, RepresentativeScenario
 from app.scoring import GameOutcome, PickInput, score_pick
 from app.services import payouts as payout_service
 from app.services import scenarios as scenario_service
-from app.services.standings import weekly_leaderboard
+from app.services.standings import season_standings, weekly_leaderboard
 from app.templating import render
 
 router = APIRouter(tags=["results"])
@@ -178,6 +178,7 @@ def results_page(
     leverage_lines: list[LeverageLine] = []
     representative_lines: list[RepresentativeLine] = []
     remaining_games_by_id: dict[int, Game] = {}
+    season_wins_by_user: dict[int, int] = {}
 
     if row is not None:
         games = list(
@@ -199,6 +200,11 @@ def results_page(
             # Pass the page's own resolved week explicitly, so the leaderboard always
             # matches whichever week the switcher has selected, not always the latest.
             weekly, _ = weekly_leaderboard(db, pool, week=row, viewer_id=user.id)
+            # The condensed table's Wins column (standings and ties, September, Phase 4):
+            # season weekly wins, since that is the tie level right below points on this
+            # very table. Read from season_standings, not weekly_leaderboard, since a
+            # single week's own row has no notion of the season total.
+            season_wins_by_user = {r.user_id: r.weekly_wins for r in season_standings(db, pool)}
 
             # A test week (Phase 3, preseason and test week support) is fully quarantined
             # from both of these: it never carries a payout column (no PayoutAward row is
@@ -276,6 +282,7 @@ def results_page(
             "leverage_lines": leverage_lines,
             "representative_lines": representative_lines,
             "remaining_games_by_id": remaining_games_by_id,
+            "season_wins_by_user": season_wins_by_user,
         },
         current_user=user,
         pool=pool,
