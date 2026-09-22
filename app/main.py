@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import logging
+import os
+import pathlib
+import tempfile
 import time
 
 from fastapi import FastAPI, Request
@@ -129,11 +132,55 @@ async def timing_middleware(request: Request, call_next):
     return response
 
 
+def _assert_local_database() -> None:
+    """Refuse to boot against anything but a local SQLite file, unless this really is the
+    Render production service (standings and ties, September, "Production is off limits").
+
+    Render sets RENDER=true on every one of its own runtimes, so RENDER being unset means
+    this is a local development or test boot, where DATABASE_URL must never resolve to a
+    remote host: a stray .env left over from other work, or an environment variable set in
+    the wrong shell, must not be able to point a local session at the real production
+    database. A non sqlite URL (Postgres, MySQL, or anything else) is refused outright; a
+    sqlite URL is only accepted when its file lives under the repo's own working directory
+    or the OS temp directory, never somewhere else on disk that might itself be a mounted or
+    synced copy of something real.
+    """
+    if os.environ.get("RENDER"):
+        return
+    url = settings.database_url
+    if not url.startswith("sqlite:///"):
+        raise RuntimeError(
+            f"Refusing to start: DATABASE_URL ({url!r}) is not a local sqlite file and this "
+            "process is not running on Render. Local development and testing must only ever "
+            "use a local sqlite database. Set DATABASE_URL to a sqlite:///./file.db path."
+        )
+    path = url.split("///", 1)[-1]
+    if path and path != ":memory:":
+        resolved = pathlib.Path(path).resolve()
+        cwd = pathlib.Path.cwd().resolve()
+        tmp = pathlib.Path(tempfile.gettempdir()).resolve()
+        if (
+            resolved != cwd
+            and cwd not in resolved.parents
+            and tmp != resolved
+            and tmp not in resolved.parents
+        ):
+            raise RuntimeError(
+                f"Refusing to start: DATABASE_URL ({url!r}) resolves to {resolved}, which is "
+                "outside this repo's working directory and the OS temp directory. Local "
+                "development and testing must only ever use a local sqlite database inside "
+                "one of those two places."
+            )
+    log.info("local database: %s", url)
+
+
 @app.on_event("startup")
 def _log_storage_status() -> None:
     """Loud, impossible-to-miss log line on boot so an operator reading the Render deploy
     log sees data-loss risk immediately, not just from a banner someone has to click into
     (Phase 1 remediation, see DECISIONS.md)."""
+    _assert_local_database()
+
     from app.db import engine
 
     log.info("database dialect: %s", engine.dialect.name)
