@@ -10,15 +10,15 @@ commit messages for the exact diff each phase introduced.
 | 0. Baseline | Done | `b86dbdb` |
 | 1. Fix the 120 point bug | Done | `066b731` |
 | 2. Replace the tie rules with the league's rule | Done | `3ad9318` |
-| 3. Fix the sort that pulls in tiebreak lines | Done | (pending commit) |
-| 4. Condense the Results tab | Done | (pending commit) |
-| 5. Condense the Season tab | Done | (pending commit) |
-| 6. Condense the This Week tab | Done | (pending commit) |
-| 7. Expandable pick rows on Results and Season | Done | (pending commit) |
-| 8. Mobile pass | Pending | |
-| 9. Regression sweep | Done | (pending commit) |
+| 3. Fix the sort that pulls in tiebreak lines | Done | `9cf1cc0` |
+| 4. Condense the Results tab | Done | `4f9069c` |
+| 5. Condense the Season tab | Done | `ae27e3b` |
+| 6. Condense the This Week tab | Done | `64c5c58` |
+| 7. Expandable pick rows on Results and Season | Done | `42dcee7` |
+| 8. Mobile pass | Done | `07196e7` |
+| 9. Regression sweep | Done | `d2700d3` |
 | 10. Full verification | Pending | |
-| 11. Documentation | Pending | |
+| 11. Documentation | In progress | `f8a5473` |
 | 12. Merge, safety check, push, deploy | Pending | |
 | 13. Verify on the live site | Pending | |
 
@@ -282,6 +282,47 @@ confidence ordering, a 403 for a player in another pool, the season week selecto
 switching which week's picks render, and the Results row wiring the chevron to the correct
 panel id.
 
+## Phase 8. Mobile pass
+
+Checked every tab touched by this build (Results, Season, This Week, Chat, League dashboard,
+Payouts) at 360px, 390px, and 430px. `resize_window` does not change a tab's actual CSS
+viewport in this environment (`window.innerWidth` held constant across repeated resize
+attempts, confirmed against a browser `list_connected_browsers` already reports as local), so
+every width was tested for real by injecting a fixed-size `<iframe>` into a blank page and
+driving Chrome automation against the iframe's own `contentWindow`, which does get a real,
+independent viewport that media queries correctly evaluate against.
+
+Found and fixed one real bug, live on the Results leaderboard at 360px: `.table td` (the
+stacked-card layout below 768px) laid out its children as a single-line flex row with no
+wrap, so any "second line" content, a tiebreak note, a stale-award note, or Phase 7's new
+expandable pick strip, rendered centered on top of the player's name instead of stacking below
+it. Fixing that surfaced a second, related bug: the pick strip's own row of fixed-width cards
+would not shrink, which stretched `.table-wrap` and the whole page out to the content's width
+instead of scrolling sideways inside the strip's own scroller.
+
+Fix (`app/static/app.css`, commit `07196e7`): `flex-wrap: wrap` on `.table td`/`.table tbody
+th`, `flex-basis: 100%` plus `text-align: left` on `.lb-tiebreak-note` and
+`.pick-strip-target:not([hidden])` so each forces its own line, `overflow-x: hidden` on
+`.table-wrap` below 768px (the existing `>=768px` block already restores `overflow-x: auto`,
+where the real table needs to scroll sideways on purpose), and `min-width: 0` on
+`.pick-strip-scroll-wrap` so it can actually shrink to fit instead of forcing its ancestors
+wider. Re-verified at 360px that the pick strip now stacks correctly below the name/ribbon,
+and separately confirmed the existing `>=768px` desktop table layout is unaffected (pick strip
+still renders inline in the Name cell with its own prev/next buttons).
+
+Swept the remaining five pages at all three widths (`/picks`, `/standings`, league chat, the
+league dashboard, payouts): zero horizontal overflow anywhere (`documentElement.scrollWidth`
+matched `clientWidth` on all 15 page x width combinations), no console errors, and Season's
+leaderboard, which reuses the same `.lb-tiebreak-note`/`.pick-strip-target` classes just fixed
+on Results, confirmed clean on a genuinely tied row with its pick strip expanded. No further
+CSS changes were needed outside the one fix above. Screenshots for each page at 360px saved to
+`docs/mobile/`.
+
+**Tests:** full gate (`ruff check .`, `black --check .`, `pytest -q`, the em dash grep) and
+`npm test` all clean after the CSS fix; no new failures (the same 2 pre-existing, unrelated
+failures remain: `test_week_published_notification_sent_when_pool_opts_in` and
+`test_slate_editor_page_weight_budget`, both untouched by this build and tracked, not fixed).
+
 ## Phase 9. Regression sweep
 
 Full gate (`ruff check .`, `black --check .`, `pytest -q`, the em dash grep) run clean
@@ -319,7 +360,8 @@ engine never had wins-tiebreak awareness even under the old two-mode system.
 
 ## What still needs attention
 
-- Phase 8 (mobile pass) is in progress; Phases 10 through 13 have not started yet.
+- Phases 10 through 13 (full verification, documentation, merge/push/deploy, live-site check)
+  have not started yet.
 
 ## Confirmation: no production data touched
 
