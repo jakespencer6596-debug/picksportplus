@@ -17,9 +17,9 @@ commit messages for the exact diff each phase introduced.
 | 7. Expandable pick rows on Results and Season | Done | `42dcee7` |
 | 8. Mobile pass | Done | `07196e7` |
 | 9. Regression sweep | Done | `d2700d3` |
-| 10. Full verification | Pending | |
-| 11. Documentation | In progress | `f8a5473` |
-| 12. Merge, safety check, push, deploy | Pending | |
+| 10. Full verification | Done | `d99d7e0` |
+| 11. Documentation | Done | `f8a5473`, `d99d7e0` |
+| 12. Merge, safety check, push, deploy | Prep done, push awaiting go-ahead | |
 | 13. Verify on the live site | Pending | |
 
 ## Phase 0. Baseline
@@ -358,10 +358,62 @@ dimension, a real, separately scoped feature this prompt's 13 phases never actua
 elsewhere; not attempted here, and not a regression this build introduced, since the scenario
 engine never had wins-tiebreak awareness even under the old two-mode system.
 
+## Phase 10. Full verification
+
+Ran on an isolated dev server and sqlite file (`verify_phase10.db`, port 8010, its own
+`DATABASE_URL`, deleted along with its `-wal`/`-shm` sidecars once verification finished),
+seeded with `scripts/seed_prod_shaped.py --reset`, entirely separate from any other dev server
+or database this build used. `_assert_local_database()` confirmed intact throughout. Every
+item below was exercised live through Claude in Chrome against real seeded data, not just read
+from source or confirmed by the test suite alone (the suite already covers the same ground;
+this phase is the end to end confirmation that it actually works through the UI a real
+commissioner or player would use).
+
+| # | Check | Result |
+|---|---|---|
+| 1 | Season, By points: rank order and payout math | Pass |
+| 2 | Season, By wins: toggle and payout math | Pass |
+| 3 | Week 6's forced tie: "Tied on points and wins, pot split.", amounts actually split | Pass |
+| 4 | Sort integrity: tiebreak/stale-award notes stay attached to their row through a re-sort | Pass |
+| 5 | No-show timing: pre-lock phantom entries read live 0; a genuine post-lock no-show takes the full penalty | Pass |
+| 6 | Pick-strip chevron, Results and Season, desktop | Pass |
+| 7 | Pick-strip privacy, adversarial: hidden pre-lock, own picks visible, 403 outside the pool | Pass |
+| 8 | Keyboard-only full pick entry, a real 15 pick slate, saved | Pass |
+| 9 | Adversarial 16-pick POST: rejected 400, stored picks unchanged | Pass |
+| 10 | Recalculate preview/confirm: diff shown, nothing written until Confirm | Pass |
+| 11 | Test week contributes nothing to standings or payouts | Pass |
+| 12 | ~1280px desktop pass, no regression from Phase 8's mobile-only CSS | Pass |
+| 13 | Chat: a message stays HTML-escaped | Pass |
+
+**Bug found and fixed** (commit `d99d7e0`): the Results page had no stale-award indicator for
+the weekly scope, only Season did. A frozen weekly `PayoutAward` that no longer matches a live
+recompute (reproduced live: week 6's tied pair still showing the old $105/$55 instead of the
+live $13/$12 split) rendered with no hint it might be wrong, next to a tiebreak note that could
+read as confirming the number shown was the live split. Fixed by mirroring
+`app/routers/leaderboard.py`'s existing season-scope pattern into `app/routers/results.py` and
+`app/templates/results.html`: the same `recalculate_preview` call, the same "Awarded under the
+previous tie rule." label, never a silent rewrite. Re-verified live after the fix; a player
+with no prior frozen award correctly stayed unlabelled.
+
+Gate after the fix: `ruff check .` and `black --check .` clean, `pytest -q` at 1272 passed, the
+same 2 pre-existing unrelated failures (`test_week_published_notification_sent_when_pool_opts_in`,
+`test_slate_editor_page_weight_budget`), `npm test` 23/23. No new failures anywhere in this
+phase.
+
+**Note for the commissioner-facing writeup:** the weekly-scope staleness this fix catches can
+only arise from a correction made after an award was already frozen (a late score fix, or this
+build's own tie-rule change landing after a week had already paid out) — rare in practice, but
+real, and now carries the same visible safeguard Season already had.
+
 ## What still needs attention
 
-- Phases 10 through 13 (full verification, documentation, merge/push/deploy, live-site check)
-  have not started yet.
+- Phase 12 is prepped (see `PRE-DEPLOY-CHECK.md`): the branch is a clean fast-forward onto
+  `main`, 0 commits behind, no Alembic migrations, gate clean. The push itself has not been
+  attempted. `picksportplus-live` auto-deploys on push to `main`, this is a live pool with real
+  money mid-Week 7, and a prior session already had `git push origin main` refused by the
+  environment's own permission layer as a production deploy (`DECISIONS.md`, 2026-09-14): this
+  needs the commissioner's explicit go-ahead, not a unilateral push.
+- Phase 13 (verify on the live site) cannot start until Phase 12's push and deploy happen.
 
 ## Confirmation: no production data touched
 
