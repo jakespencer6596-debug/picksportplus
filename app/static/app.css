@@ -2775,6 +2775,170 @@ button.team-btn:not([disabled]):not(.is-picked):hover {
   font-size: 0.8125rem;
 }
 
+/* -- Expandable pick strip (standings and ties, September, Phase 7) ------------------------
+   A player's picks for one week, opened from a chevron in their own name cell on Results and
+   Season. Lives inside the name <td>, a child of the sortable row rather than a sibling <tr>,
+   so the sorter (app.js's sortTableRows, scoped to tr[data-row]) never has to know it exists:
+   the panel simply travels with its own row whenever the table re-sorts. */
+
+.pick-strip-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  flex: none;
+  color: var(--text-muted);
+  border-radius: var(--radius-sm);
+  transition: color var(--dur) var(--ease), background-color var(--dur) var(--ease);
+}
+
+.pick-strip-toggle:hover {
+  color: var(--accent);
+  background: var(--bg-surface-alt);
+}
+
+.pick-strip-toggle .row-expand-caret { transition: transform var(--dur) var(--ease); }
+
+.pick-strip-toggle[aria-expanded="true"] .row-expand-caret { transform: rotate(180deg); }
+
+.pick-strip-target:not([hidden]) {
+  display: block;
+  margin-top: var(--space-2);
+  opacity: 0;
+  transition: opacity var(--dur) var(--ease);
+}
+
+.pick-strip-target.is-open { opacity: 1; }
+
+.pick-strip-week-form {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin-bottom: var(--space-2);
+}
+
+.pick-strip-summary {
+  margin: 0 0 var(--space-2);
+  font-size: var(--fs-sm);
+}
+
+.pick-strip-empty {
+  margin: 0;
+  font-size: var(--fs-sm);
+}
+
+.pick-strip-scroll-wrap {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  max-width: min(100%, 420px);
+}
+
+.pick-strip {
+  display: flex;
+  gap: var(--space-2);
+  overflow-x: auto;
+  scroll-snap-type: x proximity;
+  padding: var(--space-1) 0;
+  margin: 0;
+  list-style: none;
+  scrollbar-width: thin;
+}
+
+.pick-strip-card {
+  scroll-snap-align: start;
+  flex: none;
+  width: 108px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  padding: var(--space-2);
+  background: var(--bg-surface-alt);
+  border: var(--hairline);
+  border-radius: var(--radius-sm);
+  text-align: center;
+}
+
+.pick-strip-card:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+.pick-strip-conf {
+  font-family: var(--font-display);
+  font-size: var(--fs-lg);
+  font-weight: 600;
+  line-height: 1;
+}
+
+.pick-strip-team {
+  font-family: var(--font-display);
+  font-size: var(--fs-base);
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+.pick-strip-opp {
+  font-size: var(--fs-xs);
+  color: var(--text-muted);
+}
+
+.pick-strip-state {
+  font-size: var(--fs-xs);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  margin-top: 2px;
+}
+
+.pick-strip-card.is-correct {
+  background: var(--accent-tint);
+  border-color: transparent;
+}
+
+.pick-strip-card.is-correct .pick-strip-state { color: var(--accent-strong); }
+
+.pick-strip-card.is-wrong {
+  background: var(--negative-tint);
+  border-color: transparent;
+}
+
+.pick-strip-card.is-wrong .pick-strip-state { color: var(--negative); }
+
+.pick-strip-card.is-pending .pick-strip-state,
+.pick-strip-card.is-void .pick-strip-state { color: var(--text-muted); }
+
+.pick-strip-nav {
+  display: none;
+  flex: none;
+  width: 28px;
+  height: 28px;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-muted);
+  border: var(--hairline);
+  border-radius: var(--radius-sm);
+  background: var(--bg-surface);
+  transition: color var(--dur) var(--ease), border-color var(--dur) var(--ease);
+}
+
+.pick-strip-nav:hover {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+@media (min-width: 768px) {
+  .pick-strip-nav.desktop-only { display: inline-flex; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pick-strip {
+    scroll-behavior: auto;
+    scroll-snap-type: none;
+  }
+}
+
 /* A note under a leaderboard heading, for example "this week is still being
    scored". */
 .lb-note {

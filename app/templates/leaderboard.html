@@ -103,12 +103,25 @@
                   <span class="lb-name">
                     <span class="lb-player">{{ row.display_name }}</span>
                     {% if you %}<span class="pill pill-you">You</span>{% endif %}
+                    {% if default_week %}
+                      <button type="button" class="pick-strip-toggle" data-row-toggle
+                              aria-expanded="false" aria-controls="pick-strip-points-{{ row.user_id }}"
+                              aria-label="Show {{ row.display_name }}'s picks"
+                              hx-get="/results/pick-strip?week={{ default_week.week_number }}&amp;user_id={{ row.user_id }}&amp;selector=1"
+                              hx-target="#pick-strip-points-{{ row.user_id }}" hx-swap="innerHTML"
+                              hx-trigger="click once">
+                        {{ ic.icon("down", 15, "row-expand-caret") }}
+                      </button>
+                    {% endif %}
                   </span>
                   {% if row.tiebreak_reason %}
                     <p class="muted lb-tiebreak-note">{{ row.tiebreak_reason }}</p>
                   {% endif %}
                   {% if award and row.user_id in stale_award_user_ids %}
                     <p class="muted lb-tiebreak-note">Awarded under the previous tie rule.</p>
+                  {% endif %}
+                  {% if default_week %}
+                    <div class="pick-strip-target" id="pick-strip-points-{{ row.user_id }}" data-row-detail hidden></div>
                   {% endif %}
                 </td>
                 <td class="num" data-label="Points" data-sort-value="{{ row.points }}">
@@ -181,12 +194,25 @@
                   <span class="lb-name">
                     <span class="lb-player">{{ row.display_name }}</span>
                     {% if you %}<span class="pill pill-you">You</span>{% endif %}
+                    {% if default_week %}
+                      <button type="button" class="pick-strip-toggle" data-row-toggle
+                              aria-expanded="false" aria-controls="pick-strip-wins-{{ row.user_id }}"
+                              aria-label="Show {{ row.display_name }}'s picks"
+                              hx-get="/results/pick-strip?week={{ default_week.week_number }}&amp;user_id={{ row.user_id }}&amp;selector=1"
+                              hx-target="#pick-strip-wins-{{ row.user_id }}" hx-swap="innerHTML"
+                              hx-trigger="click once">
+                        {{ ic.icon("down", 15, "row-expand-caret") }}
+                      </button>
+                    {% endif %}
                   </span>
                   {% if row.tiebreak_reason %}
                     <p class="muted lb-tiebreak-note">{{ row.tiebreak_reason }}</p>
                   {% endif %}
                   {% if award and row.user_id in stale_award_user_ids %}
                     <p class="muted lb-tiebreak-note">Awarded under the previous tie rule.</p>
+                  {% endif %}
+                  {% if default_week %}
+                    <div class="pick-strip-target" id="pick-strip-wins-{{ row.user_id }}" data-row-detail hidden></div>
                   {% endif %}
                 </td>
                 <td class="num" data-label="Wins" data-sort-value="{{ row.weekly_wins }}">

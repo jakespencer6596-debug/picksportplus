@@ -186,10 +186,19 @@
                     {% if row.is_winner %}
                       <span class="ribbon">{{ ic.icon("flag", 13) }}Winner</span>
                     {% endif %}
+                    <button type="button" class="pick-strip-toggle" data-row-toggle
+                            aria-expanded="false" aria-controls="pick-strip-week-{{ row.user_id }}"
+                            aria-label="Show {{ row.display_name }}'s picks"
+                            hx-get="/results/pick-strip?week={{ week.week_number }}&amp;user_id={{ row.user_id }}"
+                            hx-target="#pick-strip-week-{{ row.user_id }}" hx-swap="innerHTML"
+                            hx-trigger="click once">
+                      {{ ic.icon("down", 15, "row-expand-caret") }}
+                    </button>
                   </span>
                   {% if row.tiebreak_reason %}
                     <p class="muted lb-tiebreak-note">{{ row.tiebreak_reason }}</p>
                   {% endif %}
+                  <div class="pick-strip-target" id="pick-strip-week-{{ row.user_id }}" data-row-detail hidden></div>
                 </td>
                 <td class="num" data-label="Points" data-sort-value="{{ row.points }}">
                   {% if row.did_not_submit %}<span class="no-entry">No picks submitted</span>{% else %}{{ row.points }}{% endif %}

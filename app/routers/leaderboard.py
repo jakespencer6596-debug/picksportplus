@@ -27,9 +27,18 @@ def standings_page(
     user: User = Depends(require_user),
     pool: Pool = Depends(get_active_pool),
 ):
-    from app.services.standings import season_live_weeks, season_points_ranking, season_wins_ranking
+    from app.services.standings import (
+        latest_scored_week,
+        season_live_weeks,
+        season_points_ranking,
+        season_wins_ranking,
+    )
 
     season = season_points_ranking(db, pool, viewer_id=user.id)
+    # The expandable pick strip's own week selector (standings and ties, September, Phase 7)
+    # defaults to the most recently scored week; None only when nobody has scored yet, in
+    # which case there is nothing for a pick strip to show regardless.
+    default_week = latest_scored_week(db, pool)
     # The 120 point bug fix (standings and ties, September): unfinished weeks count live in
     # season points as their games finish, so the page must say so rather than let a moving
     # number look settled. Empty in the ordinary case where every started week has scored.
@@ -73,6 +82,7 @@ def standings_page(
             "season_points_awards": season_points_awards,
             "season_wins_awards": season_wins_awards,
             "stale_award_user_ids": stale_award_user_ids,
+            "default_week": default_week,
         },
         current_user=user,
         pool=pool,

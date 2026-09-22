@@ -1,0 +1,74 @@
+{% import "components/icons.html" as ic %}
+{#
+  The expandable pick row's own panel (standings and ties, September, Phase 7). Swapped into
+  a row's own [data-pick-strip-target] the first time its chevron opens (loaded once over
+  HTMX, never rendered for every player on the initial page load). Shared by /results and
+  /standings; selector is only ever true from /standings, where the panel carries its own
+  week picker independent of the page's own week.
+#}
+<div class="pick-strip-panel" data-pick-strip>
+  {% if selector %}
+    <form class="pick-strip-week-form"
+          hx-get="/results/pick-strip" hx-target="closest [data-pick-strip]" hx-swap="outerHTML">
+      <input type="hidden" name="user_id" value="{{ member.id }}">
+      <input type="hidden" name="selector" value="1">
+      <label class="field-label" for="pick-strip-week-{{ member.id }}">Week</label>
+      <select class="select select-sm" id="pick-strip-week-{{ member.id }}" name="week"
+              onchange="this.form.requestSubmit()">
+        {% for w in weeks %}
+          <option value="{{ w.week_number }}" {% if week and w.week_number == week.week_number %}selected{% endif %}>
+            {{ w.label }}
+          </option>
+        {% endfor %}
+      </select>
+    </form>
+  {% endif %}
+
+  {% if not revealed %}
+    <p class="muted pick-strip-empty">Picks are hidden until lock.</p>
+  {% elif not column or not cards %}
+    <p class="muted pick-strip-empty">
+      {% if column and column.did_not_submit %}No picks submitted for {{ week.label }}.{% else %}Nothing picked yet.{% endif %}
+    </p>
+  {% else %}
+    {% if selector %}
+      <p class="muted num pick-strip-summary">
+        {{ week.label }}: {{ column.points }} {{ "against" if pool.scoring_mode == "inverse" else "points" }},
+        {{ column.correct }} of {{ column.possible }} correct.
+      </p>
+    {% endif %}
+
+    <div class="pick-strip-scroll-wrap">
+      <button type="button" class="pick-strip-nav pick-strip-nav-prev desktop-only" data-strip-nav="prev"
+              aria-label="Scroll to previous pick">{{ ic.icon("left", 18) }}</button>
+
+      <ul class="pick-strip" data-pick-strip-list role="list"
+          aria-label="{{ member.display_name }}'s picks for {{ week.label }}, most confident first">
+        {% for confidence, entry in cards %}
+          {% set game, pick = entry %}
+          {% set side = game.home_abbr if pick.picked_team == "home" else game.away_abbr %}
+          {% set opp = game.away_abbr if pick.picked_team == "home" else game.home_abbr %}
+          <li class="pick-strip-card is-{{ pick.state }}" tabindex="0" data-pick-strip-card>
+            <span class="pick-strip-conf num">{{ confidence }}</span>
+            <span class="pick-strip-team">{{ side }}</span>
+            <span class="pick-strip-opp">vs {{ opp }}</span>
+            <span class="pick-strip-state">
+              {%- if pick.state == "correct" -%}
+                Correct
+              {%- elif pick.state == "wrong" -%}
+                Wrong
+              {%- elif pick.state == "void" -%}
+                Void
+              {%- else -%}
+                Not final
+              {%- endif -%}
+            </span>
+          </li>
+        {% endfor %}
+      </ul>
+
+      <button type="button" class="pick-strip-nav pick-strip-nav-next desktop-only" data-strip-nav="next"
+              aria-label="Scroll to next pick">{{ ic.icon("right", 18) }}</button>
+    </div>
+  {% endif %}
+</div>

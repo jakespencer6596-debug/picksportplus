@@ -60,6 +60,10 @@ class PlayerColumn:
     # this player's own Pick rows, not by scanning every slate game, since a player's
     # confidence values only exist for the games they actually picked.
     by_confidence: dict[int, tuple[Game, PlayerPick]] = field(default_factory=dict)
+    # WeekEntry.possible: how many of this player's own picks are countable so far (Phase 7,
+    # the expandable pick strip's "5 of 7" summary line). 0 for a no-show, matching every
+    # other "correct of possible" display elsewhere in the app.
+    possible: int = 0
 
 
 @dataclass
@@ -351,12 +355,139 @@ def _build_columns(db: Session, pool: Pool, week: Week, games: list[Game]) -> li
                 did_not_submit=bool(entry.did_not_submit) if entry else True,
                 picks=cells,
                 by_confidence=by_confidence,
+                possible=entry.possible if entry else 0,
             )
         )
 
     sign = 1 if pool.scoring_mode == "inverse" else -1
     columns.sort(key=lambda c: (sign * c.points, -c.correct, c.display_name.lower()))
     return columns
+
+
+def _build_single_column(
+    db: Session, pool: Pool, week: Week, games: list[Game], member: User
+) -> PlayerColumn:
+    """The one-player slice of _build_columns, for the expandable pick strip (standings and
+    ties, September, Phase 7): loaded lazily, one player at a time, never by building every
+    member's column just to throw the rest away.
+    """
+    entry = db.scalar(
+        select(WeekEntry).where(WeekEntry.week_id == week.id, WeekEntry.user_id == member.id)
+    )
+    user_picks = {
+        p.game_id: p
+        for p in db.scalars(select(Pick).where(Pick.week_id == week.id, Pick.user_id == member.id))
+    }
+    cells: dict[int, PlayerPick] = {}
+    by_confidence: dict[int, tuple[Game, PlayerPick]] = {}
+    for game in games:
+        pick = user_picks.get(game.id)
+        if pick is None:
+            cells[game.id] = PlayerPick(None, None, 0, "missing")
+            continue
+        if game.status == "void" or game.winner == "tie":
+            state, earned = "void", 0
+        elif game.status != "final" or game.winner is None:
+            state, earned = "pending", 0
+        else:
+            state = "correct" if pick.picked_team == game.winner else "wrong"
+            earned = score_pick(
+                PickInput(
+                    game_id=game.id, picked_team=pick.picked_team, confidence=pick.confidence
+                ),
+                GameOutcome(game_id=game.id, status=game.status, winner=game.winner),
+                mode=pool.scoring_mode,
+            )
+        cell = PlayerPick(pick.picked_team, pick.confidence, earned, state)
+        cells[game.id] = cell
+        by_confidence[pick.confidence] = (game, cell)
+
+    return PlayerColumn(
+        user_id=member.id,
+        display_name=member.display_name,
+        points=entry.points if entry else 0,
+        correct=entry.correct if entry else 0,
+        is_winner=bool(entry and entry.is_winner),
+        submitted=bool(entry and entry.submitted_at),
+        did_not_submit=bool(entry.did_not_submit) if entry else True,
+        picks=cells,
+        by_confidence=by_confidence,
+        possible=entry.possible if entry else 0,
+    )
+
+
+@router.get("/results/pick-strip")
+def pick_strip(
+    request: Request,
+    week: int,
+    user_id: int,
+    selector: bool = False,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_user),
+    pool: Pool = Depends(get_active_pool),
+):
+    """The expandable pick row's own panel content (standings and ties, September, Phase 7),
+    loaded over HTMX the first time a row's chevron opens, shared by both /results and
+    /standings. selector=1 renders the Season tab's own week picker inside the panel;
+    /results never passes it, since that page's own week switcher already fixes the week.
+
+    Privacy stays exactly as it is on the rest of the app: a week's picks are visible to
+    everyone only after that week locks (SPEC.md Section 8); before lock, only the viewer's
+    own picks render, and anyone else's panel reads "Picks are hidden until lock."
+    """
+    row = _week_or_404(db, pool, week)
+    if row is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "That week does not exist.")
+
+    member = db.scalar(
+        select(User)
+        .join(PoolMember, PoolMember.user_id == User.id)
+        .where(PoolMember.pool_id == pool.id, User.id == user_id)
+    )
+    if member is None:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "That player is not in this league.")
+
+    weeks = None
+    if selector:
+        weeks = list(
+            db.scalars(
+                select(Week)
+                .where(Week.pool_id == pool.id, Week.season_year == pool.season_year)
+                .where(Week.status.in_(("open", "locked", "scored")))
+                .order_by(Week.week_number.desc())
+            )
+        )
+
+    revealed = week_is_locked(row) or user_id == user.id
+    column = None
+    if revealed:
+        games = list(
+            db.scalars(
+                select(Game)
+                .where(Game.week_id == row.id, Game.in_slate.is_(True))
+                .order_by(Game.slate_rank)
+            )
+        )
+        column = _build_single_column(db, pool, row, games, member)
+        cards = sorted(column.by_confidence.items(), key=lambda item: item[0], reverse=True)
+    else:
+        cards = []
+
+    return render(
+        request,
+        "components/pick_strip.html",
+        {
+            "week": row,
+            "weeks": weeks,
+            "selector": selector,
+            "member": member,
+            "column": column,
+            "cards": cards,
+            "revealed": revealed,
+        },
+        current_user=user,
+        pool=pool,
+    )
 
 
 # Build your own scenario (Phase 8) -----------------------------------------------

@@ -339,6 +339,35 @@
     }
   }
 
+  /* -------------------------------------------------------- expandable pick strip */
+
+  /* One card's width plus its gap (app.css: 108px card, var(--space-2) gap), close enough
+     without reading computed styles for a control that only ever needs to move roughly one
+     card at a time (standings and ties, September, Phase 7). */
+  var PICK_STRIP_CARD_STEP = 116;
+
+  function scrollPickStrip(strip, dir) {
+    var delta = dir === "prev" ? -PICK_STRIP_CARD_STEP : PICK_STRIP_CARD_STEP;
+    strip.scrollBy({ left: delta, behavior: reduceMotion ? "auto" : "smooth" });
+  }
+
+  function onPickStripKeydown(e, card) {
+    if (e.key !== "ArrowRight" && e.key !== "ArrowLeft") return;
+    var strip = card.closest(".pick-strip");
+    if (!strip) return;
+    var cards = Array.prototype.slice.call(strip.querySelectorAll(".pick-strip-card"));
+    var index = cards.indexOf(card);
+    var next = e.key === "ArrowRight" ? cards[index + 1] : cards[index - 1];
+    if (!next) return;
+    e.preventDefault();
+    next.focus();
+    next.scrollIntoView({
+      behavior: reduceMotion ? "auto" : "smooth",
+      block: "nearest",
+      inline: "nearest",
+    });
+  }
+
   /* ---------------------------------------------------------- copy to clipboard */
 
   /* A small, generic "copy this text" control, used by the commissioner invite link
@@ -397,6 +426,13 @@
     var rowToggle = e.target.closest("[data-row-toggle]");
     if (rowToggle) {
       toggleRowDetail(rowToggle);
+      return;
+    }
+
+    var stripNav = e.target.closest("[data-strip-nav]");
+    if (stripNav) {
+      var strip = stripNav.parentElement && stripNav.parentElement.querySelector(".pick-strip");
+      if (strip) scrollPickStrip(strip, stripNav.dataset.stripNav);
       return;
     }
 
@@ -507,6 +543,12 @@
     var teamBtn = e.target.closest(".team-btn");
     if (teamBtn) {
       onTeamBtnKeydown(e, teamBtn);
+      return;
+    }
+
+    var stripCard = e.target.closest(".pick-strip-card");
+    if (stripCard) {
+      onPickStripKeydown(e, stripCard);
     }
   }
 

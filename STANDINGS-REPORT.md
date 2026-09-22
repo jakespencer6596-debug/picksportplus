@@ -14,7 +14,7 @@ commit messages for the exact diff each phase introduced.
 | 4. Condense the Results tab | Done | (pending commit) |
 | 5. Condense the Season tab | Done | (pending commit) |
 | 6. Condense the This Week tab | Done | (pending commit) |
-| 7. Expandable pick rows on Results and Season | Pending | |
+| 7. Expandable pick rows on Results and Season | Done | (pending commit) |
 | 8. Mobile pass | Pending | |
 | 9. Regression sweep | Pending | |
 | 10. Full verification | Pending | |
@@ -249,6 +249,37 @@ navigation and sorting) and every existing pick-entry test pass unchanged.
 
 **Tests:** a new test confirms the slate rank badge renders and that the line and kickoff each
 render exactly once per row, inline, never duplicated into the collapsed detail panel.
+
+## Phase 7. Expandable pick rows on Results and Season
+
+A chevron in each row's own Name cell (both /results and both /standings panels), loaded
+lazily over HTMX (`GET /results/pick-strip`, shared by both pages) the first time it opens
+(`hx-trigger="click once"`, so a close and reopen never refetches), toggled with the same
+open/close mechanism the picks page's own per-row detail panel already used
+(`toggleRowDetail`, reused verbatim). The panel lives inside the row's own `<td>`, as a child
+of the sortable `<tr data-row>`, not a sibling row, specifically so it travels with its own
+row when the table re-sorts (Phase 3's sorter only ever moves `tr[data-row]` elements; a
+literal sibling `<tr>` panel would have been orphaned by a re-sort exactly the way a tiebreak
+note used to be, before Phase 3).
+
+Cards order by confidence descending, colour by state (correct, wrong, void, pending) using
+the same tokens the full pick grid already uses, and scroll horizontally with CSS scroll
+snapping (native touch swipe, no JS needed); desktop gets explicit prev/next buttons, and
+every card is independently keyboard-reachable with Left/Right moving focus between them.
+`prefers-reduced-motion` drops the smooth-scroll behavior on every JS-driven scroll call.
+
+Privacy is unchanged and enforced server side in the route itself, not just the template:
+before a week locks, a request for anyone else's picks (by URL, not just through the UI)
+reads "Picks are hidden until lock," the viewer's own picks always show, and a `user_id` from
+another pool 403s. On Season, the panel carries its own week selector (defaulting to the most
+recently scored week), reloading just the panel over HTMX when changed, plus a
+points-and-correct summary line for whichever week is selected; on Results the panel has no
+selector, since the page's own week switcher already fixes it.
+
+**Tests:** own-picks-visible-before-lock vs another-player's-hidden, revealed once locked,
+confidence ordering, a 403 for a player in another pool, the season week selector actually
+switching which week's picks render, and the Results row wiring the chevron to the correct
+panel id.
 
 ## What still needs attention
 
