@@ -669,12 +669,29 @@
   /* A stable sort (every engine this app supports guarantees Array#sort is
      stable) so rows tied on the sorted column keep the relative order the
      server already gave them, which is itself a meaningful secondary sort
-     (see app/services/standings.py). */
+     (see app/services/standings.py).
+
+     Only rows marked data-row are ever reordered (standings and ties,
+     September: "the sorter only moves rows marked as data rows"). A tbody can
+     hold other rows too, a note or a group header, and those never carry
+     data-row, and they stay exactly where they are: every sorted data row is
+     reinserted with insertBefore(anchor), anchor being whatever node followed
+     the LAST data row before this sort started, rather than a plain
+     tbody.appendChild that would drag a trailing non-data row (a summary
+     line, say) up above the freshly re-sorted data rows on every sort. This
+     is what stopped a tiebreak or split reason (rendered as a second line
+     inside its own player's row, never a separate <tr>, see
+     leaderboard.html/results.html) from ever being mistaken for a sortable
+     data row again; before this, any table that put a note in its own <tr>
+     had that row float to wherever an ordinary text sort happened to put
+     it. */
   function sortTableRows(table, colIndex, dir) {
     var tbody = table.tBodies[0];
     if (!tbody) return;
     var mult = dir === "desc" ? -1 : 1;
-    var rows = Array.prototype.slice.call(tbody.rows);
+    var rows = Array.prototype.slice.call(tbody.querySelectorAll("tr[data-row]"));
+    if (!rows.length) return;
+    var anchor = rows[rows.length - 1].nextSibling;
     rows.sort(function (a, b) {
       var av = sortCellValue(a, colIndex);
       var bv = sortCellValue(b, colIndex);
@@ -682,7 +699,7 @@
       if (av > bv) return 1 * mult;
       return 0;
     });
-    rows.forEach(function (row) { tbody.appendChild(row); });
+    rows.forEach(function (row) { tbody.insertBefore(row, anchor); });
   }
 
   function initSortableTable(table) {

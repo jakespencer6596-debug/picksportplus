@@ -442,6 +442,37 @@ def test_standings_page_shows_a_season_wins_table_and_tiebreak_reason(client, se
     assert "Ties go to the player with more weekly wins" in response.text
 
 
+def test_tiebreak_reason_renders_inside_the_players_own_row_never_a_separate_tr(
+    client, session_factory
+):
+    """standings and ties, September, Phase 3: the tiebreak/split reason is a muted second
+    line inside the player's own <tr data-row>, never its own <tr>, which is what let the
+    table sorter mistake a reason for a sortable data row before this fix."""
+    db = session_factory()
+    pool = _pool(db)
+    alice = _user(db, "alice@example.com", "Alice Alpha")
+    bob = _user(db, "bob@example.com", "Bob Beta")
+    _member(db, pool, alice)
+    _member(db, pool, bob)
+    week = _week(db, pool, status="scored")
+    _entry(db, pool, week, alice, points=10, is_winner=True)
+    _entry(db, pool, week, bob, points=10, is_winner=False)
+    db.commit()
+    db.close()
+
+    _login(client, "alice@example.com")
+    response = client.get("/standings")
+
+    assert response.status_code == 200
+    assert 'class="lb-row lb-tiebreak-row"' not in response.text
+    # Every real row in the sortable table is marked data-row, and the note sits inside one.
+    assert re.search(
+        r'<tr class="lb-row[^"]*" data-row>.*?lb-tiebreak-note.*?</tr>',
+        response.text,
+        re.DOTALL,
+    )
+
+
 def test_season_tiebreak_mode_column_no_longer_hides_or_changes_the_rule_sentence(
     client, session_factory
 ):

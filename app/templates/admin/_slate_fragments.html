@@ -92,7 +92,7 @@
      table a game belongs to, not just this row). A browser with no JavaScript ignores every
      hx-* attribute and simply submits the form's own method/action, so every action still
      works as a plain POST. #}
-  <tr id="slate-row-{{ game.id }}" class="{% if game.is_void %}is-void{% endif %}">
+  <tr id="slate-row-{{ game.id }}" data-row class="{% if game.is_void %}is-void{% endif %}">
     <td data-label="Rank" class="num" data-sort-value="{{ game.slate_rank or 999 }}">{{ game.slate_rank or "" }}</td>
     {{ game_cells(game, tz) }}
     <td data-label="Why it's here">
@@ -181,7 +181,7 @@
 {% endmacro %}
 
 {% macro candidate_row(week, game, editable, tz) %}
-  <tr id="candidate-row-{{ game.id }}">
+  <tr id="candidate-row-{{ game.id }}" data-row>
     {{ game_cells(game, tz) }}
     <td data-label="Actions" class="cell-actions">
 <details><summary>Actions</summary>

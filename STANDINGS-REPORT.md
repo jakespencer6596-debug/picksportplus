@@ -7,10 +7,10 @@ commit messages for the exact diff each phase introduced.
 
 | Phase | Status | Commit |
 |---|---|---|
-| 0. Baseline | Done | (this commit) |
-| 1. Fix the 120 point bug | Done | (this commit) |
-| 2. Replace the tie rules with the league's rule | Done | (this commit) |
-| 3. Fix the sort that pulls in tiebreak lines | Pending | |
+| 0. Baseline | Done | `b86dbdb` |
+| 1. Fix the 120 point bug | Done | `066b731` |
+| 2. Replace the tie rules with the league's rule | Done | `3ad9318` |
+| 3. Fix the sort that pulls in tiebreak lines | Done | (pending commit) |
 | 4. Condense the Results tab | Pending | |
 | 5. Condense the Season tab | Pending | |
 | 6. Condense the This Week tab | Pending | |
@@ -148,6 +148,33 @@ commissioner's recalculate-preview safety requirement (Phase 2, item 6, showing 
 that would change before writing anything) is carried over unchanged from the existing
 `recalculate_awards` flow and was not touched by this phase; it is exercised again in Phase 9's
 regression sweep.
+
+## Phase 3. Fix the sort that pulls in tiebreak lines
+
+**Root cause:** the tiebreak/split reason rendered as its own `<tr class="lb-row lb-tiebreak-
+row">`, a full row with a `colspan`'d note cell. `app/static/app.js`'s `sortTableRows` sorted
+every row in `tbody.rows` indiscriminately, so a note row's (empty or mismatched) cell content
+sorted like real data and could float to an arbitrary position, no longer attached to the
+player it explained.
+
+**The fix:**
+1. The reason now renders inside its own player's row, a muted second line in the name cell
+   (`app/templates/leaderboard.html`, `app/templates/results.html`), never a separate `<tr>`.
+2. Every real data row in a sortable table now carries a `data-row` attribute
+   (`leaderboard.html`, `results.html`, and, for the audit, `admin/_slate_fragments.html`'s
+   `slate_row`/`candidate_row` macros, the app's only other sortable tables). `sortTableRows`
+   only ever selects `tr[data-row]` to sort, and reinserts them with `insertBefore(anchor)`
+   where `anchor` is whatever followed the last data row before the sort started, rather than
+   a plain `appendChild` that would have dragged a trailing non-data row (a summary line, if
+   one is ever added) above the freshly sorted rows on every sort.
+3. `picks.html`'s `.game-list` sorter (`sortGameListRows`) already queried `.game-row`
+   specifically and excludes its own `data-divider` "Not picked" row; no change needed there,
+   confirmed while auditing every sortable list in the app.
+
+**Tests:** `tests/js/sorting.test.js` gained a test proving a non-data row is excluded from
+sorting entirely and stays in place; `tests/test_payout_display.py` gained an HTTP-level test
+confirming the reason renders inside `<tr data-row>`, never a separate `<tr class="lb-row
+lb-tiebreak-row">`. The full existing JS suite (23 tests) and Python suite pass unchanged.
 
 ## What still needs attention
 

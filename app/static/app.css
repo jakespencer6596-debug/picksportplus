@@ -2743,6 +2743,14 @@ button.team-btn:not([disabled]):not(.is-picked):hover {
 
 .lb-player { font-weight: 500; }
 
+/* A tiebreak or split reason, a muted second line inside the player's own name cell
+   (standings and ties, September, Phase 3: never a separate <tr>, which is what let the
+   table sorter mistake it for a data row). */
+.lb-tiebreak-note {
+  margin: var(--space-1) 0 0;
+  font-size: 0.8125rem;
+}
+
 /* A note under a leaderboard heading, for example "this week is still being
    scored". */
 .lb-note {

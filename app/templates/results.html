@@ -171,7 +171,7 @@
           <tbody>
             {% for row in weekly %}
               {% set you = row.is_you or (me is not none and row.user_id == me) %}
-              <tr class="lb-row{{ ' lb-leader' if row.is_winner }}{{ ' is-you' if you }}">
+              <tr class="lb-row{{ ' lb-leader' if row.is_winner }}{{ ' is-you' if you }}" data-row>
                 <td data-label="Rank" data-sort-value="{{ row.rank }}">
                   <span class="rank-badge num{% if row.rank <= 3 %} is-{{ row.rank }}{% endif %}">{{ row.rank }}</span>
                 </td>
@@ -183,6 +183,9 @@
                       <span class="ribbon">{{ ic.icon("flag", 13) }}Winner</span>
                     {% endif %}
                   </span>
+                  {% if row.tiebreak_reason %}
+                    <p class="muted lb-tiebreak-note">{{ row.tiebreak_reason }}</p>
+                  {% endif %}
                 </td>
                 <td class="num" data-label="Points" data-sort-value="{{ row.points }}">
                   {% if row.did_not_submit %}<span class="no-entry">No picks submitted</span>{% else %}{{ row.points }}{% endif %}
@@ -198,14 +201,6 @@
                   </td>
                 {% endif %}
               </tr>
-              {% if row.tiebreak_reason %}
-                <tr class="lb-row lb-tiebreak-row">
-                  <td></td>
-                  <td colspan="{{ 4 if payout_rules_exist else 3 }}">
-                    <p class="muted lb-tiebreak-note">{{ row.tiebreak_reason }}</p>
-                  </td>
-                </tr>
-              {% endif %}
             {% endfor %}
           </tbody>
         </table>

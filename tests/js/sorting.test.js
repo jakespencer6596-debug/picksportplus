@@ -80,9 +80,9 @@ function sortableTableHtml(id) {
     '<tbody id="' +
     id +
     '-tbody">' +
-    '<tr><td>Carol</td><td data-sort-value="30">30</td></tr>' +
-    '<tr><td>Alice</td><td data-sort-value="10">10</td></tr>' +
-    '<tr><td>Bob</td><td data-sort-value="20">20</td></tr>' +
+    '<tr data-row><td>Carol</td><td data-sort-value="30">30</td></tr>' +
+    '<tr data-row><td>Alice</td><td data-sort-value="10">10</td></tr>' +
+    '<tr data-row><td>Bob</td><td data-sort-value="20">20</td></tr>' +
     "</tbody></table>"
   );
 }
@@ -105,6 +105,39 @@ test("clicking a numeric column header sorts by data-sort-value, not text", asyn
   pointsHeader.click();
   assert.deepEqual(tableNames(window, "t1-tbody"), ["Carol", "Bob", "Alice"]);
   assert.equal(pointsHeader.getAttribute("aria-sort"), "descending");
+});
+
+test("a row with no data-row (a note, not a player) is never sorted as data (standings and ties, September)", async () => {
+  /* Mirrors the real shape a tiebreak note used to take before Phase 3 moved it inside its
+     own player's row: a non-data row sitting in a sortable tbody. A trailing summary/note row
+     is the realistic remaining case (the app itself no longer emits an interspersed one at
+     all, see leaderboard.html/results.html), so this proves it is excluded from the sort
+     entirely, never picked up as a fourth "player" with garbage sort values. */
+  var html =
+    '<table id="t1b" data-sortable data-default-sort-col="0">' +
+    "<thead><tr>" +
+    '<th scope="col" data-sortable-col data-sort-default-dir="asc">Name</th>' +
+    '<th scope="col" data-sortable-col data-sort-default-dir="asc">Points</th>' +
+    "</tr></thead>" +
+    '<tbody id="t1b-tbody">' +
+    '<tr data-row><td>Carol</td><td data-sort-value="30">30</td></tr>' +
+    '<tr data-row><td>Alice</td><td data-sort-value="10">10</td></tr>' +
+    '<tr data-row><td>Bob</td><td data-sort-value="20">20</td></tr>' +
+    '<tr><td colspan="2">A note, not a player row</td></tr>' +
+    "</tbody></table>";
+  var window = await setup(html);
+  var pointsHeader = window.document.querySelectorAll("#t1b th")[1];
+  pointsHeader.click();
+
+  var tbody = window.document.getElementById("t1b-tbody");
+  var rows = Array.prototype.slice.call(tbody.rows);
+  assert.deepEqual(
+    rows.map(function (tr) {
+      return tr.hasAttribute("data-row") ? tr.cells[0].textContent : "NOTE";
+    }),
+    ["Alice", "Bob", "Carol", "NOTE"]
+  );
+  assert.equal(tbody.rows[tbody.rows.length - 1].textContent, "A note, not a player row");
 });
 
 test("a chosen sort is persisted to localStorage and restored on the next init", async () => {
