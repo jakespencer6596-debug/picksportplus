@@ -86,11 +86,17 @@ class Rule:
 class StandingInput:
     """One player's raw position for a scope, before ranking. metric is season points,
     season wins, or a single week's points, whatever this scope ranks by; rank_standings is
-    what turns a list of these into ranked Standing rows."""
+    what turns a list of these into ranked Standing rows.
+
+    display_name defaults to "" for a caller that never uses the "alphabetical" remainder
+    tiebreak (rank_standings/allocate's own money math never reads it either way): only a
+    caller that actually passes tiebreak="alphabetical" needs to populate it for real.
+    """
 
     user_id: int
     metric: Decimal
     submitted_at: datetime | None = None
+    display_name: str = ""
 
 
 @dataclass(frozen=True)
@@ -103,7 +109,8 @@ class Standing:
     user_id: int
     rank: int
     metric: Decimal  # carried through for reference/display only, allocate() never reads it
-    submitted_at: datetime | None  # used only for remainder tiebreak
+    submitted_at: datetime | None  # used only for the "earliest_submit" remainder tiebreak
+    display_name: str = ""  # used only for the "alphabetical" remainder tiebreak
 
 
 @dataclass(frozen=True)
@@ -207,6 +214,7 @@ def rank_standings(rows: Sequence[StandingInput], *, descending: bool) -> list[S
                 rank=rank,
                 metric=row.metric,
                 submitted_at=row.submitted_at,
+                display_name=row.display_name,
             )
         )
     return standings
@@ -227,20 +235,29 @@ def _floor_to_unit(value: Decimal, unit: Decimal) -> Decimal:
 
 def _tiebreak_sort_key(tiebreak: str):
     """The sort key that decides both a tied group's internal order and, therefore, who
-    picks up each leftover rounding unit. Only "earliest_submit" exists today (matching
-    PAYOUT_TIEBREAKS in app/models.py), kept as a named, checked setting rather than a bare
-    assumption so a future second tiebreak rule has somewhere to plug in without changing
-    allocate()'s signature.
+    picks up each leftover rounding unit.
 
-    A missing submitted_at sorts last (True > False as the first tuple element), never first:
-    "we don't know when they submitted" must not look like "they submitted first" when a real
-    remainder cent is on the line. user_id is the final tiebreaker so two players with equal
-    or equally missing timestamps still resolve deterministically rather than depending on
+    "alphabetical" (standings and ties, September, the league's own rule): the remainder goes
+    to the tied players in alphabetical order of display name, case insensitive, then user_id
+    as the final, fully deterministic tiebreaker for two players who somehow share a display
+    name. This is never described as a tiebreak and never decides a place, it only decides
+    who picks up an odd cent or two within a group that is already splitting the same total.
+
+    "earliest_submit" (the older rule, still supported for app/payouts.py's own generality):
+    earliest WeekEntry.submitted_at first. A missing submitted_at sorts last (True > False as
+    the first tuple element), never first. user_id is the final tiebreaker on both rules, so
+    two players tied all the way down still resolve deterministically rather than depending on
     incidental list order.
     """
-    if tiebreak != "earliest_submit":
-        raise ValueError(f"Unknown payout tiebreak: {tiebreak!r}")
-    return lambda standing: (standing.submitted_at is None, standing.submitted_at, standing.user_id)
+    if tiebreak == "alphabetical":
+        return lambda standing: (standing.display_name.lower(), standing.user_id)
+    if tiebreak == "earliest_submit":
+        return lambda standing: (
+            standing.submitted_at is None,
+            standing.submitted_at,
+            standing.user_id,
+        )
+    raise ValueError(f"Unknown payout tiebreak: {tiebreak!r}")
 
 
 def _governing_rule(rank: int, size: int, place_rule: dict[int, Rule]) -> Rule:

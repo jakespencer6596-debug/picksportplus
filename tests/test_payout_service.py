@@ -733,7 +733,11 @@ def test_season_wins_tie_broken_by_points_pays_the_full_place(db):
     assert by_user[alice.id].amount == Decimal("185")
 
 
-def test_season_tiebreak_mode_split_restores_the_old_splitting_behavior_end_to_end(db):
+def test_season_tiebreak_mode_column_no_longer_has_any_effect_on_payouts(db):
+    """standings and ties, September: the league's rule applies to every pool. The stored
+    season_tiebreak_mode column (left untouched in the database) is no longer read anywhere,
+    so a pool with it explicitly set to "split" still breaks this tie outright on weekly
+    wins, exactly like the default."""
     pool = _pool(db, scoring_mode="standard", season_tiebreak_mode="split")
     alice = _user(db, "Alice")
     bob = _user(db, "Bob")
@@ -750,22 +754,20 @@ def test_season_tiebreak_mode_split_restores_the_old_splitting_behavior_end_to_e
     awards = project_awards(db, pool, "season_points")
     by_user = {a.user_id: a for a in awards}
 
-    # Split evenly: (600 + 400) / 2 = 500 each, both at place 1, tied_with 2, exactly the
-    # pre-Phase-2 behavior.
     assert by_user[alice.id].place == 1
-    assert by_user[alice.id].tied_with == 2
-    assert by_user[alice.id].amount == Decimal("500")
-    assert by_user[bob.id].place == 1
-    assert by_user[bob.id].tied_with == 2
-    assert by_user[bob.id].amount == Decimal("500")
+    assert by_user[alice.id].tied_with == 1
+    assert by_user[alice.id].amount == Decimal("600")
+    assert by_user[bob.id].place == 2
+    assert by_user[bob.id].tied_with == 1
+    assert by_user[bob.id].amount == Decimal("400")
 
 
-def test_weekly_ties_still_split_under_weekly_tiebreak_mode_split(db):
-    """Phase 3 (weekly tiebreak on total wins) made "wins" the pool default, so a weekly tie no
-    longer splits unless a commissioner explicitly opts back into "split". This is the
-    regression guard the spec itself calls for: the tie-splitting code in app/payouts.py must
-    remain intact and fully tested, since it is still reachable in this mode."""
-    pool = _pool(db, scoring_mode="standard", weekly_tiebreak_mode="split")
+def test_weekly_ties_still_split_when_points_and_wins_are_both_equal(db):
+    """A genuine full tie (equal points, equal prior wins, both zero here) still splits the
+    combined payout for the places it spans: the tie-splitting code in app/payouts.py remains
+    intact and reachable under the league's rule, it is just reached by a real tie now,
+    never by a stored per-pool setting."""
+    pool = _pool(db, scoring_mode="standard")
     alice = _user(db, "Alice")
     bob = _user(db, "Bob")
     _member(db, pool, alice)
@@ -787,16 +789,16 @@ def test_weekly_ties_still_split_under_weekly_tiebreak_mode_split(db):
 
 def test_weekly_tie_breaks_outright_on_prior_wins_under_the_default_mode(db):
     """Phase 3, the worked example this initiative's own PERF-REPORT.md owes the commissioner:
-    two players tied on weekly points used to split 1st and 2nd (105 + 55, 80 each); under the
-    new default, more prior wins entering the week takes the full 1st place payout and the
-    other takes 2nd outright, no split."""
-    pool = _pool(db, scoring_mode="standard")  # weekly_tiebreak_mode defaults to "wins"
+    two players tied on weekly points used to split 1st and 2nd (105 + 55, 80 each); with real
+    prior wins on the books, more prior wins entering the week takes the full 1st place payout
+    and the other takes 2nd outright, no split."""
+    pool = _pool(db, scoring_mode="standard")
     alice = _user(db, "Alice")
     bob = _user(db, "Bob")
     _member(db, pool, alice)
     _member(db, pool, bob)
 
-    w1, w2, w3, w4 = (_week(db, pool, week_number=n) for n in (1, 2, 3, 4))
+    w1, w2, w3, w4 = (_week(db, pool, week_number=n, status="scored") for n in (1, 2, 3, 4))
     # Alice enters week 5 with 2 prior wins, Bob with 1, entering the week that ties them.
     _entry(db, pool, w1, alice, points=5, is_winner=True)
     _entry(db, pool, w1, bob, points=50, is_winner=False)
@@ -819,17 +821,17 @@ def test_weekly_tie_breaks_outright_on_prior_wins_under_the_default_mode(db):
     assert by_user[bob.id].amount == Decimal("55")
 
 
-def test_bowl_week_uses_the_same_tiebreak_chain_and_the_bowl_ladder(db):
-    """Phase 3: "Bowl week uses the same chain and the bowl payout ladder." No separate code
-    path, the bowl week is just another Week with is_bowl_week=True; this proves the chain and
-    the bowl-specific rule set both apply correctly together."""
+def test_bowl_week_uses_the_same_tie_rule_and_the_bowl_ladder(db):
+    """No separate code path, the bowl week is just another Week with is_bowl_week=True: this
+    proves the tie rule and the bowl-specific rule set both apply correctly together, alice's
+    real prior win breaking the bowl week's points tie."""
     pool = _pool(db, scoring_mode="standard")
     alice = _user(db, "Alice")
     bob = _user(db, "Bob")
     _member(db, pool, alice)
     _member(db, pool, bob)
 
-    w1 = _week(db, pool, week_number=1)
+    w1 = _week(db, pool, week_number=1, status="scored")
     _entry(db, pool, w1, alice, points=5, is_winner=True)
     _entry(db, pool, w1, bob, points=1, is_winner=False)
 

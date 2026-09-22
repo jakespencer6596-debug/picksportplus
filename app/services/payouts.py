@@ -26,23 +26,9 @@ from decimal import ROUND_HALF_UP, Decimal
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from app.models import PayoutAward, PayoutRule, Pool, PoolMember, User, Week, WeekEntry, utcnow
-from app.payouts import (
-    SCOPES,
-    Award,
-    Rule,
-    Standing,
-    StandingInput,
-    allocate,
-    rank_standings,
-    resolve_rule,
-)
-from app.services.standings import (
-    season_points_ranking,
-    season_standings,
-    season_wins_ranking,
-    weekly_leaderboard,
-)
+from app.models import PayoutAward, PayoutRule, Pool, PoolMember, User, Week, utcnow
+from app.payouts import SCOPES, Award, Rule, Standing, allocate, resolve_rule
+from app.services.standings import season_points_ranking, season_wins_ranking, weekly_leaderboard
 
 __all__ = [
     "PlayerPayoutRow",
@@ -131,16 +117,15 @@ def load_rules(db: Session, pool: Pool, scope: str | None = None) -> list[Rule]:
     ]
 
 
-def _direction_descending(pool: Pool) -> bool:
-    """weekly/bowl/season_points all read the pool's own scoring direction: "standard" ranks
-    highest first (descending), "inverse" ranks lowest first (ascending). season_wins never
-    calls this, its direction is hard coded True at its own call site below, on purpose."""
-    return pool.scoring_mode == "standard"
-
-
 def _weekly_or_bowl_standings(
     db: Session, pool: Pool, scope: str, week: Week | None
 ) -> list[Standing]:
+    """weekly_leaderboard already applies the league's one tie rule (points, then prior wins
+    entering the week, then split, standings and ties, September, unconditionally for every
+    pool), so this only ever reuses its rank, never re-derives one: two players still tied
+    after wins keep the same shared rank here so allocate() splits the combined payout for the
+    places they span, exactly as weekly_leaderboard itself displays.
+    """
     if week is None:
         raise ValueError(f"scope {scope!r} requires an explicit week")
     rows, _ = weekly_leaderboard(db, pool, week=week)
@@ -148,96 +133,64 @@ def _weekly_or_bowl_standings(
     # can be a real, nonzero maximum-penalty value that might otherwise place.
     rows = [row for row in rows if not row.did_not_submit]
 
-    if pool.weekly_tiebreak_mode == "wins":
-        # weekly_leaderboard already broke every tie outright (points, then prior wins
-        # entering the week, then this week's own submission time, then user id, see
-        # app/services/standings.py), so the remaining, no-show-filtered rows are already in
-        # correct final order; only their RANK NUMBER needs recomputing, not their order, since
-        # weekly_leaderboard's own rank was assigned across the full roster including whichever
-        # no-shows the filter above just removed and would otherwise leave gaps (rank 2, 3, ...
-        # instead of 1, 2, ...) that allocate() would silently skip as "past the last real
-        # place." Every rank in "wins" mode is already unique (no ties left to share), so a
-        # plain 1-based enumerate is correct, not a call to _assign_ranks.
-        return [
-            Standing(user_id=row.user_id, rank=index, metric=Decimal(row.points), submitted_at=None)
-            for index, row in enumerate(rows, start=1)
-        ]
-
-    # Matches the shape of the old, deleted service's weekly_payouts helper: submitted_at
-    # comes straight from WeekEntry for this week, keyed by user_id, and a player with no
-    # entry row (or no submission) simply has no key here, so StandingInput.submitted_at
-    # falls back to its own None default, which app.payouts.allocate's tiebreak sorts last.
-    submitted_by_user = {
-        entry.user_id: entry.submitted_at
-        for entry in db.scalars(select(WeekEntry).where(WeekEntry.week_id == week.id))
-    }
-    inputs = [
-        StandingInput(
-            user_id=row.user_id,
-            metric=Decimal(row.points),
-            submitted_at=submitted_by_user.get(row.user_id),
+    # weekly_leaderboard's own rank was assigned across the full roster including whichever
+    # no-shows the filter above just removed, which would otherwise leave gaps (rank 2, 3, ...
+    # instead of 1, 2, ...) that allocate() would silently skip as "past the last real place."
+    # Re-numbering here, while preserving whichever rows already shared a rank (a genuine
+    # points-and-wins tie), keeps the group structure allocate() needs to split correctly.
+    standings: list[Standing] = []
+    next_rank = 0
+    last_source_rank: int | None = None
+    for index, row in enumerate(rows, start=1):
+        if row.rank != last_source_rank:
+            next_rank = index
+            last_source_rank = row.rank
+        standings.append(
+            Standing(
+                user_id=row.user_id,
+                rank=next_rank,
+                metric=Decimal(row.points),
+                submitted_at=None,
+                display_name=row.display_name,
+            )
         )
-        for row in rows
-    ]
-    return rank_standings(inputs, descending=_direction_descending(pool))
+    return standings
 
 
 def _season_points_standings(db: Session, pool: Pool) -> list[Standing]:
-    if pool.season_tiebreak_mode == "wins":
-        # The season ladder already broke every tie outright (weekly wins, then submission
-        # time, then user id, see app/services/standings.py.season_points_ranking): reuse its
-        # rank directly rather than re-deriving one from rank_standings, which only knows
-        # about points and would let a tie reach allocate()'s own splitting logic again.
-        ranked = season_points_ranking(db, pool)
-        return [
-            Standing(
-                user_id=row.user_id, rank=row.rank, metric=Decimal(row.points), submitted_at=None
-            )
-            for row in ranked
-        ]
-    rows = season_standings(db, pool)
-    # No single instant in this codebase represents "the season started" (there is no stored
-    # season-start timestamp anywhere), so every player gets submitted_at=None here, on
-    # purpose. That falls back to app.payouts.allocate's own documented None-sorts-last,
-    # then-user_id remainder tiebreak, which is deterministic, not a bug: there is simply no
-    # more meaningful signal available for a season-wide scope.
-    inputs = [
-        StandingInput(user_id=row.user_id, metric=Decimal(row.points), submitted_at=None)
-        for row in rows
+    """season_points_ranking already applies the league's one season tie rule (points, then
+    weekly wins, then split, standings and ties, September, unconditionally for every pool):
+    reuse its rank directly, never re-derive one, so a genuine tie keeps the shared rank
+    allocate() needs to split the combined payout across.
+    """
+    ranked = season_points_ranking(db, pool)
+    return [
+        Standing(
+            user_id=row.user_id,
+            rank=row.rank,
+            metric=Decimal(row.points),
+            submitted_at=None,
+            display_name=row.display_name,
+        )
+        for row in ranked
     ]
-    return rank_standings(inputs, descending=_direction_descending(pool))
 
 
 def _season_wins_standings(db: Session, pool: Pool) -> list[Standing]:
-    if pool.season_tiebreak_mode == "wins":
-        # Same reasoning as _season_points_standings above, mirrored for the wins ladder
-        # (season points, then submission time, then user id): reuse the already-broken rank
-        # rather than calling rank_standings ourselves, which would let two players tied on
-        # weekly wins alone reach allocate()'s tie-splitting again.
-        ranked = season_wins_ranking(db, pool)
-        return [
-            Standing(
-                user_id=row.user_id,
-                rank=row.rank,
-                metric=Decimal(row.weekly_wins),
-                submitted_at=None,
-            )
-            for row in ranked
-        ]
-    rows = season_standings(db, pool)
-    # season_wins ranks by weekly win count, ALWAYS descending, regardless of pool.scoring_mode.
-    # StandingRow.rank cannot be reused here: it is always assigned in the pool's points
-    # direction (see app/services/standings.py._points_sort_key), which means something
-    # different from "most weekly wins first" whenever scoring_mode is "inverse". Building a
-    # fresh StandingInput list from weekly_wins and calling rank_standings ourselves, with
-    # descending=True hard coded at this call site (never read from pool.scoring_mode), is
-    # exactly what app/payouts.py's own module docstring calls out as the single easiest
-    # wiring mistake a caller could make here.
-    inputs = [
-        StandingInput(user_id=row.user_id, metric=Decimal(row.weekly_wins), submitted_at=None)
-        for row in rows
+    """Same reasoning as _season_points_standings, mirrored for the wins ladder (weekly wins,
+    then season points, then split): reuse season_wins_ranking's own rank directly.
+    """
+    ranked = season_wins_ranking(db, pool)
+    return [
+        Standing(
+            user_id=row.user_id,
+            rank=row.rank,
+            metric=Decimal(row.weekly_wins),
+            submitted_at=None,
+            display_name=row.display_name,
+        )
+        for row in ranked
     ]
-    return rank_standings(inputs, descending=True)
 
 
 def _standings_for_scope(db: Session, pool: Pool, scope: str, week: Week | None) -> list[Standing]:
@@ -258,8 +211,12 @@ def project_awards(db: Session, pool: Pool, scope: str, week: Week | None = None
     rules = load_rules(db, pool, scope=scope)
     standings = _standings_for_scope(db, pool, scope, week)
     pot = effective_pot(db, pool)
+    # The remainder cent goes to the tied players in alphabetical order of display name
+    # (standings and ties, September, the league's own rule): fixed for every pool, never a
+    # per pool setting any more. pool.payout_tiebreak is left entirely unread here; see
+    # DECISIONS.md, "Standings and ties, September".
     return allocate(
-        rules, standings, pot=pot, rounding=pool.payout_rounding, tiebreak=pool.payout_tiebreak
+        rules, standings, pot=pot, rounding=pool.payout_rounding, tiebreak="alphabetical"
     )
 
 

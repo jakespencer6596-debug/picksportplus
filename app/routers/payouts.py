@@ -47,9 +47,6 @@ from app.models import (
     PAYOUT_MODES,
     PAYOUT_ROUNDINGS,
     PAYOUT_SCOPES,
-    PAYOUT_TIEBREAKS,
-    SEASON_TIEBREAK_MODES,
-    WEEKLY_TIEBREAK_MODES,
     PayoutAward,
     PayoutRule,
     PoolMember,
@@ -160,9 +157,6 @@ def _editor_context(db: Session, pool: Pool) -> dict:
         "PAYOUT_SCOPES": PAYOUT_SCOPES,
         "PAYOUT_MODES": PAYOUT_MODES,
         "PAYOUT_ROUNDINGS": PAYOUT_ROUNDINGS,
-        "PAYOUT_TIEBREAKS": PAYOUT_TIEBREAKS,
-        "SEASON_TIEBREAK_MODES": SEASON_TIEBREAK_MODES,
-        "WEEKLY_TIEBREAK_MODES": WEEKLY_TIEBREAK_MODES,
     }
 
 
@@ -204,13 +198,16 @@ def save_pot(
     pot_override: str = Form(""),
     weekly_payout_weeks: int = Form(...),
     payout_rounding: str = Form(...),
-    payout_tiebreak: str = Form(...),
-    season_tiebreak_mode: str = Form(...),
-    weekly_tiebreak_mode: str = Form(...),
     db: Session = Depends(get_db),
     user: User = Depends(require_user),
     pool: Pool = Depends(require_commissioner),
 ):
+    # payout_tiebreak, season_tiebreak_mode and weekly_tiebreak_mode are no longer editable
+    # here (standings and ties, September): the league's one tie rule, points then wins then
+    # split, applies to every pool, and the leftover cent always goes alphabetically by
+    # display name (app/services/payouts.py.project_awards). The three columns stay in the
+    # database, untouched, since dropping a column is forbidden; this form simply never
+    # writes to them again. See DECISIONS.md, "Standings and ties, September".
     errors: list[str] = []
     fee_value = _parse_optional_dollars(entry_fee, field_name="Entry fee", errors=errors)
     override_value = _parse_optional_dollars(pot_override, field_name="Pot override", errors=errors)
@@ -219,12 +216,6 @@ def save_pot(
         errors.append("Weekly payout weeks must be between 0 and 30.")
     if payout_rounding not in PAYOUT_ROUNDINGS:
         errors.append("Unknown rounding option.")
-    if payout_tiebreak not in PAYOUT_TIEBREAKS:
-        errors.append("Unknown tiebreak option.")
-    if season_tiebreak_mode not in SEASON_TIEBREAK_MODES:
-        errors.append("Unknown season tiebreak option.")
-    if weekly_tiebreak_mode not in WEEKLY_TIEBREAK_MODES:
-        errors.append("Unknown weekly tiebreak option.")
 
     if errors:
         for message in errors:
@@ -235,9 +226,6 @@ def save_pot(
     pool.pot_override = override_value
     pool.weekly_payout_weeks = weekly_payout_weeks
     pool.payout_rounding = payout_rounding
-    pool.payout_tiebreak = payout_tiebreak
-    pool.season_tiebreak_mode = season_tiebreak_mode
-    pool.weekly_tiebreak_mode = weekly_tiebreak_mode
     db.commit()
     flash(request, "Pot settings saved.")
     return _redirect()

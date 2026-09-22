@@ -210,58 +210,14 @@
             </select>
             <p class="form-hint">The unit each resolved share rounds down to before leftovers are handed out.</p>
           </div>
-          <div class="field">
-            <label class="field-label" for="payout_tiebreak">Tiebreak</label>
-            <select class="select" id="payout_tiebreak" name="payout_tiebreak">
-              {% for t in PAYOUT_TIEBREAKS %}
-                <option value="{{ t }}" {% if t == pool.payout_tiebreak %}selected{% endif %}>
-                  {{ t.replace("_", " ") | capitalize }}
-                </option>
-              {% endfor %}
-            </select>
-            <p class="form-hint">
-              How a leftover rounding unit, and a tied group's own order, is broken. Only one
-              rule exists today: earliest submission first.
-            </p>
-          </div>
         </div>
 
-        <div class="form-row">
-          <div class="field">
-            <label class="field-label" for="season_tiebreak_mode">Season tiebreak</label>
-            <select class="select" id="season_tiebreak_mode" name="season_tiebreak_mode">
-              {% for m in SEASON_TIEBREAK_MODES %}
-                <option value="{{ m }}" {% if m == pool.season_tiebreak_mode %}selected{% endif %}>
-                  {{ "Break outright (weekly wins, then points, then submission time)" if m == "wins" else "Split, like a weekly or bowl tie" }}
-                </option>
-              {% endfor %}
-            </select>
-            <p class="form-hint">
-              How a tie on Season: Points or Season: Wins settles. "Break outright" is the
-              default: the tiebreak chain always finds a single winner, so a season place
-              never splits. "Split" restores the old behavior, sharing the combined payout.
-            </p>
-          </div>
-        </div>
-
-        <div class="form-row">
-          <div class="field">
-            <label class="field-label" for="weekly_tiebreak_mode">Weekly tiebreak</label>
-            <select class="select" id="weekly_tiebreak_mode" name="weekly_tiebreak_mode">
-              {% for m in WEEKLY_TIEBREAK_MODES %}
-                <option value="{{ m }}" {% if m == pool.weekly_tiebreak_mode %}selected{% endif %}>
-                  {{ "Break outright (wins entering the week, then submission time)" if m == "wins" else "Split, evenly between the tied places" }}
-                </option>
-              {% endfor %}
-            </select>
-            <p class="form-hint">
-              How a tie on weekly or bowl points settles. "Break outright" is the default:
-              more wins entering the week (not counting the week itself) takes the full
-              payout, then falls to submission time if wins are equal too. "Split" restores
-              the old behavior, sharing the combined payout evenly.
-            </p>
-          </div>
-        </div>
+        <p class="form-hint">
+          Ties go to the player with more weekly wins. If points and wins are both tied, the
+          players split the combined payouts for the places they share, with any leftover cent
+          going to the tied players in alphabetical order of display name. This rule applies to
+          every pool and is not configurable.
+        </p>
 
         <div class="form-actions">
           <button class="btn btn-primary" type="submit">Save pot settings</button>

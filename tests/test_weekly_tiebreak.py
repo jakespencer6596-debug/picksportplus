@@ -1,10 +1,15 @@
-"""Weekly ties break on total wins entering the week (Phase 3, weekly tiebreak/sorting/
+"""Weekly ties break on total wins entering the week, and a tie that survives even that splits
+the pot (standings and ties, September; originally Phase 3, weekly tiebreak/sorting/
 performance work, see PERF-REPORT.md and DECISIONS.md).
 
 Chain: weekly points (pool's own scoring direction), then total wins entering the week
-(excluding the week being decided and any test week), then this week's own submission time,
-then user id. Mirrors app/services/standings.py's existing season tiebreak chain in shape;
-these tests are the weekly equivalent of tests/test_standings.py's season tiebreak coverage.
+(excluding the week being decided and any test week). There is no third, submission-time
+level any more: two players still tied after wins share a rank and split the combined payout
+for the places they occupy, they are never separated by who submitted first. Applies to every
+pool unconditionally; pool.weekly_tiebreak_mode is left in the database as inert leftover
+(never rewritten, per the production-safety rule against touching existing rows) but is no
+longer read anywhere. Mirrors app/services/standings.py's existing season tie rule in shape;
+these tests are the weekly equivalent of tests/test_standings.py's season tie coverage.
 """
 
 from __future__ import annotations
@@ -119,46 +124,44 @@ def test_more_prior_wins_takes_the_higher_place_on_a_points_tie(db):
 def test_prior_wins_exclude_the_week_being_decided(db):
     """Constructed so including week 2's own win would flip the result: Bob wins week 2
     itself (lower points under the pool's default inverse scoring), but entering week 2 both
-    have zero prior wins, so the tie falls through to submission time instead of Bob's
-    about-to-happen week 2 win deciding it circularly."""
+    have zero prior wins, so the two split the pot rather than Bob's about-to-happen week 2
+    win deciding it circularly."""
     pool = _pool(db)  # scoring_mode defaults to "inverse": lowest points wins
     alice, bob = _user(db, "Alice"), _user(db, "Bob")
     _member(db, pool, alice)
     _member(db, pool, bob)
 
     week = _week(db, pool, 1)
-    early = dt.datetime(2026, 9, 1, 10, 0, tzinfo=UTC)
-    late = dt.datetime(2026, 9, 1, 12, 0, tzinfo=UTC)
     # Tied on points for week 1 itself; Bob would "win" week 1 if it were somehow already
     # scored and fed back into its own tiebreak, but week 1 is the week being decided.
-    _entry(db, pool, week, alice, points=10, submitted_at=early)
-    _entry(db, pool, week, bob, points=10, submitted_at=late)
+    _entry(db, pool, week, alice, points=10)
+    _entry(db, pool, week, bob, points=10)
 
     rows, _ = weekly_leaderboard(db, pool, week=week)
 
     assert wins_entering_week(db, pool, week) == {alice.id: 0, bob.id: 0}
     by_name = {r.display_name: r for r in rows}
     assert by_name["Alice"].rank == 1
-    assert by_name["Bob"].rank == 2
-    assert by_name["Alice"].tiebreak_reason == "Tiebreak: submitted first."
-    assert by_name["Bob"].tiebreak_reason == "Tiebreak: the other player submitted first."
+    assert by_name["Bob"].rank == 1
+    assert by_name["Alice"].tiebreak_reason == "Tied on points and wins, pot split."
+    assert by_name["Bob"].tiebreak_reason == "Tied on points and wins, pot split."
 
 
-def test_week_1_tie_falls_to_submission_time_without_raising_on_the_all_zero_case(db):
+def test_week_1_tie_with_no_prior_wins_splits_without_raising_on_the_all_zero_case(db):
     pool = _pool(db)
     alice, bob = _user(db, "Alice"), _user(db, "Bob")
     _member(db, pool, alice)
     _member(db, pool, bob)
     week = _week(db, pool, 1)
-    early = dt.datetime(2026, 9, 1, 9, 0, tzinfo=UTC)
-    late = dt.datetime(2026, 9, 1, 9, 30, tzinfo=UTC)
-    _entry(db, pool, week, alice, points=10, submitted_at=early)
-    _entry(db, pool, week, bob, points=10, submitted_at=late)
+    _entry(db, pool, week, alice, points=10)
+    _entry(db, pool, week, bob, points=10)
 
     rows, _ = weekly_leaderboard(db, pool, week=week)  # must not raise
 
-    assert [r.display_name for r in rows] == ["Alice", "Bob"]
-    assert rows[0].tiebreak_reason == "Tiebreak: submitted first."
+    assert {r.display_name for r in rows} == {"Alice", "Bob"}
+    assert rows[0].rank == 1
+    assert rows[1].rank == 1
+    assert rows[0].tiebreak_reason == "Tied on points and wins, pot split."
 
 
 def test_three_way_tie_with_three_different_prior_win_counts_orders_all_three(db):
@@ -196,22 +199,26 @@ def test_a_test_weeks_win_does_not_count_toward_the_weekly_tiebreak(db):
     _entry(db, pool, test_week, bob, points=1, is_winner=True)
 
     week1 = _week(db, pool, 1)
-    early = dt.datetime(2026, 9, 1, 9, 0, tzinfo=UTC)
-    late = dt.datetime(2026, 9, 1, 9, 30, tzinfo=UTC)
-    _entry(db, pool, week1, alice, points=10, submitted_at=early)
-    _entry(db, pool, week1, bob, points=10, submitted_at=late)
+    _entry(db, pool, week1, alice, points=10)
+    _entry(db, pool, week1, bob, points=10)
 
     counts = wins_entering_week(db, pool, week1)
     assert counts == {alice.id: 0, bob.id: 0}
 
     rows, _ = weekly_leaderboard(db, pool, week=week1)
     by_name = {r.display_name: r for r in rows}
-    # Bob's test week win must not hand him the tie; it falls to submission time, Alice first.
+    # Bob's test week win must not hand him the tie: both have zero real prior wins, so the
+    # pot splits rather than either taking the place outright.
     assert by_name["Alice"].rank == 1
-    assert by_name["Alice"].tiebreak_reason == "Tiebreak: submitted first."
+    assert by_name["Bob"].rank == 1
+    assert by_name["Alice"].tiebreak_reason == "Tied on points and wins, pot split."
 
 
-def test_weekly_tiebreak_mode_split_restores_the_old_shared_rank_behavior(db):
+def test_weekly_tiebreak_mode_column_no_longer_has_any_effect(db):
+    """standings and ties, September: the league's rule applies to every pool. The stored
+    weekly_tiebreak_mode column (left in the database untouched, per the rule against
+    rewriting existing rows) is simply never read any more, so a pool with it explicitly set
+    to the old "split" value behaves identically to the default."""
     pool = _pool(db, weekly_tiebreak_mode="split")
     alice, bob = _user(db, "Alice"), _user(db, "Bob")
     _member(db, pool, alice)
@@ -225,10 +232,13 @@ def test_weekly_tiebreak_mode_split_restores_the_old_shared_rank_behavior(db):
     _entry(db, pool, week2, bob, points=10)
 
     rows, _ = weekly_leaderboard(db, pool, week=week2)
+    by_name = {r.display_name: r for r in rows}
 
-    assert rows[0].rank == 1
-    assert rows[1].rank == 1  # shared rank: not broken under "split"
-    assert all(r.tiebreak_reason is None for r in rows)
+    # Alice enters week 2 with 1 prior win to Bob's 0: still breaks the tie outright, exactly
+    # as it would under the (now sole, unconditional) rule regardless of the stored setting.
+    assert by_name["Alice"].rank == 1
+    assert by_name["Bob"].rank == 2
+    assert by_name["Alice"].tiebreak_reason == "Tiebreak: 1 prior win to 0."
 
 
 def test_inverse_scoring_lowest_points_still_ranks_first_with_tiebreak_active(db):

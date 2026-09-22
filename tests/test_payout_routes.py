@@ -329,9 +329,6 @@ def test_weekly_payout_weeks_out_of_range_is_rejected(client, world, session_fac
             "pot_override": "",
             "weekly_payout_weeks": "31",
             "payout_rounding": "dollar",
-            "payout_tiebreak": "earliest_submit",
-            "season_tiebreak_mode": "wins",
-            "weekly_tiebreak_mode": "wins",
         },
     )
     assert response.status_code == 303
@@ -341,7 +338,12 @@ def test_weekly_payout_weeks_out_of_range_is_rejected(client, world, session_fac
     db.close()
 
 
-def test_season_tiebreak_mode_is_saved(client, world, session_factory):
+def test_pot_save_no_longer_accepts_a_tiebreak_mode_field(client, world, session_factory):
+    """standings and ties, September: payout_tiebreak/season_tiebreak_mode/
+    weekly_tiebreak_mode are no longer form fields on this route at all (the league's one tie
+    rule applies to every pool, unconditionally). Posting them anyway, as an old cached page
+    or bookmarked form might, is simply ignored rather than erroring, and the stored columns
+    (left in the database, untouched, since dropping one is forbidden) do not change."""
     _login(client, "boss@example.com")
     response = client.post(
         "/league/payouts/pot",
@@ -352,76 +354,15 @@ def test_season_tiebreak_mode_is_saved(client, world, session_factory):
             "payout_rounding": "dollar",
             "payout_tiebreak": "earliest_submit",
             "season_tiebreak_mode": "split",
-            "weekly_tiebreak_mode": "wins",
-        },
-    )
-    assert response.status_code == 303
-    db = session_factory()
-    pool = db.get(Pool, world["pool_id"])
-    assert pool.season_tiebreak_mode == "split"
-    db.close()
-
-
-def test_unknown_season_tiebreak_mode_is_rejected(client, world, session_factory):
-    _login(client, "boss@example.com")
-    response = client.post(
-        "/league/payouts/pot",
-        data={
-            "entry_fee": "",
-            "pot_override": "",
-            "weekly_payout_weeks": "15",
-            "payout_rounding": "dollar",
-            "payout_tiebreak": "earliest_submit",
-            "season_tiebreak_mode": "coin-flip",
-            "weekly_tiebreak_mode": "wins",
-        },
-    )
-    assert response.status_code == 303
-    db = session_factory()
-    pool = db.get(Pool, world["pool_id"])
-    assert pool.season_tiebreak_mode == "wins"  # unchanged, the model default
-    db.close()
-
-
-def test_weekly_tiebreak_mode_is_saved(client, world, session_factory):
-    _login(client, "boss@example.com")
-    response = client.post(
-        "/league/payouts/pot",
-        data={
-            "entry_fee": "",
-            "pot_override": "",
-            "weekly_payout_weeks": "15",
-            "payout_rounding": "dollar",
-            "payout_tiebreak": "earliest_submit",
-            "season_tiebreak_mode": "wins",
             "weekly_tiebreak_mode": "split",
         },
     )
     assert response.status_code == 303
     db = session_factory()
     pool = db.get(Pool, world["pool_id"])
-    assert pool.weekly_tiebreak_mode == "split"
-    db.close()
-
-
-def test_unknown_weekly_tiebreak_mode_is_rejected(client, world, session_factory):
-    _login(client, "boss@example.com")
-    response = client.post(
-        "/league/payouts/pot",
-        data={
-            "entry_fee": "",
-            "pot_override": "",
-            "weekly_payout_weeks": "15",
-            "payout_rounding": "dollar",
-            "payout_tiebreak": "earliest_submit",
-            "season_tiebreak_mode": "wins",
-            "weekly_tiebreak_mode": "coin-flip",
-        },
-    )
-    assert response.status_code == 303
-    db = session_factory()
-    pool = db.get(Pool, world["pool_id"])
+    assert pool.season_tiebreak_mode == "wins"  # unchanged, the model default
     assert pool.weekly_tiebreak_mode == "wins"  # unchanged, the model default
+    assert pool.weekly_payout_weeks == 15
     db.close()
 
 

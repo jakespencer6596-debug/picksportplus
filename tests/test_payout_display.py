@@ -439,10 +439,14 @@ def test_standings_page_shows_a_season_wins_table_and_tiebreak_reason(client, se
     assert response.status_code == 200
     assert "Season standings: wins" in response.text
     assert "Tiebreak: 1 weekly wins to 0." in response.text
-    assert "Season ties are broken by total weekly wins" in response.text
+    assert "Ties go to the player with more weekly wins" in response.text
 
 
-def test_standings_page_hides_the_tiebreak_rule_sentence_under_split_mode(client, session_factory):
+def test_season_tiebreak_mode_column_no_longer_hides_or_changes_the_rule_sentence(
+    client, session_factory
+):
+    """standings and ties, September: the rule line and the tiebreak reason both render
+    regardless of the stored season_tiebreak_mode column, which is no longer read."""
     db = session_factory()
     pool = _pool(db, season_tiebreak_mode="split")
     alice = _user(db, "alice@example.com", "Alice Alpha")
@@ -459,9 +463,8 @@ def test_standings_page_hides_the_tiebreak_rule_sentence_under_split_mode(client
     response = client.get("/standings")
 
     assert response.status_code == 200
-    assert "Season ties are broken by total weekly wins" not in response.text
-    # Split mode: no tiebreak decided anything, so no reason renders either.
-    assert "Tiebreak:" not in response.text
+    assert "Ties go to the player with more weekly wins" in response.text
+    assert "Tiebreak: 1 weekly wins to 0." in response.text
 
 
 def test_weekly_results_page_shows_the_tiebreak_reason_and_rule_line(client, session_factory):
@@ -494,13 +497,10 @@ def test_weekly_results_page_shows_the_tiebreak_reason_and_rule_line(client, ses
     response = client.get("/results?week=2")
 
     assert response.status_code == 200
-    assert "Weekly ties are broken by total wins entering the week" in response.text
+    assert "Ties go to the player with more weekly wins" in response.text
     assert "Tiebreak: 1 prior win to 0." in response.text
     assert "105 dollars" in response.text
     assert "55 dollars" in response.text
-    # An outright win, never a split: the old "a tie splits the combined amount" sentence must
-    # not render under this mode.
-    assert "A tie splits the combined amount" not in response.text
 
 
 def test_weekly_results_page_hides_the_tiebreak_rule_sentence_under_split_mode(

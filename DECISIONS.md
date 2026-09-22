@@ -4678,3 +4678,93 @@ be silently skipped in the future. Doing a fresh real-browser pass across three 
 code that was never touched would have been checking someone else's prior work, not this
 incident's own change; recorded as a residual risk in PICKS-REPAIR-REPORT.md instead of
 claiming a browser check that did not happen.
+
+## Standings and ties, September
+
+Ambiguity decisions made while building the two live scoring fixes, the league's tie rule,
+the condensed tabs, and the expandable pick rows (see `STANDINGS-REPORT.md` for the phase by
+phase status).
+
+**Phase 1, the 120 point bug: `did_not_submit` and its penalty are now gated on `lock_at`,
+computed live, not on `Week.status`.** `_cron_pass` (`app/cli.py`) sweeps every week whose
+status is `"open"` or `"locked"`, and `Week.status` only flips from `"open"` to `"locked"`
+lazily, the next time `fetch_results` happens to run and notices `lock_at` has passed. That
+made `Week.status` an unreliable signal for "has the deadline actually passed:" a week can sit
+at `status="open"` for a while after its real `lock_at` has already passed, if cron has not
+ticked. `score_week_for_pool` therefore compares `utcnow()` against `week.lock_at` directly, a
+real wall clock check, every time it scores a member with no picks, rather than trusting
+`Week.status`. This is also what makes the fix correct inside a single cron pass: `fetch_results`
+and `score_week_for_pool` run back to back in `_cron_pass`, and the lock check has to agree
+with whatever `fetch_results` just did to `status` in that same pass.
+
+**Phase 1, the read-time correction is scoped to `did_not_submit=True` entries only, and
+treats a missing `lock_at` as "already passed," not as "still open."** `_effective_points`/
+`_effective_did_not_submit` (`app/services/standings.py`) only touch an entry that is already
+flagged `did_not_submit`; a real submitter's live points are never touched by this function,
+whatever the week's lock state. Separately, when `week.lock_at` is `None`, both functions treat
+the lock as already passed (trust the stored value) rather than as still open. In real
+production a published week always has `lock_at` set (`app/slate.py.compute_lock_at` computes
+it at publish time, Section 7), so `lock_at is None` only ever happens on a test fixture that
+never bothered to set one; treating that case as "already passed" is what keeps a large swath
+of this codebase's existing tests, which build a `WeekEntry` with `did_not_submit=True` and no
+`lock_at` at all to mean a genuine, already-settled no-show, correct without editing every one
+of them. The alternative (treating a missing `lock_at` as "not yet locked") would have silently
+flipped dozens of pre-existing, unrelated tests' meaning and was rejected.
+
+**Phase 1, the boot-time local-database guard keys off the `RENDER` environment variable.**
+Render sets `RENDER=true` on every one of its own runtimes; this session has no other reliable
+way to distinguish "really running on Render" from "a local or CI boot" without adding a new
+setting. `app/main.py._assert_local_database` is a no-op whenever `RENDER` is set (never
+touches production behavior) and otherwise refuses to start unless `DATABASE_URL` resolves to
+a `sqlite:///` file inside the repo's working directory or the OS temp directory.
+
+**Phase 2, the league's tie rule (points, then wins, then split) replaces the old two-mode
+system by ignoring the stored `weekly_tiebreak_mode`/`season_tiebreak_mode` columns entirely,
+rather than adding a new column.** Both columns stay in the database exactly as they are
+(dropping or reinterpreting a column, or rewriting existing rows, is forbidden by this build's
+own production-safety rules); the code simply never reads them any more; `app/services/
+standings.py`'s `weekly_leaderboard`/`_season_ranking` apply the new rule unconditionally for
+every pool. The alternative offered in the prompt (a new column with a server default of
+`wins_then_split`) would have needed a migration for a value the code would then read in
+preference to the old ones forever, more moving parts for the same net effect, since the old
+values are never going to mean anything again either way. The commissioner-facing dropdowns for
+both settings (`app/templates/admin/payouts.html`) are removed, since leaving a control on
+screen that silently does nothing would mislead a commissioner into thinking they can still
+choose. `app/routers/payouts.py`'s `/pot` route no longer accepts those two fields at all; an
+old cached page or bookmark that still posts them is simply ignored, not an error.
+
+**Phase 2, the leftover-cent tiebreak (alphabetical by display name) is a new named option on
+the existing engine, `app/payouts.py`'s `_tiebreak_sort_key`, not a second splitter.**
+`allocate()` itself is unchanged; `_tiebreak_sort_key("alphabetical")` sorts a tied group by
+`display_name.lower()` then `user_id`. `Standing`/`StandingInput` both gained a `display_name`
+field (defaulted to `""`) purely to carry this. `app/services/payouts.py`'s `project_awards`
+now calls `allocate(..., tiebreak="alphabetical")`, unconditionally, never reading
+`pool.payout_tiebreak`; the `"earliest_submit"` option stays fully implemented and tested in
+the engine itself (submission time still exists as a general-purpose primitive there), it is
+just never selected by this app any more, matching the same "ignore the stored setting"
+approach as the two tiebreak-mode columns above. The `/pot` settings form's own Tiebreak
+dropdown is removed for the same reason those two were.
+
+**Phase 2, "wins, then split" is one shared ranking shape across all four ladders, expressed
+as a two-level `(primary, secondary)` key with no third level.** Previously each ladder's
+tiebreak chain bottomed out at `user_id` so every rank was guaranteed unique; the new rule
+deliberately does not do that; two players still equal on both levels genuinely share a rank
+(`_rank_keyed_pairs` in `app/services/standings.py`, the direct descendant of `_assign_ranks`
+adapted to compare a `(primary, secondary)` tuple instead of a single field), which is exactly
+the shape `app/payouts.py`'s `allocate()` already expects in order to split a group. Display
+order within a genuinely tied group (where rank order alone cannot distinguish members) sorts
+alphabetically by display name, matching the leftover-cent convention above, so the UI and the
+money math agree on one deterministic order rather than two different ones.
+
+**Phase 2, several pre-existing tests in `tests/test_payout_service.py` were quietly relying on
+a fallback to `user_id` that the removed submission-time chain used to guarantee.**
+`test_weekly_tie_breaks_outright_on_prior_wins_under_the_default_mode` and `test_bowl_week_uses_
+the_same_tie_rule_and_the_bowl_ladder` both built three or four prior weeks via the test file's
+own `_week()` helper, whose `status` defaults to `"open"`, never `"scored"`. `wins_entering_week`
+only counts wins from weeks with `Week.status == "scored"`, so those "prior wins" were never
+actually counted under either the old or the new code; the tests only ever passed because the
+old chain's final `user_id` tiebreak happened to produce a deterministic, non-tied result
+regardless. Fixed by passing `status="scored"` on the setup weeks, which is what the tests'
+own docstrings already claimed was happening. Not a behavior change to ship code, a latent bug
+in the fixtures that the new code's willingness to leave a genuine tie tied (rather than always
+falling through to `user_id`) exposed.
