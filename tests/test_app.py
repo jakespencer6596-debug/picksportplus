@@ -559,9 +559,9 @@ def test_member_pages_render(client, world, path):
 
 
 def test_open_picks_page_includes_row_expand_toggle(client, world):
-    # Post launch: desktop compact rows (1024px up) move the badge, line, kickoff and
-    # each team's record into a collapsed per row panel, revealed by a new toggle button.
-    # One toggle and one panel per slate game, each pair wired together by id.
+    # Post launch: desktop compact rows (1024px up) move the league badge and each team's
+    # record into a collapsed per row panel, revealed by a new toggle button. One toggle and
+    # one panel per slate game, each pair wired together by id.
     _login(client, "player@example.com")
     response = client.get("/picks")
     assert response.status_code == 200
@@ -571,6 +571,31 @@ def test_open_picks_page_includes_row_expand_toggle(client, world):
     for gid in game_ids:
         assert f'aria-controls="game-detail-{gid}"' in response.text
         assert f'id="game-detail-{gid}"' in response.text
+
+
+def test_open_picks_page_shows_slate_rank_and_never_hides_line_or_kickoff(
+    client, world, session_factory
+):
+    """standings and ties, September, Phase 6: the compact row's required contents (slate
+    rank, line, kickoff) are always in the row, never moved into the collapsed detail panel
+    the way the league badge and team records are."""
+    db = session_factory()
+    games = list(
+        db.scalars(select(Game).where(Game.week_id == world["week_id"]).order_by(Game.slate_rank))
+    )
+    db.close()
+
+    _login(client, "player@example.com")
+    response = client.get("/picks")
+    assert response.status_code == 200
+    text = response.text
+
+    assert 'class="game-slate-rank num"' in text
+    for game in games:
+        assert game.line_text in text
+        # The line and kickoff render exactly once each, inside the row itself, never a
+        # second time inside the collapsed game-detail panel.
+        assert text.count(game.line_text) == 1
 
 
 @pytest.mark.parametrize(

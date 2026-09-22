@@ -512,6 +512,7 @@
             tabindex="0"
             aria-label="{{ game.away_team }} at {{ game.home_team }}">
           <span class="game-grip" role="img" aria-label="Drag to rank" title="Drag to rank">
+            <span class="game-slate-rank num" aria-hidden="true">{{ game.slate_rank or loop.index }}</span>
             {{ ic.icon("grip", 20) }}
           </span>
 
@@ -542,11 +543,14 @@
                     {%- if loop.last %} disabled{% endif %}>{{ ic.icon("down", 18) }}</button>
           </div>
 
-          {# Desktop only (app.css, 1024px up): the compact row hides the badge, line,
-             kickoff and each team's record to get short enough that more of a 20 game
-             slate fits without scrolling. This toggle reveals them again for this row
-             only. Below 1024px it is display:none and .game-detail stays [hidden], so
-             the mobile row is untouched, everything already sits inline in .game-meta. #}
+          {# Desktop only (app.css, 1024px up): the compact row hides the league badge and
+             each team's record to get short enough that more of a 20 game slate fits without
+             scrolling. This toggle reveals them again for this row only. The line and
+             kickoff are required row contents (standings and ties, September, Phase 6) and
+             stay inline in .game-meta at every width, wrapping onto a second line rather
+             than hiding, so they are never duplicated here. Below 1024px this button is
+             display:none and .game-detail stays [hidden], so the mobile row is untouched,
+             everything already sits inline in .game-meta. #}
           <button type="button" class="row-expand" data-row-toggle
                   aria-expanded="false" aria-controls="game-detail-{{ game.id }}"
                   aria-label="More info for {{ game.matchup }}">
@@ -556,10 +560,6 @@
           <div class="game-detail" id="game-detail-{{ game.id }}" data-row-detail hidden>
             <div class="game-detail-row">
               {{ league_badge(game) }}
-              <span class="game-line">{{ game.line_text }}</span>
-              <span class="game-kick">{{ game.start_time | kickoff(tz) }}</span>
-            </div>
-            <div class="game-detail-row">
               <span class="game-detail-team">
                 <strong>{{ game.away_abbr }}</strong>
                 {%- if game.away_record %} {{ game.away_record | record }}{% endif %}

@@ -1635,6 +1635,7 @@ textarea[disabled] {
 
 .game-grip {
   grid-area: grip;
+  position: relative;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -1646,6 +1647,29 @@ textarea[disabled] {
   border-radius: var(--radius-sm);
   touch-action: none;          /* SortableJS touch dragging */
   transition: color var(--dur) var(--ease), background-color var(--dur) var(--ease);
+}
+
+/* The slate rank (standings and ties, September, Phase 6: "Row contents: slate rank,
+   matchup..."), a small badge overlaid on the drag grip rather than a new grid area, so it
+   never disturbs the row's existing layout at any width. Purely informational: the row's own
+   position already IS the real rank, this just names the number for anyone scanning the
+   list. */
+.game-slate-rank {
+  position: absolute;
+  top: -4px;
+  left: -4px;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 3px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 10px;
+  line-height: 1;
+  font-weight: 600;
+  color: var(--bg-surface);
+  background: var(--text-muted);
+  border-radius: 999px;
 }
 
 .game-grip:hover {
@@ -4591,19 +4615,22 @@ a.toggle-btn { text-decoration: none; }
      the interactive, still-open pick list only.
 
      The one thing that cannot get any shorter is .team-btn's 44px minimum
-     tap target (Spec 3f), so that is the floor: row height here is that
-     44px plus a trimmed var(--space-1) of padding on each edge, 52px total,
-     down from about 60px. The badge, the line, kickoff and each team's
+     tap target (Spec 3f), so that is the floor: row height starts at that
+     44px plus a trimmed var(--space-1) of padding on each edge, growing by
+     one wrapped line whenever the line and kickoff do not fit alongside the
+     confidence controls at a given width (standings and ties, September,
+     Phase 6: the line and kickoff are required row contents, never hidden
+     behind a click, only wrapped). Only the league badge and each team's
      record move out into .game-detail (identical markup, rendered a second
      time, see DECISIONS.md for why a second render was chosen over
-     reflowing the matchup/team_button macros) since none of them were ever
-     load bearing for the row's height, only its width; team abbreviations,
-     full names (already ellipsis truncated, Section 3) and the confidence
-     controls stay put for the same reason, moving them would not buy back
-     a single pixel of height. The grip and the rank buttons shrink from
-     44px to 32px, since only team-btn carries the tap target requirement;
-     that is real width back, not height, but it also means a shorter,
-     denser looking row. */
+     reflowing the matchup/team_button macros), since neither is required
+     row content and both were the easiest width to give back; team
+     abbreviations, full names (already ellipsis truncated, Section 3) and
+     the confidence controls stay put, moving them would not buy back a
+     single pixel of height. The grip and the rank buttons shrink from 44px
+     to 32px, since only team-btn carries the tap target requirement; that
+     is real width back, not height, but it also means a shorter, denser
+     looking row. */
   .game-list[data-sortable] { gap: var(--space-1); }
 
   .game-list[data-sortable] .game-row {
@@ -4611,15 +4638,18 @@ a.toggle-btn { text-decoration: none; }
     padding-block: var(--space-1);
   }
 
-  .game-list[data-sortable] .game-row .game-meta { min-width: 0; }
+  /* Only the league badge moves into .game-detail below (standings and ties, September,
+     Phase 6: the line and kickoff are required row contents now, "move onto a second line
+     within the row rather than hiding them," never behind a click). flex-wrap is what
+     actually lets them wrap onto that second line when a row runs out of width, rather than
+     forcing a fixed single-line row height here. */
+  .game-list[data-sortable] .game-row .game-meta {
+    flex-wrap: wrap;
+    min-width: 0;
+    row-gap: var(--space-1);
+  }
 
-  /* The badge, line and kickoff move into .game-detail below; only the
-     confidence controls stay inline. Scoped to direct children of
-     .game-meta so .game-detail's own copies, rendered lower in the same
-     row, are never touched by this rule. */
-  .game-list[data-sortable] .game-row .game-meta > .badge,
-  .game-list[data-sortable] .game-row .game-meta > .game-line,
-  .game-list[data-sortable] .game-row .game-meta > .game-kick {
+  .game-list[data-sortable] .game-row .game-meta > .badge {
     display: none;
   }
 

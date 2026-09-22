@@ -13,7 +13,7 @@ commit messages for the exact diff each phase introduced.
 | 3. Fix the sort that pulls in tiebreak lines | Done | (pending commit) |
 | 4. Condense the Results tab | Done | (pending commit) |
 | 5. Condense the Season tab | Done | (pending commit) |
-| 6. Condense the This Week tab | Pending | |
+| 6. Condense the This Week tab | Done | (pending commit) |
 | 7. Expandable pick rows on Results and Season | Pending | |
 | 8. Mobile pass | Pending | |
 | 9. Regression sweep | Pending | |
@@ -225,6 +225,30 @@ when nothing would change) and an end to end HTTP test driving refresh, preview,
 through a real scenario where the weekly winner actually flips, proving the redirect happens,
 nothing is written before confirming, and a paid, now-stale award is left exactly as it was
 after confirming.
+
+## Phase 6. Condense the This Week tab
+
+A "post launch" compact-row treatment already existed for this page (52px rows at 1024px and
+up, an expandable per-row detail panel), built in an earlier session. It already achieved most
+of "a compact table instead of large cards," but it hid the line and kickoff behind that
+expand toggle, which conflicts with this build's explicit requirement that a row's required
+contents (slate rank, matchup, kickoff, line, the winner control, the confidence input) are
+never hidden behind a click, only wrapped onto a second line if a row runs out of width. Two
+changes, both additive to the existing markup and CSS, nothing structural:
+
+1. A small slate rank badge, overlaid on the drag grip (so it never disturbs the row's
+   existing grid layout at any width), added to every row.
+2. The line and kickoff stay inline in `.game-meta` at every width now, wrapping instead of
+   moving into the collapsed detail panel; only the league badge and each team's record still
+   move there, since neither is required row content.
+
+Nothing about pick entry itself changed: no template structure, data attribute, or app.js
+logic touching drag, keyboard navigation, confidence assignment, locking, the payment gate, or
+the test-week badge was touched. The existing 23 JS tests (`tests/js/*.test.js`, keyboard
+navigation and sorting) and every existing pick-entry test pass unchanged.
+
+**Tests:** a new test confirms the slate rank badge renders and that the line and kickoff each
+render exactly once per row, inline, never duplicated into the collapsed detail panel.
 
 ## What still needs attention
 
