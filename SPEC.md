@@ -301,20 +301,22 @@ For a week that is open and before `lock_at`:
 - Never hard code the slate size or `picks_required` in copy or validation. Always read both from the pool.
 - **Player lock, distinct from the pool wide `lock_at`.** After ranking, a player may deliberately lock their own picks in early: "Lock picks" opens a confirmation panel summarizing the `picks_required` picks in confidence order before anything is submitted, a second, separate tap from Save so locking cannot happen by accident. Locking saves the entry (the same validation Save runs) and sets `WeekEntry.locked_at`. While `locked_at` is set and the week itself has not reached `lock_at`, the page renders a read only confirmation view for that player alone, with an "Unlock to edit" action. The moment the pool wide `lock_at` passes, the normal read only state takes over for everyone regardless of `locked_at`, and unlocking is refused from then on; a player lock never grants or costs any extra time against the real lock.
 - Editable until `lock_at`, then read only for everyone. After lock, all players' picks become visible on the Results page for transparency.
-- A player who did not submit by `lock_at` is flagged `did_not_submit` and scored per the pool's `scoring_mode`: 0 under `standard`, the maximum possible penalty (`sum(1..picks_required)`) under `inverse` (the default), and never eligible to win the week either way. See Section 9.
+- A player who has not submitted by `lock_at` is flagged `did_not_submit` and scored per the pool's `scoring_mode`: 0 under `standard`, the maximum possible penalty (`sum(1..picks_required)`) under `inverse` (the default), and never eligible to win the week either way. **Before `lock_at`, a player with no picks yet is not a no-show:** they score a live 0 and `did_not_submit` stays false, since the deadline simply has not arrived. Only once `lock_at` has actually passed does a still-empty entry take the real penalty (standings and ties, September, the 120 point bug fix; `app/services/results.py.score_week_for_pool` compares the real clock against `week.lock_at` directly, never `Week.status`, since status only flips lazily the next time a job happens to run). See Section 9.
 - **Sorting.** The same five dimensions as the slate editor (Section 6a): kickoff date and time, league, closeness of spread, spread source, and matchup name, offered through a `<select>` above the list (there is no header row on this list to click). The default is the commissioner's own slate order, with a "Reset to slate order" control always visible. Sorting only ever changes visual order: it moves the real row for a game, never relabels it, so confidence values, hidden form inputs, and the picked/unpicked "Not picked" grouping all stay correctly attached to their own game regardless of how the list is currently sorted. The Tab and arrow key sequence always follows whatever order is currently on screen, exactly the same rule Section 8's own keyboard entry already states, so a sort never breaks it. The chosen sort is remembered per browser (`localStorage`) and restored on the next visit.
 
 ## 9. Scoring and leaderboards
 
 - Read each game outcome from ESPN once completed, winner is home, away, or tie from the final score.
 - Each pool runs in one of two scoring modes, set per pool on `Pool.scoring_mode` and switchable by the commissioner in pool settings without a code change:
-  - `inverse` (the default, and this pool's real rule): a wrong pick counts its confidence points AGAINST the player, a correct pick earns nothing. Lowest total wins. A player who submits no picks for a week is flagged `did_not_submit` and takes the maximum possible penalty, `sum(1..picks_required)`, so sitting a week out is never the safe play. A no-show is never eligible to win the week, no matter how the arithmetic compares.
-  - `standard` (the older rule, kept switchable): if `picked_team == winner` the player earns that pick's confidence points, else 0. Highest total wins. A player who submits no picks scores 0 and is excluded from winning the week the same way.
+  - `inverse` (the default, and this pool's real rule): a wrong pick counts its confidence points AGAINST the player, a correct pick earns nothing. Lowest total wins. A player who has not submitted picks once the week's `lock_at` has passed is flagged `did_not_submit` and takes the maximum possible penalty, `sum(1..picks_required)`, so sitting a week out is never the safe play. Before `lock_at`, a still-empty entry scores a live 0 and is not a no-show (see Section 8). A no-show is never eligible to win the week, no matter how the arithmetic compares.
+  - `standard` (the older rule, kept switchable): if `picked_team == winner` the player earns that pick's confidence points, else 0. Highest total wins. A player who has not submitted once `lock_at` has passed scores 0 and is excluded from winning the week the same way; before `lock_at` this is simply a live 0, not a no-show.
 - `correct` (how many picks matched the winner) is counted the same way in both modes; only the direction points run in is different. `possible` is the count of countable outcomes among that player's own submitted picks, not the whole slate, so players covering different subsets of the slate never affect each other's possible count. A no-show's possible is 0.
 - Tie games (possible in NFL) are voided: 0 points for everyone on that game and excluded from the correct and possible counts, in both modes. Same for a game the commissioner voids (cancellation or moved out of week).
-- Weekly result per player: points (sum earned or charged, depending on mode), correct (count), possible, `did_not_submit`, stored in a `week_entries` row. Season standings aggregate weekly rows into total points, total correct, and weekly wins (best points that week under the pool's mode, ties share the win, no-shows excluded).
+- Weekly result per player: points (sum earned or charged, depending on mode), correct (count), possible, `did_not_submit`, stored in a `week_entries` row. Season standings aggregate weekly rows into total points, total correct, and weekly wins (best points that week under the pool's mode, ties share the win, no-shows excluded). **An unfinished week counts live:** a player's season total includes whatever their currently-submitted picks have earned so far from games that have already gone final, updating as the rest of the week's games finish; the Season tab shows a single muted line, "Includes week N, in progress.", whenever a week that has not fully finished scoring is contributing to the total shown (`app/services/standings.py.season_live_weeks`), so a moving number is never mistaken for a settled one. Existing `week_entries` rows written before this rule shipped, if any still hold the old phantom pre-lock penalty, are corrected at read time (`_effective_points`/`_effective_did_not_submit`), never by rewriting the stored row.
 - Put per pick and per week scoring in `app/scoring.py` as pure functions and unit test heavily: all correct, all wrong, mixed, an unsubmitted player (in both modes, including the no-show max penalty), a tie or voided game, and a shorter than N slate.
-- Season standings and the weekly leaderboard live on two separate pages, not one combined view: `/standings` is season totals only, `/results` carries the week switcher, that week's scoreboard, that week's leaderboard, and (once the week locks) every player's picks. The weekly leaderboard on `/results` always matches whichever week is selected, and stays hidden until that week locks, the same reveal rule as the pick grid. Standings and leaderboards sort ascending on points under `inverse`, descending under `standard`, and the UI makes the active direction explicit (a "points against" column heading, a rule reminder, "no picks submitted" instead of a bare number) whenever a pool runs `inverse`. Every ranked table's columns are sortable by clicking a header (a `<select>` stands in for that below the medium breakpoint, where there is no header row to click).
+- Season standings and the weekly leaderboard live on two separate pages, not one combined view: `/standings` is season totals only, `/results` carries the week switcher, that week's scoreboard, that week's leaderboard, and (once the week locks) every player's picks. The weekly leaderboard on `/results` always matches whichever week is selected, and stays hidden until that week locks, the same reveal rule as the pick grid. Standings and leaderboards sort ascending on points under `inverse`, descending under `standard`, and the UI makes the active direction explicit (a "points against" column heading, a rule reminder, "no picks submitted" instead of a bare number) whenever a pool runs `inverse`. Every ranked table's columns are sortable by clicking a header (a `<select>` stands in for that below the medium breakpoint, where there is no header row to click). A tiebreak or split reason renders as a muted second line inside its own player's name cell, never a separate table row, since a separate row would itself look like sortable data to the column sorter (standings and ties, September); the sorter itself only ever reorders rows marked `data-row`.
+- **Condensed tabs (standings and ties, September).** Results and Season are each a single, simple table, not a stack of cards or several tables. Results: Standing, Name, Points, Correct ("10 of 14"), Wins (season weekly wins), Payout once the week is final. Season: Standing, Name, Points, Wins, Correct, Payout once that scope's season awards exist, with a "By points" / "By wins" toggle switching which season ladder the one table is ranked by, rather than two stacked tables. Below the medium breakpoint every table reflows to stacked cards with a `<select>` standing in for the header row, per Section 3g. On Results, the full pick grid (both the player-major and game-major views) stays available in full, unchanged, behind a closed-by-default disclosure ("Full pick grid") beneath the condensed table.
+- **Expandable pick rows (standings and ties, September).** Every row on Results and on both Season ladders carries a chevron that opens a horizontally scrolling strip of that player's own picks for a week, confidence descending, each card showing the confidence value, the picked team, the opponent, and its state (correct, wrong, pending, voided). The panel is a child of the row's own name cell, not a sibling table row, so it travels with the row through a re-sort; it loads once over HTMX the first time it opens (`GET /results/pick-strip`, shared by both pages) and is never refetched on a later close/reopen. On Season the panel carries its own week selector, defaulting to the most recently scored week, plus a points-and-correct line for whichever week is selected; on Results it has no selector, since the page's own week switcher already fixes the week. Privacy is unchanged and enforced in the route itself: before a week locks, only the viewer's own picks render, everyone else's panel reads "Picks are hidden until lock," and a `user_id` from another pool 403s.
 - Every player's picks render as a grid with one row per player and one column per confidence value, `picks_required` down to 1, each cell showing the matchup staked at that confidence ("GB over CHI") colour coded by outcome; a toggle switches to the older layout, one row per game and one column per player, for anyone who prefers it.
 - All ingest and scoring commands are idempotent and safe to re run as scores update through the day.
 
@@ -456,69 +458,71 @@ every regular week; a weekly 1st of 2.12 percent means 2.12 percent of the pot e
 `Pool.weekly_payout_weeks` (default 15) is what multiplies the per-week figure into a season
 total for display; every other scope is a one-time payout.
 
-**Weekly tiebreak chain, `Pool.weekly_tiebreak_mode` (`"wins"` default, or `"split"`).** A tie
-on weekly (or bowl) points breaks outright under `"wins"`, through a single shared sort key
-(`app/services/standings.py.weekly_leaderboard`, the same function both the weekly leaderboard
-and the payout engine read from, so the two can never disagree about who actually won):
+**The tie rule, every ladder, every pool, unconditional (standings and ties, September).**
+Replaces the older two-mode system (`Pool.weekly_tiebreak_mode`/`Pool.season_tiebreak_mode`,
+each `"wins"` or `"split"`) with the league's own actual rule: points, then weekly wins, then
+a genuine tie shares a place and splits the combined payout for the places it spans. There is
+no third, submission-time level anywhere in the chain any more. Both stored columns stay in
+the database exactly as they are (the production-safety rules this build ran under forbid
+rewriting existing rows or dropping a column) and are simply never read again; a pool with
+either one still set to its old value behaves identically to every other pool.
+
+Weekly and bowl (`app/services/standings.py.weekly_leaderboard`, the same function both the
+weekly leaderboard and the payout engine read from, so the two can never disagree):
 
 1. Points, in the pool's own scoring direction.
-2. Tie: more total wins entering the week takes the higher place.
-   `wins_entering_week(db, pool, week)` sums each player's weekly wins from every already-scored,
-   non-test week with a strictly lower `week_number` than the week being decided. The week being
-   decided itself is deliberately excluded: using week 5's own win to decide a tie in week 5 is
-   circular, since the tie exists precisely because it is not yet known who won week 5. A test
-   week never contributes here either, matching every other season-wide aggregate in this
-   codebase. Week 1 (or any week with nothing scored before it) gives every player 0 prior wins,
-   which is correct, not an error, and falls straight to the next level.
-3. Still tied: earliest submission for the week being decided (not a season-wide reference
-   point the way the season chain below uses one, since there is only ever one week in play
-   here). A missing submission sorts last.
-4. Still tied: lower `user_id`, for a fully deterministic result.
+2. Tie: more total wins entering the week takes the higher place. `wins_entering_week(db,
+   pool, week)` sums each player's weekly wins from every already-scored, non-test week with a
+   strictly lower `week_number` than the week being decided (the week being decided itself is
+   excluded: circular otherwise). Week 1 gives everyone 0 prior wins and falls straight to the
+   next level.
+3. Still tied: the two (or more) players share a rank and split the combined payout for the
+   places they occupy.
 
-Weekly Results shows a muted note on any row a tiebreak actually decided ("Tiebreak: 3 prior
-wins to 2." or, in a week with no prior wins yet, "Tiebreak: submitted first.") and a rule line
-under the table ("Weekly ties are broken by total wins entering the week, then by submission
-time.") whenever the mode is `"wins"`. Under `"split"`, a weekly or bowl tie behaves exactly as
-it always has (below): ties share a rank and the combined payout for their places splits
-evenly.
-
-**Ties** split the combined pool of the consecutive places they occupy (two tied for 1st split
-1st and 2nd, the next player takes 3rd); a place with no rule contributes zero to that split
-rather than raising. Each tied group's combined total is rounded down to `Pool.payout_rounding`
-(`cent`, `dollar`, or `five`) before splitting, and the leftover is handed out one unit at a
-time in `Pool.payout_tiebreak` order (today, `earliest_submit`: earliest `WeekEntry.submitted_at`
-first, a missing submission time sorts last, then `user_id` for full determinism). This
-splitting logic is reachable for `weekly` and `bowl` only when `Pool.weekly_tiebreak_mode` is
-`"split"` (above; under the default `"wins"` a weekly or bowl place never reaches it, the same
-way a season place does not), and for the two season scopes only when
-`Pool.season_tiebreak_mode` is `"split"` (below); under either default `"wins"` mode, a place
-never reaches this splitting logic at all, because nothing ranked by
-`app/services/standings.py`'s ranking functions is ever still tied by the time it gets here.
-
-**Season tiebreak chain, `Pool.season_tiebreak_mode` (`"wins"` default, or `"split"`).** Under
-`"wins"`, both season ladders break a tie outright, through a single shared sort key
-(`app/services/standings.py`, one function so the order is stated in one place and cannot
-drift between the two ladders):
+Season: Points and Season: Wins (`app/services/standings.py`, one shared function so the order
+is stated in one place and cannot drift between the two ladders):
 
 - **Season: Points.** 1. Total points, in the pool's own scoring direction. 2. Tie: more total
-  weekly wins finishes higher. 3. Still tied: earliest submission for the season's final scored
-  week (a bowl week counts; a player who did not submit that week sorts last within the tied
-  group, never raising even when nobody in the group submitted it or no week has scored yet).
-  4. Still tied: lower `user_id`, for a fully deterministic result.
-- **Season: Wins.** 1. Total weekly wins, always descending, regardless of scoring mode
-  (never inherited from the pool, the same rule the payout engine's own `season_wins` ranking
-  has always followed). 2. Tie: points, in the pool's own scoring direction, mirroring the
-  points ladder rather than a hard coded "fewer always wins". 3. Still tied: the same final
-  week submission rule. 4. Still tied: lower `user_id`.
+  weekly wins finishes higher. 3. Still tied: share a rank, split the pot.
+- **Season: Wins.** 1. Total weekly wins, always descending, regardless of scoring mode (never
+  inherited from the pool, the same rule the payout engine's own `season_wins` ranking has
+  always followed). 2. Tie: points, in the pool's own scoring direction. 3. Still tied: share a
+  rank, split the pot.
 
-Season Standings shows why a tiebreak decided a place, a muted note on that row naming the
-level that actually separated it, for example "Tiebreak: 4 weekly wins to 3." or "Tiebreak:
-submitted week 15 first.", present only on a row a tiebreak actually decided. A one line rule
-statement renders under the season tables whenever `season_tiebreak_mode` is `"wins"`:
-"Season ties are broken by total weekly wins, then by total points, then by submission time."
-Switching a pool to `"split"` restores the pre-tiebreak behavior end to end: both season
-ladders share a rank on their own primary metric exactly as `weekly`/`bowl` already do, with no
-further breaking and no tiebreak note.
+Every table shows the reason on the row, a muted second line inside the player's own name
+cell, never a separate table row (see Section 9): "Tiebreak: 3 wins to 2." when wins actually
+decided it, "Tied on points and wins, pot split." when a genuine split occurred, nothing when
+neither applies. A one line rule statement renders under every table: "Ties go to the player
+with more weekly wins. If points and wins are both tied, the players split the combined
+payouts for the places they share."
+
+**Worked table**, the weekly ladder at 105/55/25:
+
+| Situation | Result |
+|---|---|
+| Two tied for 1st, wins differ | Full 1st (105) to the higher-wins player, full 2nd (55) to the other |
+| Two tied for 1st, wins also tied | Each gets (105 + 55) / 2 = 80, next player takes 3rd (25) |
+| Two tied for 2nd, wins also tied | 1st gets 105, each tied player gets (55 + 25) / 2 = 40, no 3rd |
+| Two tied for 3rd, wins also tied | 1st 105, 2nd 55, each tied player gets 25 / 2 = 12.50 |
+| Three tied for 1st, wins also tied | Each gets (105 + 55 + 25) / 3 = 61.67, 61.67, 61.66 |
+
+**Splitting.** Two or more players still tied after wins split the combined pool of the
+consecutive places they occupy (two tied for 1st split 1st and 2nd, the next player takes
+3rd); a place with no rule contributes zero to that split rather than raising. Each tied
+group's combined total is rounded down to `Pool.payout_rounding` (`cent`, `dollar`, or `five`)
+before splitting; a split share itself (12.50, for example) is never further rounded, only the
+group's total is, before dividing. Any leftover cent from an uneven split goes to the tied
+players in alphabetical order of display name (`app/payouts.py`'s `_tiebreak_sort_key`, a new
+`"alphabetical"` option alongside its existing `"earliest_submit"` one; `Pool.payout_tiebreak`
+is no longer read here either). This is never described as a tiebreak and never decides a
+place, it only decides who picks up an odd cent within a group already splitting the same
+total.
+
+**Existing frozen awards stay as they were.** A `PayoutAward` snapshotted before this rule
+shipped is never recalculated to match it; where a displayed award was created before the
+change and differs from what the new rule would give right now (a pure, read-time comparison
+against a live `project_awards` projection, `app/services/payouts.py.recalculate_preview`),
+the payout cell shows a small muted note: "Awarded under the previous tie rule."
 
 **Frozen snapshots.** A percent-mode payout resolves against the pot, and the pot can grow
 after a week is already scored (a member pays their entry fee late). Re-resolving a past week
@@ -532,14 +536,21 @@ projection, and it is always labelled "Projected" wherever it renders.
 
 **Recalculation after a correction.** A frozen snapshot never drifts on its own, but a
 commissioner fixing a real mistake (voiding a game, correcting a bad final) after a week has
-already scored needs a way to bring the frozen figures back in line. Clicking "Refresh
-results" (`/league/slate`) on a week that is already `status="scored"` does exactly that: it
-recomputes standings as always, and additionally recalculates that week's payout awards (plus
-both season scopes, on a bowl week) against the corrected standings, in place, preserving any
+already scored needs a way to bring the frozen figures back in line. Clicking "Refresh and
+score now" (`/league/slate`) always runs a safe live rescore first (`score_week_for_pool`
+called with no actor, which can update live standings but never recalculates a frozen award).
+If the week was already `status="scored"` before the refresh and the correction would actually
+change a frozen payout award, the commissioner is redirected to a preview
+(`GET /league/run/results-preview`, standings and ties, September, Phase 2 item 6) listing
+every affected player, old and new place, old and new amount, and whether the award is already
+marked paid; nothing is written until they click "Confirm recalculation"
+(`POST /league/run/results-confirm`), which recalculates that week's payout awards (plus both
+season scopes, on a bowl week) against the corrected standings, in place, preserving any
 `paid_at` already set so a commissioner never loses payment tracking just because a correction
 ran. A rerun that is not attributed to a signed-in commissioner (the unattended cron path, or
 any other caller) never recalculates, only ever freezes on the very first pass, exactly the
-prior behavior; recalculation only ever fires from this one explicit, attributed action.
+prior behavior; recalculation only ever fires from this one explicit, attributed, previewed
+action.
 
 **Over-allocation warns, never blocks.** The Set Payouts screen (`/admin/payouts`) shows a
 banner naming the exact difference and direction whenever the grand total does not equal the
@@ -547,8 +558,9 @@ pot, but always lets the commissioner save anyway: he may deliberately hold a re
 rules before everyone has paid.
 
 The screen has four scope editors in this order (Weekly, Bowl Week, Season: Points, Season:
-Wins), a pot panel (entry fee, override, weekly payout weeks, rounding, tiebreak), a live
-allocation summary in the shape of the commissioner's own spreadsheet, a "Scale to pot" action
+Wins), a pot panel (entry fee, override, weekly payout weeks, rounding; the tie rule itself is
+fixed for every pool, standings and ties, September, so this panel no longer has a tiebreak
+setting to choose), a live allocation summary in the shape of the commissioner's own spreadsheet, a "Scale to pot" action
 (converts every rule to percent at its current share, so the whole ladder auto-rescales when
 the player count changes, which is the entire point of percent mode), and a "Load preset"
 action seeding the known ladder (weekly 105/55/25, bowl 250/100/50, season points 600/405/150,

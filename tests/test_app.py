@@ -312,19 +312,15 @@ def test_how_it_works_page_renders(client, world):
     response = client.get("/how-it-works")
     assert response.status_code == 200
     assert "inverse" in response.text.lower()
-    # Phase 6, "Tab entry and season tiebreak": the copy has to match the real rule
+    # standings and ties, September: the copy has to match the real rule
     # (app/services/standings.py) exactly, so players can read it without asking.
     normalized = " ".join(response.text.split())
     assert (
-        "By default, a season standings tie breaks outright: total weekly wins, "
-        "then total points, then who submitted the season's final week first." in normalized
-    )
-    # Phase 7 (weekly tiebreak/sorting/performance work, see PERF-REPORT.md): the weekly
-    # equivalent, matching app/services/standings.py.weekly_leaderboard's real chain.
-    assert (
-        "A weekly tie breaks the same outright way: whoever has more wins entering that "
-        "week takes the full place and the full payout, falling to who submitted that week "
-        "first if wins are equal too." in normalized
+        "Ties go to the player with more weekly wins, on every ladder: weekly, bowl week, "
+        "season points, and season wins. If two or more players are still tied after that, "
+        "on both points and wins, they split the combined payout for the places they share "
+        "instead of either one taking it outright. Nobody wins or loses a place because of "
+        "when they submitted their picks." in normalized
     )
 
     _login(client, "player@example.com")

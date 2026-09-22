@@ -527,6 +527,13 @@ app/
   static/            app.css, app.js, vendored htmx and SortableJS
 alembic/             migrations
 tests/               unit tests plus recorded provider fixtures
+scripts/
+  seed_prod_shaped.py  a local, production-shaped sqlite database for manual testing: runs
+                       the real migration path, loads the seed-demo fixture, then layers on
+                       the messy states real production is known to hold (an orphaned pick
+                       row, a stale no-show penalty, a payout frozen under an old rule, a
+                       tied week, a test week, a mixed paid/unpaid roster). Never touches
+                       anything but a local file; see the script's own docstring.
 ```
 
 ## Tests
