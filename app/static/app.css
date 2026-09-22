@@ -2657,9 +2657,20 @@ button.team-btn:not([disabled]):not(.is-picked):hover {
      itself: on a grid wider than the window they land past the right edge,
      escape the overflow below and scroll the whole page sideways. Measured at
      768px on the results page before this line went in: the document scrolled
-     53px. */
+     53px.
+
+     overflow-x: hidden below 768px for the same reason: the stacked mobile
+     card layout has no table columns to scroll sideways through, so anything
+     inside a card that cannot shrink to fit, the pick strip's own row of
+     fixed-width cards is the case that surfaced it, should clip and let its
+     own inner scroller (.pick-strip has overflow-x: auto) handle it, rather
+     than stretching this wrapper and the whole page out to the content's
+     width (found live, standings and ties, September, Phase 8's mobile
+     pass). The 768px block below switches this back to auto, where the real
+     table needs to scroll sideways on purpose. */
   position: relative;
   width: 100%;
+  overflow-x: hidden;
 }
 
 .table {
@@ -2700,10 +2711,20 @@ button.team-btn:not([disabled]):not(.is-picked):hover {
 
 /* A row header (<th scope="row">, the semantically right markup for a player
    name) reflows exactly like a cell. Without this it would stay a table cell
-   inside a block row and break the stack. */
+   inside a block row and break the stack.
+
+   flex-wrap: wrap plus every "second line" child below forcing itself onto its
+   own line with flex-basis: 100% (found live, standings and ties, September,
+   Phase 8's mobile pass: a tiebreak note, a stale-award note, and the
+   expandable pick strip all overlapped the label and the name instead of
+   stacking beneath them, since a plain nowrap flex row centers every child on
+   the same line regardless of how tall one of them is). Every ordinary cell,
+   with a single text value and nothing that carries flex-basis: 100%, wraps
+   exactly as it always did, there is nothing in it to wrap. */
 .table td,
 .table tbody th {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
   gap: var(--space-4);
@@ -2769,10 +2790,14 @@ button.team-btn:not([disabled]):not(.is-picked):hover {
 
 /* A tiebreak or split reason, a muted second line inside the player's own name cell
    (standings and ties, September, Phase 3: never a separate <tr>, which is what let the
-   table sorter mistake it for a data row). */
+   table sorter mistake it for a data row). flex-basis: 100% is what actually forces it onto
+   its own line below the label and the name, inside the cell's own wrapping flex row above,
+   rather than overlapping them centered on the same line. */
 .lb-tiebreak-note {
+  flex-basis: 100%;
   margin: var(--space-1) 0 0;
   font-size: 0.8125rem;
+  text-align: left;
 }
 
 /* -- Expandable pick strip (standings and ties, September, Phase 7) ------------------------
@@ -2804,7 +2829,9 @@ button.team-btn:not([disabled]):not(.is-picked):hover {
 
 .pick-strip-target:not([hidden]) {
   display: block;
+  flex-basis: 100%;
   margin-top: var(--space-2);
+  text-align: left;
   opacity: 0;
   transition: opacity var(--dur) var(--ease);
 }
@@ -2833,6 +2860,7 @@ button.team-btn:not([disabled]):not(.is-picked):hover {
   align-items: center;
   gap: var(--space-2);
   max-width: min(100%, 420px);
+  min-width: 0;
 }
 
 .pick-strip {
