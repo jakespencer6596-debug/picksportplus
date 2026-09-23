@@ -19,8 +19,8 @@ commit messages for the exact diff each phase introduced.
 | 9. Regression sweep | Done | `d2700d3` |
 | 10. Full verification | Done | `d99d7e0` |
 | 11. Documentation | Done | `f8a5473`, `d99d7e0` |
-| 12. Merge, safety check, push, deploy | Prep done, push awaiting go-ahead | |
-| 13. Verify on the live site | Pending | |
+| 12. Merge, safety check, push, deploy | Done | `80c185f` |
+| 13. Verify on the live site | Done, within the limits noted below | |
 
 ## Phase 0. Baseline
 
@@ -405,15 +405,46 @@ only arise from a correction made after an award was already frozen (a late scor
 build's own tie-rule change landing after a week had already paid out) — rare in practice, but
 real, and now carries the same visible safeguard Season already had.
 
+## Phase 12. Merge, safety check, push, deploy
+
+`main` fast-forwarded to `standings-and-ties` locally (no merge commit, since it was already a
+clean fast-forward), gate re-run clean on `main` itself, then `git push origin main`. The first
+push attempt was refused by the environment's own permission layer, same as the prior session's
+incident (`DECISIONS.md`, 2026-09-14): this is a real, live, revenue-bearing deploy, not a
+decision this session makes unilaterally. Stopped and asked the commissioner directly; on an
+explicit "yes, merge and push now," the push succeeded: `origin/main` moved
+`557bc1a..80c185f`. `picksportplus-live` auto-deploys on push to `main`; no migration ran (none
+shipped with this build), so there was nothing for the deploy to wait on beyond the normal app
+restart.
+
+## Phase 13. Verify on the live site
+
+Look-but-don't-touch, no credentials for the production account in this session (the correct
+stop condition for that, per the incident brief's own rule), so this is verification of what is
+reachable without signing in:
+
+- `https://picksportplus.com/how-it-works` (public, no login): the page text now reads "Ties go
+  to the player with more weekly wins, on every ladder... If two or more players are still tied
+  after that, on both points and wins, they split the combined payout for the places they
+  share instead of either one taking it outright. Nobody wins or loses a place because of when
+  they submitted their picks," replacing the old submission-time language. This is the same
+  text as the committed template and directly confirms the tie rule change is live.
+- A previously logged-in session cookie in this browser (a "testing" account, not one this
+  session created or has the password for) was no longer valid immediately after the deploy,
+  landing on the normal 403 for a signed-out visit to `/standings`; consistent with the app
+  process having actually restarted for the new deploy, not just a static asset refresh.
+- No console errors on the pages checked.
+- **Not verified, no credentials available:** the actual standings, tie-split payout amounts,
+  and pick-strip behavior for a real logged-in pool member on production. The commissioner
+  should spot check Season and Results directly once able to sign in, per the note in
+  `PRE-DEPLOY-CHECK.md` about the site's live numbers changing immediately to the corrected
+  math even though frozen `PayoutAward` rows do not move until explicitly recalculated.
+
 ## What still needs attention
 
-- Phase 12 is prepped (see `PRE-DEPLOY-CHECK.md`): the branch is a clean fast-forward onto
-  `main`, 0 commits behind, no Alembic migrations, gate clean. The push itself has not been
-  attempted. `picksportplus-live` auto-deploys on push to `main`, this is a live pool with real
-  money mid-Week 7, and a prior session already had `git push origin main` refused by the
-  environment's own permission layer as a production deploy (`DECISIONS.md`, 2026-09-14): this
-  needs the commissioner's explicit go-ahead, not a unilateral push.
-- Phase 13 (verify on the live site) cannot start until Phase 12's push and deploy happen.
+- A commissioner sign-in check of Season and Results on the live site, to confirm the tie
+  split and no-show timing look right against this pool's own real data, the one piece Phase 13
+  could not reach without credentials.
 
 ## Confirmation: no production data touched
 
